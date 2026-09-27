@@ -1579,6 +1579,12 @@ R36OS_PREFLIGHT
 
 cd "$PROJECT"
 
+# The validators are executable tests, not syntax-only checks.  CP05 builds a
+# static AArch64 initramfs during validation and therefore requires clang/lld
+# (plus the normal kernel-build prerequisites) to be present first.  Install
+# or verify those dependencies before invoking either runtime validation suite.
+./external_cp04_builder/ensure_wsl_build_deps.sh
+
 # Existing project validators now run against the corrected runtime tree.
 python3 ./validate_cp04i_external_builder.py
 python3 ./cp05_prestage/validate_cp05_prestage.py
