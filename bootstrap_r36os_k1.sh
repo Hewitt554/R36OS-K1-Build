@@ -1491,7 +1491,40 @@ patch(
     "authoritative-builder-command-list"
 )
 
-# 7) Include cloud overlay provenance in the final result package.
+# 7) Linux 6.12.94 joystick Kconfig uses INPUT_JOYSTICK as the parent menu.
+#    CONFIG_JOYSTICK is not a valid parent symbol, so olddefconfig correctly
+#    discarded JOYSTICK_ADC in Cloud4 run #6. Keep the ADC driver built-in.
+patch(
+    "k1_source/k1.config.fragment",
+    'CONFIG_JOYSTICK=y\nCONFIG_JOYSTICK_ADC=y\n',
+    'CONFIG_INPUT_JOYSTICK=y\nCONFIG_JOYSTICK_ADC=y\n',
+    "adc-joystick-parent-kconfig"
+)
+
+# Report every dropped required built-in symbol in one build instead of
+# spending one cloud run per Kconfig dependency error.
+patch(
+    "BUILD_K1_CHECKPOINT04.sh",
+    'for sym in "${required_y[@]}"; do\n'
+    '    grep -q "^CONFIG_${sym}=y$" "$OBJ/.config" || fail "required config lost: CONFIG_${sym}=y"\n'
+    'done\n',
+    'missing_required=()\n'
+    'for sym in "${required_y[@]}"; do\n'
+    '    grep -q "^CONFIG_${sym}=y$" "$OBJ/.config" || missing_required+=("CONFIG_${sym}=y")\n'
+    'done\n'
+    '(( ${#missing_required[@]} == 0 )) || fail "required config lost after olddefconfig: ${missing_required[*]}"\n',
+    "aggregate-required-kconfig-report"
+)
+
+# Require the parent menu itself as part of the authoritative CP04 contract.
+patch(
+    "BUILD_K1_CHECKPOINT04.sh",
+    '  CHARGER_RK817 INPUT_RK805_PWRKEY PINCTRL_RK805 INPUT_EVDEV KEYBOARD_GPIO JOYSTICK_ADC ROCKCHIP_SARADC MUX_GPIO IIO_MUX\n',
+    '  CHARGER_RK817 INPUT_RK805_PWRKEY PINCTRL_RK805 INPUT_EVDEV KEYBOARD_GPIO INPUT_JOYSTICK JOYSTICK_ADC ROCKCHIP_SARADC MUX_GPIO IIO_MUX\n',
+    "require-input-joystick-parent"
+)
+
+# 8) Include cloud overlay provenance in the final result package.
 patch(
     "external_cp04_builder/package_cp04_result.sh",
     'if [[ -f "$PROJECT_ROOT/_external_cp04_inputs/FROZEN_INPUTS.txt" ]]; then\n'
@@ -1507,18 +1540,18 @@ patch(
 )
 
 (root / "CLOUD_PATCHSET.txt").write_text(
-"""R36OS K1 CP04J GitHub cloud compatibility overlay
-overlay_id=CP04J-CLOUD3
+"""R36OS K1 CP04L GitHub cloud compatibility overlay
+overlay_id=CP04L-CLOUD4
 original_kit_sha256=96c198d8e82c12c445901dbbee85a47a632a018bbc9dd304229d8e6212fa0eeb
 kernel_source=linux-6.12.94.tar.xz
 kernel_sha256=e998a232b9418db3301cb58468e291a4f41d6ab8306029b30d991f56251dc8d2
-changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; result provenance
+changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; INPUT_JOYSTICK parent correction; aggregate required-Kconfig reporting; result provenance
 policy=runtime compatibility corrections only; frozen source identities and hardware/DTS/config decisions unchanged
 """
 )
 R36OS_CLOUD_PATCH
 
-echo "STATUS=PASS CP04J-CLOUD3 compatibility overlay applied"
+echo "STATUS=PASS CP04L-CLOUD4 compatibility overlay applied"
 
 [[ -d "$PROJECT/external_cp04_builder" ]] || fail "embedded project extraction failed"
 
@@ -1563,11 +1596,17 @@ checks=[
      "| head -n1", "pipefail-sensitive version head"),
     ("cp05_prestage/build_candidate.sh",
      'echo "$CID" | grep -E', "pipefail-sensitive CID grep"),
+    ("k1_source/k1.config.fragment",
+     'CONFIG_JOYSTICK=y', "invalid ADC joystick parent Kconfig symbol"),
 ]
 for rel,needle,label in checks:
     text=(root/rel).read_text(errors="replace")
     if needle in text:
         bad(f"{label} remains in {rel}")
+
+frag=(root/"k1_source/k1.config.fragment").read_text(errors="replace")
+if "CONFIG_INPUT_JOYSTICK=y" not in frag or "CONFIG_JOYSTICK_ADC=y" not in frag:
+    bad("ADC joystick parent/driver pair missing from k1.config.fragment")
 
 if errors:
     print("R36OS cloud static preflight: FAIL")
