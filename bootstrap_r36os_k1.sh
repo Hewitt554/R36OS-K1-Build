@@ -1535,7 +1535,31 @@ patch(
     "rockchip-qualified-dtb-target"
 )
 
-# 9) Include cloud overlay provenance in the final result package.
+# 9) Run #8 proved the kernel, Rockchip DTB and module tree build successfully,
+#    but the DTB smoke validators expected the non-contiguous text "R36OS K1".
+#    The frozen Panel-4 DTS actually declares model="R36OS R36S K1 Panel 4"
+#    and compatible="r36os,r36s-k1".  Validate those authoritative identifiers
+#    in CP04 and CP05 so a valid compiled DTB is not rejected after a full build.
+patch(
+    "BUILD_K1_CHECKPOINT04.sh",
+    "for needle in 'R36OS K1' 'rocknix,generic-dsi' 'rk817' 'ramoops'; do\n",
+    "for needle in 'R36OS R36S K1 Panel 4' 'r36os,r36s-k1' 'rocknix,generic-dsi' 'rk817' 'ramoops'; do\n",
+    "dtb-authoritative-identity-markers"
+)
+patch(
+    "cp05_prestage/validate_cp04_artifacts.py",
+    "    for needle in [b'R36OS K1', b'rocknix,generic-dsi', b'rk817', b'ramoops']:\n",
+    "    for needle in [b'R36OS R36S K1 Panel 4', b'r36os,r36s-k1', b'rocknix,generic-dsi', b'rk817', b'ramoops']:\n",
+    "cp05-real-artifact-dtb-identity"
+)
+patch(
+    "cp05_prestage/validate_cp05_prestage.py",
+    "    for n in [b'R36OS K1',b'rocknix,generic-dsi',b'rk817',b'ramoops']:\n",
+    "    for n in [b'R36OS R36S K1 Panel 4',b'r36os,r36s-k1',b'rocknix,generic-dsi',b'rk817',b'ramoops']:\n",
+    "cp05-synthetic-dtb-identity"
+)
+
+# 10) Include cloud overlay provenance in the final result package.
 patch(
     "external_cp04_builder/package_cp04_result.sh",
     'if [[ -f "$PROJECT_ROOT/_external_cp04_inputs/FROZEN_INPUTS.txt" ]]; then\n'
@@ -1551,18 +1575,18 @@ patch(
 )
 
 (root / "CLOUD_PATCHSET.txt").write_text(
-"""R36OS K1 CP04M GitHub cloud compatibility overlay
-overlay_id=CP04M-CLOUD5
+"""R36OS K1 CP04N GitHub cloud compatibility overlay
+overlay_id=CP04N-CLOUD6
 original_kit_sha256=96c198d8e82c12c445901dbbee85a47a632a018bbc9dd304229d8e6212fa0eeb
 kernel_source=linux-6.12.94.tar.xz
 kernel_sha256=e998a232b9418db3301cb58468e291a4f41d6ab8306029b30d991f56251dc8d2
-changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; INPUT_JOYSTICK parent correction; aggregate required-Kconfig reporting; Rockchip-qualified DTB build target; result provenance
+changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; INPUT_JOYSTICK parent correction; aggregate required-Kconfig reporting; Rockchip-qualified DTB build target; authoritative Panel-4 DTB identity validation; result provenance
 policy=runtime compatibility corrections only; frozen source identities and hardware/DTS/config decisions unchanged
 """
 )
 R36OS_CLOUD_PATCH
 
-echo "STATUS=PASS CP04M-CLOUD5 compatibility overlay applied"
+echo "STATUS=PASS CP04N-CLOUD6 compatibility overlay applied"
 
 [[ -d "$PROJECT/external_cp04_builder" ]] || fail "embedded project extraction failed"
 
@@ -1611,6 +1635,12 @@ checks=[
      'CONFIG_JOYSTICK=y', "invalid ADC joystick parent Kconfig symbol"),
     ("BUILD_K1_CHECKPOINT04.sh",
      'Image rk3326-r36os-k1.dtb modules', "unqualified Rockchip DTB make target"),
+    ("BUILD_K1_CHECKPOINT04.sh",
+     "for needle in 'R36OS K1' 'rocknix,generic-dsi'", "stale non-contiguous DTB identity marker"),
+    ("cp05_prestage/validate_cp04_artifacts.py",
+     "[b'R36OS K1', b'rocknix,generic-dsi'", "stale CP05 real-artifact DTB identity marker"),
+    ("cp05_prestage/validate_cp05_prestage.py",
+     "[b'R36OS K1',b'rocknix,generic-dsi'", "stale CP05 synthetic DTB identity marker"),
 ]
 for rel,needle,label in checks:
     text=(root/rel).read_text(errors="replace")
@@ -1624,6 +1654,12 @@ if "CONFIG_INPUT_JOYSTICK=y" not in frag or "CONFIG_JOYSTICK_ADC=y" not in frag:
 builder=(root/"BUILD_K1_CHECKPOINT04.sh").read_text(errors="replace")
 if 'Image rockchip/rk3326-r36os-k1.dtb modules' not in builder:
     bad("qualified Rockchip DTB build target missing")
+if "'R36OS R36S K1 Panel 4' 'r36os,r36s-k1'" not in builder:
+    bad("authoritative Panel-4 DTB identity markers missing from CP04 validator")
+for rel in ("cp05_prestage/validate_cp04_artifacts.py", "cp05_prestage/validate_cp05_prestage.py"):
+    t=(root/rel).read_text(errors="replace")
+    if "R36OS R36S K1 Panel 4" not in t or "r36os,r36s-k1" not in t:
+        bad(f"authoritative Panel-4 DTB identity markers missing from {rel}")
 
 if errors:
     print("R36OS cloud static preflight: FAIL")
