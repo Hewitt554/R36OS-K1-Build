@@ -1524,7 +1524,18 @@ patch(
     "require-input-joystick-parent"
 )
 
-# 8) Include cloud overlay provenance in the final result package.
+# 8) Linux arm64 DTBs live in vendor subdirectories.  Asking top-level
+#    kbuild for an unqualified rk3326-r36os-k1.dtb makes it look for
+#    arch/arm64/boot/dts/rk3326-r36os-k1.dtb instead of the Rockchip path.
+#    Build the specific DTB through its vendor-qualified target.
+patch(
+    "BUILD_K1_CHECKPOINT04.sh",
+    '"${MAKE[@]}" -j"$JOBS" Image rk3326-r36os-k1.dtb modules\n',
+    '"${MAKE[@]}" -j"$JOBS" Image rockchip/rk3326-r36os-k1.dtb modules\n',
+    "rockchip-qualified-dtb-target"
+)
+
+# 9) Include cloud overlay provenance in the final result package.
 patch(
     "external_cp04_builder/package_cp04_result.sh",
     'if [[ -f "$PROJECT_ROOT/_external_cp04_inputs/FROZEN_INPUTS.txt" ]]; then\n'
@@ -1540,18 +1551,18 @@ patch(
 )
 
 (root / "CLOUD_PATCHSET.txt").write_text(
-"""R36OS K1 CP04L GitHub cloud compatibility overlay
-overlay_id=CP04L-CLOUD4
+"""R36OS K1 CP04M GitHub cloud compatibility overlay
+overlay_id=CP04M-CLOUD5
 original_kit_sha256=96c198d8e82c12c445901dbbee85a47a632a018bbc9dd304229d8e6212fa0eeb
 kernel_source=linux-6.12.94.tar.xz
 kernel_sha256=e998a232b9418db3301cb58468e291a4f41d6ab8306029b30d991f56251dc8d2
-changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; INPUT_JOYSTICK parent correction; aggregate required-Kconfig reporting; result provenance
+changes=fetch local set-u declaration; timeconst checksum formatting; pipefail-safe self-tests and metadata; explicit module-tree selection; complete CP04/CP05 dependency checks; INPUT_JOYSTICK parent correction; aggregate required-Kconfig reporting; Rockchip-qualified DTB build target; result provenance
 policy=runtime compatibility corrections only; frozen source identities and hardware/DTS/config decisions unchanged
 """
 )
 R36OS_CLOUD_PATCH
 
-echo "STATUS=PASS CP04L-CLOUD4 compatibility overlay applied"
+echo "STATUS=PASS CP04M-CLOUD5 compatibility overlay applied"
 
 [[ -d "$PROJECT/external_cp04_builder" ]] || fail "embedded project extraction failed"
 
@@ -1598,6 +1609,8 @@ checks=[
      'echo "$CID" | grep -E', "pipefail-sensitive CID grep"),
     ("k1_source/k1.config.fragment",
      'CONFIG_JOYSTICK=y', "invalid ADC joystick parent Kconfig symbol"),
+    ("BUILD_K1_CHECKPOINT04.sh",
+     'Image rk3326-r36os-k1.dtb modules', "unqualified Rockchip DTB make target"),
 ]
 for rel,needle,label in checks:
     text=(root/rel).read_text(errors="replace")
@@ -1607,6 +1620,10 @@ for rel,needle,label in checks:
 frag=(root/"k1_source/k1.config.fragment").read_text(errors="replace")
 if "CONFIG_INPUT_JOYSTICK=y" not in frag or "CONFIG_JOYSTICK_ADC=y" not in frag:
     bad("ADC joystick parent/driver pair missing from k1.config.fragment")
+
+builder=(root/"BUILD_K1_CHECKPOINT04.sh").read_text(errors="replace")
+if 'Image rockchip/rk3326-r36os-k1.dtb modules' not in builder:
+    bad("qualified Rockchip DTB build target missing")
 
 if errors:
     print("R36OS cloud static preflight: FAIL")
