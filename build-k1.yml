@@ -1,0 +1,57 @@
+name: R36OS K1 CP04 + CP05
+
+on:
+  push:
+    paths:
+      - bootstrap_r36os_k1.sh
+      - .github/workflows/build-k1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r36os-k1-cp04-cp05
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache frozen downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/r36os-k1-cp04-downloads
+          key: r36os-k1-cp04-linux-6.12.94-e998a232
+
+      - name: Build and validate CP04 + CP05
+        shell: bash
+        run: |
+          set -o pipefail
+          chmod +x bootstrap_r36os_k1.sh
+          ./bootstrap_r36os_k1.sh 2>&1 | tee cloud-build.log
+
+      - name: Upload build result
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-CP04-CP05-result
+          path: |
+            results/*
+            cloud-build.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-CP04-CP05-failure-log
+          path: cloud-build.log
+          if-no-files-found: warn
+          retention-days: 14
