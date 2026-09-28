@@ -68,20 +68,18 @@ jobs:
           rm -rf r39-final r39-source-tmp
           mkdir -p r39-final r39-source-tmp
 
-          base64 -d r39-release/release-inputs.tar.gz.b64 > r39-source-tmp/base.tar.gz
-          echo 'e0f7187782ac682c7592c086ce2d4e1c79e4e69f7170004859157191f0795696  r39-source-tmp/base.tar.gz' | sha256sum -c -
-          tar -xzf r39-source-tmp/base.tar.gz -C r39-final
-
-          echo '83f8b5f1685f4eedb42d32eccd4dbbbf9b6e3786356a1846937c63a18b5b11f5  r39-final/build_release.sh' | sha256sum -c -
-          echo 'ce893250cd52748b6604e75c8d8af397e33c8b7829999ea7a8f20c9100d10407  r39-final/r36os-github-diagnostics' | sha256sum -c -
-          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-final/r36os-kernel-next-prepare' | sha256sum -c -
-          echo '5a62ef487c6ee1fcb30e89d3b02119d2dfc440067bb285ecdea835cc94250acc  r39-final/r36os-kernel-slot' | sha256sum -c -
-          echo '43d93da3988e739912d6ad82791cefe9218d40dd4ae00761dbcc4487ced1d4d7  r39-final/r36os-kernel-next-health' | sha256sum -c -
-          echo '2b9f6e76c4ea8bd02fc4efe4b7b86fce4af20fb524236057a67f9a5cf38a881f  r39-final/r36os-export-current-logs' | sha256sum -c -
+          python3 r39-release/reconstruct_r39_helpers.py \
+            "$PWD/r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd" \
+            r39-final | tee r39-helper-reconstruction.log
+          grep -q 'R39_HELPER_RECONSTRUCTION=PASS' r39-helper-reconstruction.log
 
           base64 -d r39-release/final-source-overrides.tar.gz.b64 > r39-source-tmp/overrides.tar.gz
           echo '20719b241e3d7df4690ecbafee3e01567ccfe165d152839ff213ba45e9141012  r39-source-tmp/overrides.tar.gz' | sha256sum -c -
           tar -xzf r39-source-tmp/overrides.tar.gz -C r39-final
+
+          base64 -d r39-release/prepare-final.tar.gz.b64 > r39-source-tmp/prepare.tar.gz
+          echo '5221baab89315da85b93c894bca4a3c81dfc2776c6d305da91cae9646700ae0d  r39-source-tmp/prepare.tar.gz' | sha256sum -c -
+          tar -xzf r39-source-tmp/prepare.tar.gz -C r39-final
 
           echo 'ef7e2c6e82d0f1f100c6f03e5deeb8e6851e8ec81cece4fcd1f4789e5e40a522  r39-final/build_release.sh' | sha256sum -c -
           echo '14a8fed055ebc8d5d14a74182fef9fb4179c3f76a6a026b374d8c31a9d570f40  r39-final/r36os-github-diagnostics' | sha256sum -c -
