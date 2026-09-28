@@ -25,8 +25,8 @@ jobs:
           gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir r39-base
           R38=r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
           echo "68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  $R38" | sha256sum -c -
-          python3 r39-release/reconstruct_r39_helpers.py "$R38" r39-generated
-          cp r39-generated/* r39-release/
+          test -s r39-release/r36os-kernel-slot
+          test -s r39-release/r36os-kernel-next-health
           chmod +x r39-release/r36os-* r39-release/build_release.sh
           echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-release/r36os-kernel-next-prepare' | sha256sum -c -
           echo 'ce893250cd52748b6604e75c8d8af397e33c8b7829999ea7a8f20c9100d10407  r39-release/r36os-github-diagnostics' | sha256sum -c -
