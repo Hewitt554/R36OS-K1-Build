@@ -1,0 +1,90 @@
+name: Publish R36OS Alpha 5R38
+
+on:
+  push:
+    paths:
+      - r38-release/release-inputs.tar.gz.b64
+      - .github/workflows/publish-r38.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: r36os-alpha5r38-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download verified Run 11 device candidate source
+        uses: actions/download-artifact@v4
+        with:
+          name: R36OS-K1-Run11-device-candidate
+          path: run11-device
+          github-token: ${{ github.token }}
+          run-id: 36394809088
+
+      - name: Decode frozen R38 release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p r38-inputs
+          base64 -d r38-release/release-inputs.tar.gz.b64 > r38-inputs.tar.gz
+          echo "893042d4353b4740bd20f226363c56d17456795c0d16032f1276b8433eac6254  r38-inputs.tar.gz" | sha256sum -c -
+          tar -xzf r38-inputs.tar.gz -C r38-inputs
+          bash -n r38-inputs/build_release.sh
+
+      - name: Build and validate R38 release
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x r38-inputs/build_release.sh
+          ./r38-inputs/build_release.sh run11-device release-out 2>&1 | tee r38-release-build.log
+          test -s release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+          test -s release-out/latest.conf
+          test -s release-out/RELEASE_REPORT.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view alpha5r38 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1; then
+            gh release create alpha5r38               --repo Hewitt554/R36OS-K1-Build               --target "${GITHUB_SHA}"               --title "R36OS Alpha 5R38 — K1 Boot Next Once"               --notes "First GitHub-delivered K1 Boot Next Once test update. Requires Alpha 5R37 GitHub Updater Bootstrap. Legacy Linux 4.4 remains the normal/default boot."
+          fi
+          gh release upload alpha5r38             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd.sha256             release-out/RELEASE_REPORT.txt             --repo Hewitt554/R36OS-K1-Build             --clobber
+
+      - name: Publish latest update channel manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p r36os-release-channel
+          cp release-out/latest.conf r36os-release-channel/latest.conf
+          git config user.name "R36OS Release Bot"
+          git config user.email "r36os-release-bot@users.noreply.github.com"
+          git add r36os-release-channel/latest.conf
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish Alpha 5R38 update channel"
+            git push
+          fi
+
+      - name: Upload release build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R38-release-evidence
+          path: |
+            release-out/*.sha256
+            release-out/latest.conf
+            release-out/RELEASE_REPORT.txt
+            r38-release-build.log
+          if-no-files-found: error
+          retention-days: 30
