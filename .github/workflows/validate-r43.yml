@@ -44,8 +44,8 @@ jobs:
             mkdir -p "fsck-$n"
             docker run --rm -v "$PWD:/work" -w /work debian:11-slim bash -euxc "
               printf '%s\\n' \
-                'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
-                'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+                'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260831T210000Z/ bullseye main' \
+                'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260831T210000Z/ bullseye-security main' \
                 > /etc/apt/sources.list
               rm -f /etc/apt/sources.list.d/*
               apt-get -o Acquire::Check-Valid-Until=false update
