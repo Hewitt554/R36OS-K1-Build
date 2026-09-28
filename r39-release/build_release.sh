@@ -15,7 +15,7 @@ rm -rf "$WORK" "$OUT"; mkdir -p "$WORK/base" "$WORK/update/payload/root/etc" "$W
 tar -xzf "$R38" -C "$WORK/base" manifest.conf payload/root/etc/r36os-core-manifest.sha256
 [[ "$(awk -F= '$1=="version"{print $2}' "$WORK/base/manifest.conf")" == '0.5.38.0' ]] || { echo 'R38 base version mismatch' >&2; exit 11; }
 [[ "$(awk -F= '$1=="base_version"{print $2}' "$WORK/base/manifest.conf")" == '0.5.37.0' ]] || { echo 'R38 source base mismatch' >&2; exit 12; }
-for f in r36os-kernel-next-prepare r36os-kernel-slot r36os-kernel-next-health r36os-export-current-logs r36os-github-diagnostics; do
+for f in r36os-kernel-next-prepare r36os-kernel-slot r36os-kernel-next-health r36os-github-diagnostics; do
   bash -n "$HERE/$f"
   cp "$HERE/$f" "$WORK/update/payload/root/usr/local/bin/$f"
   chmod 0755 "$WORK/update/payload/root/usr/local/bin/$f"
@@ -44,7 +44,6 @@ for path in [
 '/usr/local/bin/r36os-kernel-next-prepare',
 '/usr/local/bin/r36os-kernel-slot',
 '/usr/local/bin/r36os-kernel-next-health',
-'/usr/local/bin/r36os-export-current-logs',
 '/usr/local/bin/r36os-github-diagnostics']:
     p=root/path.lstrip('/')
     entries[path]=hashlib.sha256(p.read_bytes()).hexdigest()
