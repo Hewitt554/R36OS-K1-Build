@@ -2,8 +2,8 @@ R40 UI upload-logs WIP build evidence
 date=2026-09-28
 base_source=recovered CP08 R37 worktree source/r36os_alpha5.c
 base_source_sha256=faba6ff926db803de2443ea065e344e5b5035c536b04c9b9cb02e9cd8a691739
-modified_source_sha256=52a151a7eaf799789af7d141da7048a04e65cdc372f12213ec64227345dfb4e0
-compiled_ui_sha256=43ae5a564b3f3a3ea15fb63fe8058cd17ad45af82ef6fd9568905e8c8df76f4c
+modified_source_sha256=6a3304bb0d9947b89b8fdbe48aa2f87af8b69497b13ee5ff6de4ed71b071c6c2
+compiled_ui_sha256=d625f609cc8ff33ea43bd7204426656d6f4e84b42dbbbf5a1dea38c48b2c8645
 target=aarch64-linux-gnu
 link=static freestanding lld
 warnings=-Wall -Wextra -Werror
