@@ -1,0 +1,128 @@
+#!/bin/bash
+# R36OS Alpha 5R39 K1 health/fallback recorder.
+set +e
+NEXT="${R36OS_KERNEL_NEXT_ROOT:-/r36update/R36OS-KernelNext}"
+K1="$NEXT/K1"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+PSTORE="${R36OS_PSTORE_ROOT:-/sys/fs/pstore}"
+CMDLINE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
+EARLY="${R36OS_EARLY_MARKER:-/var/lib/r36os/kernel-next/early-boot.conf}"
+MODEL="${R36OS_MODEL_FILE:-/proc/device-tree/model}"
+EXPECTED_ROOT='e139ce78-9841-40fe-8823-96a304a09859'
+EXPECTED_STATE='a25488c6-742d-4555-82d1-e28ffc848af3'
+EXPECTED_MODEL='R36OS R36S K1 Panel 4'
+PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
+sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+cmdval(){ [ -r "$CMDLINE" ] || return 1; tr ' ' '\n' <"$CMDLINE" | awk -F= -v k="$1" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\""; }
+valid_cid(){ echo "$1" | grep -Eq '^[0-9a-f]{24}$'; }
+verify_candidate(){
+  "$PREFLIGHT" "$K1" >/dev/null 2>&1 || return $?
+  [ -d "$K1" ] || return 20
+  for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do [ -s "$K1/$f" ] || return 21; done
+  (cd "$K1" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1) || return 22
+  [ "$(val "$K1/K1.conf" hardware)" = R36XX-RK3326 ] || return 23
+  [ "$(val "$K1/K1.conf" panel)" = PANEL4_NV3051D_640X480 ] || return 24
+  [ "$(val "$K1/K1.conf" root_uuid)" = "$EXPECTED_ROOT" ] || return 25
+  [ "$(val "$K1/K1.conf" state_uuid)" = "$EXPECTED_STATE" ] || return 32
+  [ "$(val "$K1/K1.conf" boot_mode)" = R36OS_K1_BOOT_ONCE ] || return 26
+  [ "$(val "$K1/K1.conf" modules_storage)" = R36STATE_BIND ] || return 33
+  KREL="$(val "$K1/K1.conf" kernel_release)"; [ -n "$KREL" ] || return 27
+  CID="$(val "$K1/K1.conf" candidate_id)"; valid_cid "$CID" || return 29
+  REQ="$NEXT/boot-next.$CID.once"; CONSUMED="$NEXT/boot-next.$CID.consumed"
+  MANSHA="$(sha "$K1/MANIFEST.sha256")"; [ -n "$MANSHA" ] || return 31
+}
+verify_request(){
+  [ -s "$REQ" ] && [ -s "$CONSUMED" ] || return 50
+  [ "$(val "$REQ" format)" = R36OS_K1_BOOT_REQUEST_V1 ] || return 51
+  [ "$(val "$REQ" candidate_id)" = "$CID" ] || return 52
+  [ "$(val "$REQ" candidate_manifest_sha256)" = "$MANSHA" ] || return 53
+  [ "$(sha "$CONSUMED")" = "$(sha "$REQ")" ] || return 54
+}
+write_record(){
+  KIND="$1"; OUTDIR="$STATE/logs/kernel-next"; OUT="$OUTDIR/$KIND-$CID.conf"; TMP="$OUT.tmp"
+  mkdir -p "$OUTDIR" || return 70
+  {
+    echo 'format=R36OS_K1_ATTEMPT_RECORD_V1'
+    echo "status=$KIND"
+    echo "candidate_id=$CID"
+    echo "kernel_release_expected=$KREL"
+    echo "candidate_manifest_sha256=$MANSHA"
+    echo "root_uuid=$EXPECTED_ROOT"
+    echo "legacy_boot_untouched=yes"
+    echo "watchdog_armed=no"
+  } >"$TMP" || return 71
+  sync; mv -f "$TMP" "$OUT" || return 72; sync
+  [ "$(val "$OUT" candidate_id)" = "$CID" ] || return 73
+  [ "$(val "$OUT" status)" = "$KIND" ] || return 74
+  RECORD="$OUT"
+}
+clear_markers(){ rm -f "$REQ" "$CONSUMED" "$REQ.tmp"; sync; [ ! -e "$REQ" ] && [ ! -e "$CONSUMED" ]; }
+
+verify_candidate || { R=$?; echo "status=FAIL code=$R detail=candidate-verification"; exit "$R"; }
+SLOT="$(cmdval r36os.kernel_slot)"; ATTEMPT="$(cmdval r36os.kernel_attempt)"; BOOTCID="$(cmdval r36os.kernel_candidate)"
+
+if [ "$SLOT" = next ]; then
+  [ "$ATTEMPT" = K1 ] || { echo 'status=FAIL code=80 detail=attempt-identity'; exit 80; }
+  [ "$BOOTCID" = "$CID" ] || { echo 'status=FAIL code=81 detail=candidate-identity'; exit 81; }
+  [ "$(cmdval root)" = "UUID=$EXPECTED_ROOT" ] || { echo 'status=FAIL code=82 detail=root-identity'; exit 82; }
+  verify_request || { R=$?; echo "status=FAIL code=$R detail=request-chain"; exit "$R"; }
+  [ -s "$EARLY" ] || { echo 'status=FAIL code=83 detail=early-marker-missing'; exit 83; }
+  [ "$(val "$EARLY" status)" = ROOT_MOUNTED ] || { echo 'status=FAIL code=84 detail=early-marker-status'; exit 84; }
+  [ "$(val "$EARLY" candidate_id)" = "$CID" ] || { echo 'status=FAIL code=85 detail=early-marker-candidate'; exit 85; }
+  [ "$(val "$EARLY" state_uuid)" = "$EXPECTED_STATE" ] || { echo 'status=FAIL code=95 detail=early-marker-state'; exit 95; }
+  [ "$(val "$EARLY" modules_bind)" = active ] || { echo 'status=FAIL code=96 detail=modules-bind-marker'; exit 96; }
+  RUNREL="${R36OS_UNAME_R:-$(uname -r)}"; [ "$RUNREL" = "$KREL" ] || { echo 'status=FAIL code=86 detail=kernel-release'; exit 86; }
+  MODMETA="$STATE/kernel-next/modules/$KREL/.r36os-k1-candidate"
+  [ -s "$STATE/kernel-next/modules/$KREL/modules.dep" ] || { echo 'status=FAIL code=97 detail=state-modules-missing'; exit 97; }
+  [ -s "/lib/modules/$KREL/modules.dep" ] || { echo 'status=FAIL code=98 detail=active-modules-missing'; exit 98; }
+  [ "$(val "$MODMETA" candidate_id)" = "$CID" ] || { echo 'status=FAIL code=99 detail=modules-candidate'; exit 99; }
+  [ -r "$MODEL" ] || { echo 'status=FAIL code=87 detail=model-missing'; exit 87; }
+  RUNMODEL="$(tr -d '\000\r\n' <"$MODEL")"; [ "$RUNMODEL" = "$EXPECTED_MODEL" ] || { echo 'status=FAIL code=88 detail=model-mismatch'; exit 88; }
+  write_record HEALTHY || { R=$?; echo "status=FAIL code=$R detail=health-record"; exit "$R"; }
+  {
+    echo "kernel_release_running=$RUNREL"
+    echo "model=$RUNMODEL"
+    echo "cmdline_sha256=$(sha "$CMDLINE")"
+    echo "early_marker_sha256=$(sha "$EARLY")"
+  } >>"$RECORD" || { echo 'status=FAIL code=89 detail=health-record-append'; exit 89; }
+  sync
+  clear_markers || { echo 'status=FAIL code=90 detail=marker-clear'; exit 90; }
+  echo "status=PASS result=K1_HEALTHY candidate_id=$CID record=$RECORD"
+  exit 0
+fi
+
+if [ -s "$REQ" ] && [ ! -e "$CONSUMED" ]; then
+  echo "status=PASS result=ARMED_PENDING candidate_id=$CID"
+  exit 0
+fi
+if [ -s "$REQ" ] && [ -s "$CONSUMED" ]; then
+  verify_request || { R=$?; echo "status=FAIL code=$R detail=fallback-request-chain"; exit "$R"; }
+  write_record FALLBACK || { R=$?; echo "status=FAIL code=$R detail=fallback-record"; exit "$R"; }
+  EVDIR="$STATE/logs/kernel-next/pstore-$CID"
+  mkdir -p "$EVDIR" || { echo 'status=FAIL code=91 detail=pstore-dir'; exit 91; }
+  COPIED=0
+  if [ -d "$PSTORE" ]; then
+    for f in "$PSTORE"/*; do
+      [ -f "$f" ] || continue
+      cp -p "$f" "$EVDIR/" || { echo 'status=FAIL code=92 detail=pstore-copy'; exit 92; }
+      COPIED=$((COPIED+1))
+    done
+  fi
+  echo "pstore_files_copied=$COPIED" >>"$RECORD"
+  echo "legacy_cmdline_sha256=$(sha "$CMDLINE")" >>"$RECORD"
+  sync
+  if command -v r36os-github-diagnostics >/dev/null 2>&1; then
+    R36OS_DIAG_FAILURE_CODE=K1_FALLBACK R36OS_DIAG_FAILURE_DETAIL="pstore_files=$COPIED" r36os-github-diagnostics capture "k1-fallback-$CID" >/dev/null 2>&1 || true
+    r36os-github-diagnostics upload-queued >/dev/null 2>&1 &
+  fi
+  clear_markers || { echo 'status=FAIL code=93 detail=fallback-marker-clear'; exit 93; }
+  echo "status=PASS result=K1_FALLBACK_RECORDED candidate_id=$CID pstore_files=$COPIED record=$RECORD"
+  exit 0
+fi
+if [ ! -e "$REQ" ] && [ -s "$CONSUMED" ]; then
+  echo "status=FAIL code=94 detail=orphan-consumed-marker"
+  exit 94
+fi
+echo "status=PASS result=NO_K1_ATTEMPT candidate_id=$CID"
+exit 0
