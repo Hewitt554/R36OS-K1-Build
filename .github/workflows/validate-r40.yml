@@ -88,9 +88,27 @@ jobs:
           test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.39.0
           ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
           ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
-          grep -q 'Hewitt554/R36OS-Device-Logs' audit/payload/root/usr/local/bin/r36os-github-diagnostics
-          grep -q 'latest-game-session' audit/payload/root/usr/local/bin/r36os-github-diagnostics
-          grep -q '^R36OS_PACKAGE_VERSION="0.5.40.0"$' audit/payload/root/etc/r36os-release
+          grep -q 'r36os-r40-github-snapshot' audit/payload/root/usr/local/bin/r36os-export-current-logs
+          grep -q 'latest_game_session=' audit/payload/root/usr/local/bin/r36os-r40-github-snapshot
+          grep -q 'Hewitt554/R36OS-Device-Logs' audit/payload/root/usr/local/bin/r36os-r40-firstboot-repair
+          grep -q '^R36OS_PACKAGE_VERSION="0.5.40.0"
+          test -f audit/payload/root/etc/r36os/r40-r36update-repair-once
+          echo R40_PACKAGE_AUDIT=PASS
+
+      - name: Upload validation candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R40-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
+            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r40-build-a.log
+            r40-build-b.log
+          if-no-files-found: error
+          retention-days: 30
+ audit/payload/root/etc/r36os-release
           test -f audit/payload/root/etc/r36os/r40-r36update-repair-once
           echo R40_PACKAGE_AUDIT=PASS
 
