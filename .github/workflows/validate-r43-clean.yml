@@ -73,9 +73,9 @@ jobs:
           cmp fsck-a/fsck.fat-static fsck-b/fsck.fat-static
           cmp fsck-a/fsck.fat-static.sha256 fsck-b/fsck.fat-static.sha256
           test "$(sha256sum fsck-a/fsck.fat-static | awk '{print $1}')" = a5a8360adabc544eddfe07a865bd77035be56c358dfe19aeeac84718b24680b6
-          file fsck-a/fsck.fat-static | tee fsck-a/file.txt
-          grep -q 'ARM aarch64' fsck-a/file.txt
-          grep -q 'statically linked' fsck-a/file.txt
+          file fsck-a/fsck.fat-static | tee /tmp/r43-fsck-file.txt
+          grep -q 'ARM aarch64' /tmp/r43-fsck-file.txt
+          grep -q 'statically linked' /tmp/r43-fsck-file.txt
           if aarch64-linux-gnu-readelf -d fsck-a/fsck.fat-static 2>/dev/null | grep -q NEEDED; then
             echo dynamic-dependency-found >&2
             exit 21
