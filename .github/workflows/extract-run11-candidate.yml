@@ -1,0 +1,202 @@
+name: Extract Run 11 K1 device candidate
+
+on:
+  push:
+    paths:
+      - .github/workflows/extract-run11-candidate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Download successful Run 11 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: R36OS-K1-CP04-CP05-result
+          path: run11-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: Hewitt554/R36OS-K1-Build
+          run-id: 36384548493
+
+      - name: Verify and extract Run 11 result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED_RESULT_SHA256="b6cb1bf7d85592ff08a16a292d6db113c48919393c5442da24c1b8d4603dc443"
+
+          echo "=== downloaded Run 11 artifact tree ==="
+          find run11-artifact -maxdepth 3 -printf '%y %p %s bytes\n' | sort | tee run11-downloaded-tree.txt
+
+          mapfile -t result_archives < <(find run11-artifact -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' -print)
+          if [[ "${#result_archives[@]}" -ne 1 ]]; then
+            echo "ERROR: expected exactly one final result tar.gz, found ${#result_archives[@]}" >&2
+            printf '%s\n' "${result_archives[@]:-}" >&2
+            exit 1
+          fi
+
+          result_archive="${result_archives[0]}"
+          actual_sha="$(sha256sum "$result_archive" | awk '{print $1}')"
+          echo "result_archive=$result_archive"
+          echo "result_sha256=$actual_sha"
+          [[ "$actual_sha" == "$EXPECTED_RESULT_SHA256" ]] || {
+            echo "ERROR: Run 11 result archive SHA-256 mismatch" >&2
+            exit 1
+          }
+
+          mkdir -p extracted
+          tar -xzf "$result_archive" -C extracted
+
+          echo "=== extracted result tree ==="
+          find extracted -maxdepth 6 -printf '%y %p %s bytes\n' | sort | tee run11-result-tree.txt
+
+          mapfile -t candidates < <(find extracted -type d -path '*/external_cp05_candidate/K1' -print)
+          if [[ "${#candidates[@]}" -ne 1 ]]; then
+            echo "ERROR: expected exactly one external_cp05_candidate/K1 directory, found ${#candidates[@]}" >&2
+            printf '%s\n' "${candidates[@]:-}" >&2
+            exit 1
+          fi
+
+          candidate="${candidates[0]}"
+          echo "candidate_dir=$candidate"
+
+          mkdir -p package/full/R36OS-KernelNext
+          cp -a "$candidate" package/full/R36OS-KernelNext/K1
+
+          echo "=== device candidate tree ==="
+          find package/full/R36OS-KernelNext/K1 -printf '%y %p %s bytes\n' | sort | tee package/CANDIDATE_TREE.txt
+
+          (
+            cd package/full
+            find R36OS-KernelNext/K1 -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > package/CANDIDATE_SHA256SUMS.txt
+
+          {
+            echo "R36OS K1 Run 11 device-candidate provenance"
+            echo "source_repo=Hewitt554/R36OS-K1-Build"
+            echo "source_run=11"
+            echo "source_run_id=36384548493"
+            echo "source_commit=42464c308fafe64cb754f33734f41eb292a591af"
+            echo "kernel_release=6.12.94-r36os-k1"
+            echo "canonical_dtb=rk3326-r36s-k1.dtb"
+            echo "source_result_archive=$(basename "$result_archive")"
+            echo "source_result_sha256=$actual_sha"
+            echo "source_artifact_id=10956121963"
+          } > package/RUN11_PROVENANCE.txt
+
+          # Create a small core package without module payloads for inspection and Boot Once planning.
+          mkdir -p package/core/R36OS-KernelNext/K1
+          rsync -a             --exclude='/modules/'             --exclude='/modules/**'             --exclude='modules*.tar*'             --exclude='*modules*.tar*'             package/full/R36OS-KernelNext/K1/             package/core/R36OS-KernelNext/K1/
+
+          cp package/CANDIDATE_TREE.txt package/core/
+          cp package/CANDIDATE_SHA256SUMS.txt package/core/
+          cp package/RUN11_PROVENANCE.txt package/core/
+
+          tar -C package/core -czf package/R36OS-K1-Run11-core.tar.gz .
+          sha256sum package/R36OS-K1-Run11-core.tar.gz > package/R36OS-K1-Run11-core.tar.gz.sha256
+
+          # Preserve the entire candidate too, but split it into connector-friendly pieces.
+          tar -C package/full -czf package/R36OS-K1-Run11-full.tar.gz .
+          sha256sum package/R36OS-K1-Run11-full.tar.gz > package/R36OS-K1-Run11-full.tar.gz.sha256
+          split -b 125M -d -a 2 package/R36OS-K1-Run11-full.tar.gz package/R36OS-K1-Run11-full.tar.gz.part
+
+          part_count="$(find package -maxdepth 1 -type f -name 'R36OS-K1-Run11-full.tar.gz.part*' | wc -l)"
+          echo "split_part_count=$part_count"
+          if [[ "$part_count" -gt 6 ]]; then
+            echo "ERROR: full candidate exceeded six 125 MiB parts; update extraction workflow deliberately" >&2
+            exit 1
+          fi
+
+          sha256sum package/R36OS-K1-Run11-full.tar.gz.part* > package/R36OS-K1-Run11-full.parts.sha256
+
+          {
+            echo "=== candidate disk usage ==="
+            du -ah package/full/R36OS-KernelNext/K1 | sort -h
+            echo
+            echo "=== package files ==="
+            ls -lh package/
+          } | tee package/CANDIDATE_SIZES.txt
+
+      - name: Upload inspection and core package
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-device-core
+          path: |
+            package/R36OS-K1-Run11-core.tar.gz
+            package/R36OS-K1-Run11-core.tar.gz.sha256
+            package/CANDIDATE_TREE.txt
+            package/CANDIDATE_SHA256SUMS.txt
+            package/CANDIDATE_SIZES.txt
+            package/RUN11_PROVENANCE.txt
+            run11-downloaded-tree.txt
+            run11-result-tree.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload full package reconstruction metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-metadata
+          path: |
+            package/R36OS-K1-Run11-full.tar.gz.sha256
+            package/R36OS-K1-Run11-full.parts.sha256
+            package/CANDIDATE_TREE.txt
+            package/CANDIDATE_SHA256SUMS.txt
+            package/RUN11_PROVENANCE.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload full part 00
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part00') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part00
+          path: package/R36OS-K1-Run11-full.tar.gz.part00
+          retention-days: 30
+
+      - name: Upload full part 01
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part01') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part01
+          path: package/R36OS-K1-Run11-full.tar.gz.part01
+          retention-days: 30
+
+      - name: Upload full part 02
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part02') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part02
+          path: package/R36OS-K1-Run11-full.tar.gz.part02
+          retention-days: 30
+
+      - name: Upload full part 03
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part03') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part03
+          path: package/R36OS-K1-Run11-full.tar.gz.part03
+          retention-days: 30
+
+      - name: Upload full part 04
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part04') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part04
+          path: package/R36OS-K1-Run11-full.tar.gz.part04
+          retention-days: 30
+
+      - name: Upload full part 05
+        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part05') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-Run11-full-part05
+          path: package/R36OS-K1-Run11-full.tar.gz.part05
+          retention-days: 30
