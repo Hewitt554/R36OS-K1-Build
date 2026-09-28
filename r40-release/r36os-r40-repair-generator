@@ -1,0 +1,6 @@
+#!/bin/sh
+MARKER=/etc/r36os/r40-r36update-repair-once
+[ -f "$MARKER" ] || exit 0
+OUT="${1:-/run/systemd/generator}"
+mkdir -p "$OUT/multi-user.target.wants"
+ln -sf /etc/systemd/system/r36os-r40-firstboot-repair.service   "$OUT/multi-user.target.wants/r36os-r40-firstboot-repair.service"
