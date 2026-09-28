@@ -1,0 +1,122 @@
+name: Validate R36OS Alpha 5R40 Clean
+
+on:
+  push:
+    branches:
+      - work/r40-general-log-upload-2026-09-28
+    paths:
+      - r40-release/**
+      - .github/workflows/validate-r40-clean.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@v4
+
+      - name: Download exact R39 release base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p r39-base
+          gh release download alpha5r39 \
+            --repo Hewitt554/R36OS-K1-Build \
+            --pattern '00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' \
+            --dir r39-base
+          echo '406aa63aedf893b39fdff16f6131f605d99883aa759286228c1cf607dce74ebd  r39-base/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' | sha256sum -c -
+
+      - name: Download frozen static ARM64 fsck.fat
+        uses: actions/download-artifact@v4
+        with:
+          name: R36OS-R40-static-fsck-fat
+          path: fsck-artifact
+          github-token: ${{ github.token }}
+          run-id: 36436741219
+
+      - name: Verify frozen fsck.fat
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'fe165b0784dd3c301cdf422691b1e5630bd5fab11bca15b8419906b10900d665  fsck-artifact/fsck.fat-static' | sha256sum -c -
+          file fsck-artifact/fsck.fat-static | tee fsck-file.txt
+          grep -q 'ARM aarch64' fsck-file.txt
+          grep -q 'statically linked' fsck-file.txt
+
+      - name: Validate R40 source syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in \
+            r40-release/build_release.sh \
+            r40-release/r36os-export-current-logs-wrapper \
+            r40-release/r36os-r40-github-snapshot \
+            r40-release/r36os-r36update-repair \
+            r40-release/r36os-r40-firstboot-repair \
+            r40-release/r36os-r40-repair-generator
+          do
+            bash -n "$f"
+          done
+
+      - name: Build R40 candidate twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x r40-release/build_release.sh
+          R39="$PWD/r39-base/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd"
+          FSCK="$PWD/fsck-artifact/fsck.fat-static"
+          ./r40-release/build_release.sh "$R39" "$FSCK" "$PWD/out-a" 2>&1 | tee r40-build-a.log
+          ./r40-release/build_release.sh "$R39" "$FSCK" "$PWD/out-b" 2>&1 | tee r40-build-b.log
+
+      - name: Prove deterministic output
+        shell: bash
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
+          B=out-b/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
+          cmp "$A" "$B"
+          test "$(sha256sum "$A" | awk '{print $1}')" = "$(sha256sum "$B" | awk '{print $1}')"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          echo R40_DETERMINISTIC_BUILD=PASS
+
+      - name: Audit candidate package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf audit
+          mkdir audit
+          tar -xzf out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd -C audit
+          (cd audit && sha256sum -c checksums.sha256)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.40.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.39.0
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          grep -q 'r36os-r40-github-snapshot' audit/payload/root/usr/local/bin/r36os-export-current-logs
+          grep -q 'latest_game_session=' audit/payload/root/usr/local/bin/r36os-r40-github-snapshot
+          grep -q 'Hewitt554/R36OS-Device-Logs' audit/payload/root/usr/local/bin/r36os-r40-firstboot-repair
+          grep -q '^R36OS_PACKAGE_VERSION="0.5.40.0"$' audit/payload/root/etc/r36os-release
+          test -f audit/payload/root/etc/r36os/r40-r36update-repair-once
+          echo R40_PACKAGE_AUDIT=PASS
+
+      - name: Upload validated candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R40-validation-candidate-clean
+          path: |
+            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
+            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r40-build-a.log
+            r40-build-b.log
+          if-no-files-found: error
+          retention-days: 30
