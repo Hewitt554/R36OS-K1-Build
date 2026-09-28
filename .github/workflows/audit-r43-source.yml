@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum -c r43-release/SOURCE_ARCHIVE.sha256
+          (cd r43-release && sha256sum -c SOURCE_ARCHIVE.sha256)
           if tar -tzf r43-release/source.tar.gz | grep -E '(^/|(^|/)\.\.(/|$))'; then
             echo 'unsafe archive member' >&2
             exit 20
