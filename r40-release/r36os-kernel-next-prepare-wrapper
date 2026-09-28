@@ -1,0 +1,3 @@
+#!/bin/sh
+export R36OS_VERSION_HELPER=/usr/local/libexec/r36os/r36os-k1-version-compat
+exec /usr/local/libexec/r36os/r39-kernel-next-prepare "$@"
