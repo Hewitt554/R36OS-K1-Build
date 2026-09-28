@@ -1,0 +1,45 @@
+name: Audit staged R43 source hashes
+
+on:
+  push:
+    branches:
+      - work/r43-source-staging-2026-09-28
+    paths:
+      - '.github/workflows/audit-r43-staged-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact source set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/r43-expected.sha256 <<'EOF'
+          652ece1024c4f01ef97e312bc3e3084922d502b928bd0e4c760b57c8ef13e882  r43-release/build_fixture.sh
+          73d8158e59d1c32de1339c39e3f3e03fbef582a6e7680a569efb7e108b2e11bf  r43-release/build_fsck.sh
+          bfde1925c0b734309fff7ef8ea56674610a8670713a7abfafa68d4727697e698  r43-release/build_release.sh
+          d8f384ab513a169ff2e9e859fc1d7508e646fcd7c730a94efebba44b6c558a87  r43-release/fat_fixture_tool.py
+          8a173af84efea0034e78cb6733cf9560e6a538cf2c1836911702e11137b16397  r43-release/qemu-fsck-wrapper.sh
+          df0ba17d4d22580ca4e2a9a42e511a30df666afcf332fe179000fa6b32f9c694  r43-release/r36os-diagnostic-snapshot
+          ef3330f91db693f8278952b67453fe096e70b48bcbce07d029681ff90894cd40  r43-release/r36os-export-current-logs
+          396e6fcea8961cbfea4bafad92573e41fdfee80df1eae73f4eb8ee13a6687082  r43-release/r36os-r36update-repair
+          3e4badccac4eb3e7930b8f586f366b8369da61d0bb20d316c87ef6f07059d159  r43-release/test_r43_repair.sh
+          53151785c6c39f1a15c7a38deff0ecfc9a36ce7c3c6981d1aef1b3e024738526  r43-release/test_target_fsck.sh
+          cb1e598a687160d7278b07dbaee1bd881a2d56ee1dd6cfbf8260940fc04a063b  .github/workflows/validate-r43-clean.yml
+          EOF
+          sha256sum -c /tmp/r43-expected.sha256
+          for f in r43-release/*.sh r43-release/r36os-*; do bash -n "$f"; done
+          python3 -m py_compile r43-release/fat_fixture_tool.py
+          rm -rf r43-release/__pycache__
+          if grep -R -n -E 'github_pat_|gh[pousr]_' r43-release R43_FULL_AUDIT.md .github/workflows/validate-r43-clean.yml; then
+            echo credential-pattern-found >&2
+            exit 20
+          fi
+          test ! -e r43-release/source.tar.gz
+          echo R43_STAGED_SOURCE_HASH_AUDIT=PASS
