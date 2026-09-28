@@ -43,9 +43,12 @@ jobs:
             rm -rf "fsck-$n"
             mkdir -p "fsck-$n"
             docker run --rm -v "$PWD:/work" -w /work debian:11-slim bash -euxc "
-              printf '%s\\n' 'deb http://deb.debian.org/debian bullseye main' > /etc/apt/sources.list
+              printf '%s\\n' \
+                'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+                'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+                > /etc/apt/sources.list
               rm -f /etc/apt/sources.list.d/*
-              apt-get update
+              apt-get -o Acquire::Check-Valid-Until=false update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends                 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu autoconf automake autopoint gettext pkg-config make file ca-certificates
               rm -rf /tmp/dosfstools
               mkdir /tmp/dosfstools
