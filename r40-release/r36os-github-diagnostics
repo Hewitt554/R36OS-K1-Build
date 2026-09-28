@@ -204,11 +204,12 @@ capture(){
   (cat /proc/cmdline 2>/dev/null >"$tmp/cmdline.txt") || true
   (lsmod 2>/dev/null >"$tmp/lsmod.txt") || true
   (journalctl -b -u r36os-kernel-next-health.service --no-pager -n 400 2>/dev/null >"$tmp/kernel-next-health-journal.txt") || true
-  for f in "$tmp"/*; do
-    [ -f "$f" ] || continue
+  # Redact recursively: R40 includes nested game/OS session directories.
+  # Fail closed if any nested file cannot be redacted or passes a privacy signature.
+  while IFS= read -r -d '' f; do
     redact_file "$f" || { rm -rf "$tmp"; write_status ERROR redaction-failed; return 27; }
     privacy_scan_file "$f" || { rm -rf "$tmp"; write_status ERROR privacy-scan-failed; return 28; }
-  done
+  done < <(find "$tmp" -type f -print0)
   bundle="$QUEUE/R36OS-${tag}-diag-${stamp}-${reason}-${DEVICE_ID}.tar.gz"
   tar -C "$tmp" -czf "$bundle.tmp" . >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-create; return 23; }
   tar -tzf "$bundle.tmp" >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-verify; return 24; }
@@ -226,10 +227,245 @@ capture(){
 load_config(){
   import_config >/dev/null 2>&1 || true
   MODE="$(val "$CFG" mode)"; REPO="$(val "$CFG" repo)"; BRANCH="$(val "$CFG" branch)"
+  # R40 is explicitly paired to the user's dedicated private diagnostic inbox.
+  # The token remains device-local and is never shipped in source/update files.
+  [ -n "$MODE" ] || MODE=automatic
+  [ -n "$REPO" ] || REPO="Hewitt554/R36OS-Device-Logs"
   [ -n "$BRANCH" ] || BRANCH=main
   case "$MODE" in automatic|off) ;; *) MODE=off;; esac
-  echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || REPO=""
-  echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || BRANCH=main
+  echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+verify_private_repo(){
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 1; }
+  resp="$BASE/.repo-check-$$.json"
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 15 --max-time 45 --retry 1 \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$API_BASE/repos/$REPO" 2>/dev/null)"
+  unset token
+  ok=1
+  if [ "$code" = 200 ] && grep -Eq '"private"[[:space:]]*:[[:space:]]*true' "$resp" 2>/dev/null; then ok=0; fi
+  rm -f "$resp" 2>/dev/null || true
+  return "$ok"
+}
+upload_one(){
+  b="$1"; [ -s "$b" ] || return 1
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 2; }
+  ensure_device_id || { unset token; return 3; }
+  name="$(basename "$b")"; day="$(date +%Y-%m-%d 2>/dev/null || echo unknown)"
+  remote="uploads/$DEVICE_ID/$day/$name"
+  req="$BASE/.upload-request-$$.json"; resp="$BASE/.upload-response-$$.json"
+  umask 077
+  {
+    printf '{"message":"R36OS diagnostics %s","branch":"%s","content":"' "$name" "$BRANCH"
+    base64 -w 0 "$b" 2>/dev/null
+    printf '"}\n'
+  } >"$req" || { rm -f "$req"; unset token; return 4; }
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 20 --max-time 180 --retry 2 \
+    -X PUT \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$req" \
+    "$API_BASE/repos/$REPO/contents/$remote" 2>/dev/null)"
+  unset token; rm -f "$req"
+  case "$code" in
+    200|201)
+      rm -f "$resp"
+      mv -f "$b" "$SENT/$name" || return 5
+      [ -f "$b.sha256" ] && mv -f "$b.sha256" "$SENT/$name.sha256" 2>/dev/null || true
+      REMOTE_PATH="$remote"
+      return 0;;
+    *)
+      # Keep only the HTTP status; GitHub response bodies may contain identifiers.
+      printf 'http_status=%s\n' "$code" >"$BASE/last-upload-error.txt" 2>/dev/null || true
+      rm -f "$resp"
+      return 6;;
+  esac
+}
+upload_queued(){
+  ensure_dirs || { write_status ERROR state-not-mounted; return 20; }
+  load_config
+  count="$(find "$QUEUE" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$count" -gt 0 ] || { write_status IDLE no-queued-bundles; return 0; }
+  [ "$MODE" = automatic ] || { write_status QUEUED upload-disabled; return 0; }
+  [ -n "$REPO" ] || { write_status QUEUED_NOT_CONFIGURED private-repo-not-configured; return 0; }
+  [ "$REPO" != 'Hewitt554/R36OS-K1-Build' ] || { write_status QUEUED_NOT_CONFIGURED public-build-repo-forbidden; return 0; }
+  [ -s "$TOKEN_FILE" ] || { write_status QUEUED_NOT_CONFIGURED token-not-configured; return 0; }
+  command -v curl >/dev/null 2>&1 || { write_status QUEUED curl-unavailable; return 0; }
+  verify_private_repo || { write_status QUEUED_NOT_CONFIGURED private-repo-required-or-inaccessible; return 0; }
+  sent=0
+  for b in $(ls -1tr "$QUEUE"/*.tar.gz 2>/dev/null | head -4); do
+    if upload_one "$b"; then sent=$((sent+1)); write_status UPLOADED "sent=$sent" "$SENT/$(basename "$b")" "$REMOTE_PATH"; else write_status QUEUED upload-failed "$b"; break; fi
+  done
+  ls -1t "$SENT"/*.tar.gz 2>/dev/null | awk 'NR>10' | while IFS= read -r old; do rm -f "$old" "$old.sha256" 2>/dev/null || true; done
+  return 0
+}
+selftest(){
+  t="${TMPDIR:-/tmp}/r36os-github-diag-selftest.$$"; mkdir -p "$t" || exit 1
+  cat >"$t/sample.txt" <<'S'
+ssid=My Home WiFi
+ssid="Family Network 5G"
+ESSID:"Quoted Network With Spaces"
+802-11-wireless.ssid: Cafe WiFi Guest
+password=hunter2 with spaces
+passwd: "odd value with spaces"
+psk = 'correct horse battery staple'
+wifi-sec.psk: another secret phrase
+token=abc.def.ghi
+"access_token": "json-token-value"
+client_secret super-secret-cli-value
+Authorization: Bearer abcdef.12345
+proxy=https://alice:pw@example.invalid/path?q=secret&token=abc
+raw_github=github_pat_11AAABBBCCCDDDEEE
+legacy_token=ghp_1234567890abcdefghijk
+mac=aa:bb:cc:dd:ee:ff
+ip=192.168.1.22
+ipv6=fe80:1:2:3:4:5:6:7
+email=user@example.com
+candidate_id=e551eb6598d6da7a8e8320e9
+kernel_release=6.12.94-r36os-k1
+S
+  redact_file "$t/sample.txt" || { rm -rf "$t"; exit 2; }
+  privacy_scan_file "$t/sample.txt" || { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 3; }
+  grep -q 'candidate_id=e551eb6598d6da7a8e8320e9' "$t/sample.txt" || { rm -rf "$t"; exit 4; }
+  grep -q 'kernel_release=6.12.94-r36os-k1' "$t/sample.txt" || { rm -rf "$t"; exit 5; }
+  for secret in 'My Home WiFi' 'Family Network 5G' 'Quoted Network With Spaces' 'Cafe WiFi Guest' \
+    hunter2 'odd value with spaces' 'correct horse battery staple' 'another secret phrase' \
+    abc.def.ghi json-token-value super-secret-cli-value abcdef.12345 alice:pw github_pat_ ghp_ \
+    aa:bb:cc:dd:ee:ff 192.168.1.22 fe80:1:2:3:4:5:6:7 user@example.com; do
+    grep -Fq "$secret" "$t/sample.txt" && { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 6; }
+  done
+  rm -rf "$t"; echo 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'; exit 0
+}
+
+case "$CMD" in
+  status) ensure_dirs >/dev/null 2>&1; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH"; cat "$STATUS" 2>/dev/null;;
+  import) import_config; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH";;
+  capture|queue) capture "$ARG";;
+  upload-queued) upload_queued;;
+  send) capture "$ARG" >/dev/null && upload_queued;;
+  selftest) selftest;;
+  *) echo 'usage: status|import|capture REASON|upload-queued|send REASON|selftest' >&2; exit 2;;
+esac
+ || REPO=""
+  [ "$REPO" != 'Hewitt554/R36OS-K1-Build' ] || REPO=""
+  echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+verify_private_repo(){
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 1; }
+  resp="$BASE/.repo-check-$$.json"
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 15 --max-time 45 --retry 1 \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$API_BASE/repos/$REPO" 2>/dev/null)"
+  unset token
+  ok=1
+  if [ "$code" = 200 ] && grep -Eq '"private"[[:space:]]*:[[:space:]]*true' "$resp" 2>/dev/null; then ok=0; fi
+  rm -f "$resp" 2>/dev/null || true
+  return "$ok"
+}
+upload_one(){
+  b="$1"; [ -s "$b" ] || return 1
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 2; }
+  ensure_device_id || { unset token; return 3; }
+  name="$(basename "$b")"; day="$(date +%Y-%m-%d 2>/dev/null || echo unknown)"
+  remote="uploads/$DEVICE_ID/$day/$name"
+  req="$BASE/.upload-request-$$.json"; resp="$BASE/.upload-response-$$.json"
+  umask 077
+  {
+    printf '{"message":"R36OS diagnostics %s","branch":"%s","content":"' "$name" "$BRANCH"
+    base64 -w 0 "$b" 2>/dev/null
+    printf '"}\n'
+  } >"$req" || { rm -f "$req"; unset token; return 4; }
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 20 --max-time 180 --retry 2 \
+    -X PUT \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$req" \
+    "$API_BASE/repos/$REPO/contents/$remote" 2>/dev/null)"
+  unset token; rm -f "$req"
+  case "$code" in
+    200|201)
+      rm -f "$resp"
+      mv -f "$b" "$SENT/$name" || return 5
+      [ -f "$b.sha256" ] && mv -f "$b.sha256" "$SENT/$name.sha256" 2>/dev/null || true
+      REMOTE_PATH="$remote"
+      return 0;;
+    *)
+      # Keep only the HTTP status; GitHub response bodies may contain identifiers.
+      printf 'http_status=%s\n' "$code" >"$BASE/last-upload-error.txt" 2>/dev/null || true
+      rm -f "$resp"
+      return 6;;
+  esac
+}
+upload_queued(){
+  ensure_dirs || { write_status ERROR state-not-mounted; return 20; }
+  load_config
+  count="$(find "$QUEUE" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$count" -gt 0 ] || { write_status IDLE no-queued-bundles; return 0; }
+  [ "$MODE" = automatic ] || { write_status QUEUED upload-disabled; return 0; }
+  [ -n "$REPO" ] || { write_status QUEUED_NOT_CONFIGURED private-repo-not-configured; return 0; }
+  [ "$REPO" != 'Hewitt554/R36OS-K1-Build' ] || { write_status QUEUED_NOT_CONFIGURED public-build-repo-forbidden; return 0; }
+  [ -s "$TOKEN_FILE" ] || { write_status QUEUED_NOT_CONFIGURED token-not-configured; return 0; }
+  command -v curl >/dev/null 2>&1 || { write_status QUEUED curl-unavailable; return 0; }
+  verify_private_repo || { write_status QUEUED_NOT_CONFIGURED private-repo-required-or-inaccessible; return 0; }
+  sent=0
+  for b in $(ls -1tr "$QUEUE"/*.tar.gz 2>/dev/null | head -4); do
+    if upload_one "$b"; then sent=$((sent+1)); write_status UPLOADED "sent=$sent" "$SENT/$(basename "$b")" "$REMOTE_PATH"; else write_status QUEUED upload-failed "$b"; break; fi
+  done
+  ls -1t "$SENT"/*.tar.gz 2>/dev/null | awk 'NR>10' | while IFS= read -r old; do rm -f "$old" "$old.sha256" 2>/dev/null || true; done
+  return 0
+}
+selftest(){
+  t="${TMPDIR:-/tmp}/r36os-github-diag-selftest.$$"; mkdir -p "$t" || exit 1
+  cat >"$t/sample.txt" <<'S'
+ssid=My Home WiFi
+ssid="Family Network 5G"
+ESSID:"Quoted Network With Spaces"
+802-11-wireless.ssid: Cafe WiFi Guest
+password=hunter2 with spaces
+passwd: "odd value with spaces"
+psk = 'correct horse battery staple'
+wifi-sec.psk: another secret phrase
+token=abc.def.ghi
+"access_token": "json-token-value"
+client_secret super-secret-cli-value
+Authorization: Bearer abcdef.12345
+proxy=https://alice:pw@example.invalid/path?q=secret&token=abc
+raw_github=github_pat_11AAABBBCCCDDDEEE
+legacy_token=ghp_1234567890abcdefghijk
+mac=aa:bb:cc:dd:ee:ff
+ip=192.168.1.22
+ipv6=fe80:1:2:3:4:5:6:7
+email=user@example.com
+candidate_id=e551eb6598d6da7a8e8320e9
+kernel_release=6.12.94-r36os-k1
+S
+  redact_file "$t/sample.txt" || { rm -rf "$t"; exit 2; }
+  privacy_scan_file "$t/sample.txt" || { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 3; }
+  grep -q 'candidate_id=e551eb6598d6da7a8e8320e9' "$t/sample.txt" || { rm -rf "$t"; exit 4; }
+  grep -q 'kernel_release=6.12.94-r36os-k1' "$t/sample.txt" || { rm -rf "$t"; exit 5; }
+  for secret in 'My Home WiFi' 'Family Network 5G' 'Quoted Network With Spaces' 'Cafe WiFi Guest' \
+    hunter2 'odd value with spaces' 'correct horse battery staple' 'another secret phrase' \
+    abc.def.ghi json-token-value super-secret-cli-value abcdef.12345 alice:pw github_pat_ ghp_ \
+    aa:bb:cc:dd:ee:ff 192.168.1.22 fe80:1:2:3:4:5:6:7 user@example.com; do
+    grep -Fq "$secret" "$t/sample.txt" && { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 6; }
+  done
+  rm -rf "$t"; echo 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'; exit 0
+}
+
+case "$CMD" in
+  status) ensure_dirs >/dev/null 2>&1; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH"; cat "$STATUS" 2>/dev/null;;
+  import) import_config; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH";;
+  capture|queue) capture "$ARG";;
+  upload-queued) upload_queued;;
+  send) capture "$ARG" >/dev/null && upload_queued;;
+  selftest) selftest;;
+  *) echo 'usage: status|import|capture REASON|upload-queued|send REASON|selftest' >&2; exit 2;;
+esac
+ || BRANCH=main
 }
 verify_private_repo(){
   token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 1; }
