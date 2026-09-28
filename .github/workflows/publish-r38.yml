@@ -1,111 +1,62 @@
-name: Publish R36OS Alpha 5R38
+name: Publish R36OS Alpha 5R39
 
 on:
   push:
     paths:
-      - r38-release/release-inputs.b64.part00
-      - r38-release/release-inputs.b64.part01
-      - r38-release/release-inputs.b64.part02
-      - r38-release/release-inputs.b64.part03
       - .github/workflows/publish-r38.yml
   workflow_dispatch:
 
 permissions:
   contents: write
-  actions: read
-
-concurrency:
-  group: r36os-alpha5r38-publish
-  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download verified Run 11 device candidate source
-        uses: actions/download-artifact@v4
-        with:
-          name: R36OS-K1-Run11-device-candidate
-          path: run11-device
-          github-token: ${{ github.token }}
-          run-id: 36394809088
-
-      - name: Decode frozen R38 release inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p r38-inputs
-          cat             r38-release/release-inputs.b64.part00             r38-release/release-inputs.b64.part01             r38-release/release-inputs.b64.part02             r38-release/release-inputs.b64.part03             > r38-inputs.b64
-          base64 -d r38-inputs.b64 > r38-inputs.tar.gz
-          echo "893042d4353b4740bd20f226363c56d17456795c0d16032f1276b8433eac6254  r38-inputs.tar.gz" | sha256sum -c -
-          tar -xzf r38-inputs.tar.gz -C r38-inputs
-          # The Run11 extractor's checksum sidecar records its original package/ path.
-          # Normalize verification to the downloaded artifact's actual path without
-          # changing or weakening the expected SHA-256.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("r38-inputs/build_release.sh")
-          s = p.read_text()
-          old = 'if [[ -f "$FULL.sha256" ]]; then (cd "$(dirname "$FULL")" && sha256sum -c "$(basename "$FULL").sha256"); fi'
-          new = '''if [[ -f "$FULL.sha256" ]]; then
-            EXPECTED_FULL="$(awk 'NF{print $1; exit}' "$FULL.sha256")"
-            ACTUAL_FULL="$(sha256sum "$FULL" | awk '{print $1}')"
-            [[ "$EXPECTED_FULL" == "$ACTUAL_FULL" ]] || { echo "Run11 full candidate archive SHA-256 mismatch" >&2; exit 19; }
-          fi'''
-          if old not in s:
-              raise SystemExit("expected Run11 checksum verification line not found")
-          p.write_text(s.replace(old, new))
-          PY
-          bash -n r38-inputs/build_release.sh
-
-      - name: Build and validate R38 release
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x r38-inputs/build_release.sh
-          ./r38-inputs/build_release.sh "$PWD/run11-device" "$PWD/release-out" 2>&1 | tee r38-release-build.log
-          test -s release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
-          test -s release-out/latest.conf
-          test -s release-out/RELEASE_REPORT.txt
-
-      - name: Create or update GitHub Release
+      - name: Fetch exact R38 and reconstruct R39 inputs
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view alpha5r38 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1; then
-            gh release create alpha5r38               --repo Hewitt554/R36OS-K1-Build               --target "${GITHUB_SHA}"               --title "R36OS Alpha 5R38 — K1 Boot Next Once"               --notes "GitHub-delivered K1 Boot Next Once test update. Requires Alpha 5R37 GitHub Updater Bootstrap. Legacy Linux 4.4 remains the normal/default boot."
-          fi
-          gh release upload alpha5r38             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd.sha256             release-out/RELEASE_REPORT.txt             --repo Hewitt554/R36OS-K1-Build             --clobber
+          mkdir -p r39-base r39-generated
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir r39-base
+          R38=r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+          echo "68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  $R38" | sha256sum -c -
+          python3 r39-release/reconstruct_r39_helpers.py "$R38" r39-generated
+          cp r39-generated/* r39-release/
+          chmod +x r39-release/r36os-* r39-release/build_release.sh
+          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-release/r36os-kernel-next-prepare' | sha256sum -c -
+          echo 'ce893250cd52748b6604e75c8d8af397e33c8b7829999ea7a8f20c9100d10407  r39-release/r36os-github-diagnostics' | sha256sum -c -
+          for f in r39-release/r36os-*; do bash -n "$f"; done
+          r39-release/r36os-github-diagnostics selftest | grep -q PASS
 
-      - name: Publish latest update channel manifest
-        shell: bash
+      - name: Build R39
         run: |
           set -euo pipefail
-          mkdir -p r36os-release-channel
+          ./r39-release/build_release.sh "$PWD/r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd" "$PWD/release-out" | tee r39-release-build.log
+
+      - name: Publish R39 release and channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view alpha5r39 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1 || gh release create alpha5r39 --repo Hewitt554/R36OS-K1-Build --target "${GITHUB_SHA}" --title 'R36OS Alpha 5R39 — K1 FAT Guard + Remote Diagnostics' --notes 'Fixes Boot Next Once code 25 false positives and adds queue-first privacy-redacted diagnostics. K1 binaries are unchanged.'
+          gh release upload alpha5r39 release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256 release-out/RELEASE_REPORT.txt --repo Hewitt554/R36OS-K1-Build --clobber
           cp release-out/latest.conf r36os-release-channel/latest.conf
-          git config user.name "R36OS Release Bot"
-          git config user.email "r36os-release-bot@users.noreply.github.com"
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
           git add r36os-release-channel/latest.conf
-          if ! git diff --cached --quiet; then
-            git commit -m "Publish Alpha 5R38 update channel"
-            git push
-          fi
+          git diff --cached --quiet || { git commit -m 'Publish Alpha 5R39 update channel'; git push; }
 
-      - name: Upload release build evidence
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: R36OS-Alpha5R38-release-evidence
+          name: R36OS-Alpha5R39-release-evidence
           path: |
             release-out/*.sha256
             release-out/latest.conf
             release-out/RELEASE_REPORT.txt
-            r38-release-build.log
-          if-no-files-found: error
+            r39-release-build.log
           retention-days: 30
