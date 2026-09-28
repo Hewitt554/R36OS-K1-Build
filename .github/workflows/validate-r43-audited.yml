@@ -115,7 +115,12 @@ jobs:
             echo 'newer AArch64 SME glibc runtime unexpectedly present' >&2
             exit 23
           fi
-          qemu-aarch64-static -cpu help | grep -q 'cortex-a35'
+          # Do not pipe qemu's CPU list directly into grep -q under pipefail:
+          # grep may exit after the match and qemu can then receive SIGPIPE.
+          qemu-aarch64-static -cpu help >/tmp/qemu-aarch64-cpus.txt 2>&1
+          grep -q 'cortex-a35' /tmp/qemu-aarch64-cpus.txt
+          grep -q 'libc6-arm64-cross[[:space:]]*2.31-' fsck-a/toolchain-packages.txt
+          grep -q 'libc6-dev-arm64-cross[[:space:]]*2.31-' fsck-a/toolchain-packages.txt
           qemu-aarch64-static -cpu cortex-a35 fsck-a/fsck.fat-static --help >/tmp/fsck-help.txt 2>&1
           truncate -s 64M /tmp/r43-fat.img
           mkfs.fat -F 32 /tmp/r43-fat.img

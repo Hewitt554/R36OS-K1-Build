@@ -113,3 +113,21 @@ Before another release run, validation must:
 - audit the final package for no K1 binary, active boot/module payload or credential.
 
 No new validation run should be started until this entire audited source set is committed together.
+
+## 9. Post-audit validation-harness review
+
+The first validation of this complete audited source set passed:
+- static source audit;
+- exact R41 input verification;
+- exact R42 non-secret baseline reconstruction and complete core-manifest hash verification;
+- installation of the pinned Bullseye AArch64 glibc 2.31 development toolchain;
+- two byte-identical dosfstools builds;
+- static AArch64 ELF creation with Linux ABI 3.7.0 and no newer SME runtime string.
+
+The job then exited immediately after the ELF/readelf audit. The next command was a qemu CPU-list pipeline using grep -q under set -o pipefail. That construction can fail when grep exits after its match and the producer receives SIGPIPE. This is validation-harness behavior, not evidence of an R43 checker or repair failure.
+
+Before another run, the complete set was re-reviewed and two corrections were committed together:
+- write qemu's CPU list to a file, then grep the file; also explicitly assert the installed AArch64 libc and libc-dev are 2.31-era;
+- when and only when a new R43 one-shot marker is armed, clear stale FIRSTBOOT-UPDATE-REPAIR.conf, firstboot-console.txt and GENERATOR.conf before recording the new attempt.
+
+No K1 binary, candidate, repair ordering or filesystem write policy changed as a result of this harness review.
