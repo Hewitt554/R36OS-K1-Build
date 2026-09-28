@@ -1,0 +1,163 @@
+name: Validate R36OS Alpha 5R41
+
+on:
+  push:
+    branches:
+      - work/r41-firstboot-repair-fix-2026-09-28
+    paths:
+      - 'r41-release/**'
+      - '.github/workflows/validate-r41.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dosfstools
+
+      - name: Download exact published R40 base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p r40-base r40-audit
+          gh release download alpha5r40 --repo Hewitt554/R36OS-K1-Build             --pattern '00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd' --dir r40-base
+          R40=r40-base/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
+          echo '448c056d9b1eac99443d0fad1ff10be9c9b40c7a8ffc4be33015c52d44ecd1e2  '"$R40" | sha256sum -c -
+          tar -xzf "$R40" -C r40-audit
+          (cd r40-audit && sha256sum -c checksums.sha256 >/dev/null)
+          bash -n r40-audit/payload/root/usr/local/bin/r36os-r36update-repair
+
+      - name: Audit R41 sources and generator paths
+        run: |
+          set -euo pipefail
+          for f in r41-release/build_release.sh r41-release/r36os-export-current-logs-wrapper r41-release/r36os-diagnostic-snapshot r41-release/r36os-firstboot-update-repair r41-release/r36os-firstboot-update-repair-generator; do
+            bash -n "$f"
+          done
+          grep -q '/etc/systemd/system-generators' r41-release/build_release.sh
+          grep -q '/lib/systemd/system-generators' r41-release/build_release.sh
+          grep -q 'FIRSTBOOT-UPDATE-REPAIR.conf' r41-release/r36os-diagnostic-snapshot
+
+      - name: Exercise generator activation in isolated output
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /etc/r36os
+          sudo tee /etc/r36os/r36update-repair-once.conf >/dev/null <<'EOF'
+          format=R36OS_R36UPDATE_REPAIR_ONCE_V1
+          release=0.5.41.0
+          reason=validation
+          EOF
+          rm -rf /tmp/r41-generator
+          mkdir -p /tmp/r41-generator
+          sudo bash r41-release/r36os-firstboot-update-repair-generator /tmp/r41-generator
+          test -L /tmp/r41-generator/multi-user.target.wants/r36os-firstboot-update-repair.service
+          test "$(readlink /tmp/r41-generator/multi-user.target.wants/r36os-firstboot-update-repair.service)" = /etc/systemd/system/r36os-firstboot-update-repair.service
+          sudo rm -f /etc/r36os/r36update-repair-once.conf /run/r36os-firstboot-update-repair-generator.status
+          echo R41_GENERATOR_ACTIVATION_TEST=PASS
+
+      - name: Re-run exact R40 FAT repair helper on isolated loopback
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r41-r36update
+          STATE=/tmp/r41-r36state
+          IMG=/tmp/r41-r36update.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext/K1"
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do printf 'fixture-%s\n' "$f" | sudo tee "$MNT/R36OS-KernelNext/K1/$f" >/dev/null; done
+          sudo tee "$MNT/R36OS-KernelNext/K1/K1.conf" >/dev/null <<'EOF'
+          format=R36OS_K1_CANDIDATE_V1
+          candidate_id=e551eb6598d6da7a8e8320e9
+          EOF
+          (cd "$MNT/R36OS-KernelNext/K1" && sudo sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt | sudo tee MANIFEST.sha256 >/dev/null)
+          sudo env R36OS_R36UPDATE_MOUNT="$MNT" R36OS_R36UPDATE_DEV="$LOOP" R36OS_R36UPDATE_UUID="$UUID" R36OS_STATE_ROOT="$STATE" R36OS_FSCK_FAT=/usr/sbin/fsck.fat             bash r40-audit/payload/root/usr/local/bin/r36os-r36update-repair repair | tee /tmp/r41-repair.out
+          grep -q 'status=PASS_REBOOT_REQUIRED' /tmp/r41-repair.out
+          ! mountpoint -q "$MNT"
+          test -s "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar
+
+      - name: Prove armed marker still blocks exact repair helper
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r41-marker-update
+          STATE=/tmp/r41-marker-state
+          IMG=/tmp/r41-marker.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext"
+          printf 'armed\n' | sudo tee "$MNT/R36OS-KernelNext/boot-next.e551eb6598d6da7a8e8320e9.once" >/dev/null
+          set +e
+          sudo env R36OS_R36UPDATE_MOUNT="$MNT" R36OS_R36UPDATE_DEV="$LOOP" R36OS_R36UPDATE_UUID="$UUID" R36OS_STATE_ROOT="$STATE" R36OS_FSCK_FAT=/usr/sbin/fsck.fat             bash r40-audit/payload/root/usr/local/bin/r36os-r36update-repair repair >/tmp/r41-marker.out 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 45
+          grep -q 'k1-one-shot-marker-present' /tmp/r41-marker.out
+          mountpoint -q "$MNT"
+
+      - name: Build R41 twice
+        run: |
+          set -euo pipefail
+          chmod +x r41-release/build_release.sh
+          R40="$PWD/r40-base/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd"
+          ./r41-release/build_release.sh "$R40" "$PWD/out-a" | tee r41-build-a.log
+          ./r41-release/build_release.sh "$R40" "$PWD/out-b" | tee r41-build-b.log
+
+      - name: Prove deterministic output and audit package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd
+          B=out-b/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf audit
+          mkdir audit
+          tar -xzf "$A" -C audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.41.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.40.0
+          test -f audit/payload/root/etc/systemd/system-generators/r36os-firstboot-update-repair-generator
+          test -f audit/payload/root/lib/systemd/system-generators/r36os-firstboot-update-repair-generator
+          cmp audit/payload/root/etc/systemd/system-generators/r36os-firstboot-update-repair-generator audit/payload/root/lib/systemd/system-generators/r36os-firstboot-update-repair-generator
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          if grep -R -n -E '0\.5\.40\.0|Alpha[[:space:]]*5R40|r40-runtime-lock' audit/payload/root/usr/local/bin audit/payload/root/etc/systemd/system-generators audit/payload/root/lib/systemd/system-generators 2>/dev/null; then exit 31; fi
+          echo R41_PACKAGE_AUDIT=PASS
+
+      - name: Upload audited R41 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R41-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd
+            out-a/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r41-build-a.log
+            r41-build-b.log
+            r41-release/AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
