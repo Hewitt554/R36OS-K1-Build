@@ -1,0 +1,244 @@
+#!/bin/bash
+# R36OS safe FAT repair for the dedicated R36UPDATE partition.
+# Read-only qualification happens before any filesystem write. Never force/lazy unmount.
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+export LC_ALL=C LANG=C
+
+MOUNT="${R36OS_R36UPDATE_MOUNT:-/r36update}"
+EXPECTED_DEV="${R36OS_R36UPDATE_DEV:-/dev/mmcblk0p3}"
+EXPECTED_UUID="${R36OS_R36UPDATE_UUID:-C49E-0225}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+NEXT="$MOUNT/R36OS-KernelNext"
+RESULT=/run/r36os-r36update-repair.result
+PROGRESS=/run/r36os-r36update-repair.progress
+CHECKER_STATUS=/run/r36os-r36update-repair.checker
+LOGROOT="$STATE/logs/r36update-repair"
+PACKAGED=/usr/local/libexec/r36os/fsck.fat-static
+PACKAGED_SHA=/usr/local/libexec/r36os/fsck.fat-static.sha256
+FIXTURE_GZ=/usr/local/libexec/r36os/fsck-selftest.img.gz
+FIXTURE_SHA=/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256
+CMD="${1:-status}"
+
+progress(){ printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >"$PROGRESS" 2>/dev/null || true; }
+result(){
+  st="$1"; code="$2"; detail="$3"; backup="${4:-}"; precheck_rc="${5:-}"; repair_rc="${6:-}"; verify_rc="${7:-}"; checker="${8:-}"
+  mkdir -p "$LOGROOT" 2>/dev/null || true
+  {
+    echo 'format=R36OS_R36UPDATE_REPAIR_RESULT_V2'
+    echo "status=$st"
+    echo "code=$code"
+    echo "detail=$detail"
+    echo "device=$EXPECTED_DEV"
+    echo "expected_uuid=$EXPECTED_UUID"
+    echo "checker=$checker"
+    echo "backup=$backup"
+    echo "precheck_rc=$precheck_rc"
+    echo "repair_rc=$repair_rc"
+    echo "verify_rc=$verify_rc"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$RESULT" 2>/dev/null || true
+  cp -f "$RESULT" "$LOGROOT/LAST.conf" 2>/dev/null || true
+}
+fail(){
+  code="$1"; detail="$2"; backup="${3:-}"; precheck_rc="${4:-}"; repair_rc="${5:-}"; verify_rc="${6:-}"; checker="${7:-}"
+  progress FAIL 100 "R36UPDATE repair stopped" "$detail"
+  result FAIL "$code" "$detail" "$backup" "$precheck_rc" "$repair_rc" "$verify_rc" "$checker"
+  echo "status=FAIL code=$code detail=$detail"
+  exit "$code"
+}
+mounted_source(){ findmnt -rn -o SOURCE --target "$MOUNT" 2>/dev/null | head -1; }
+mounted_type(){ findmnt -rn -o FSTYPE --target "$MOUNT" 2>/dev/null | head -1; }
+device_uuid(){ blkid -s UUID -o value "$1" 2>/dev/null | head -1; }
+armed_marker(){ find "$NEXT" -maxdepth 1 -type f \( -name 'boot-next.*.once' -o -name 'boot-next.*.consumed' \) -print -quit 2>/dev/null; }
+candidate_precheck(){
+  K1="$NEXT/K1"
+  [ -d "$K1" ] || return 0
+  [ -s "$K1/MANIFEST.sha256" ] || return 1
+  (cd "$K1" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1)
+}
+candidate_identity(){ awk -F= '$1=="candidate_id"{print $2;exit}' "$NEXT/K1/K1.conf" 2>/dev/null; }
+mount_readonly_for_verify(){ mkdir -p "$MOUNT" || return 1; mount -t vfat -o ro "$EXPECTED_DEV" "$MOUNT" >/dev/null 2>&1; }
+leave_readonly_if_possible(){ mountpoint -q "$MOUNT" 2>/dev/null && return 0; mount_readonly_for_verify >/dev/null 2>&1 || true; }
+record_checker(){
+  {
+    echo 'format=R36OS_R36UPDATE_CHECKER_V1'
+    echo "selected=${1:-none}"
+    echo "packaged_selftest_rc=${2:-not-run}"
+    echo "real_precheck_rc=${3:-not-run}"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$CHECKER_STATUS" 2>/dev/null || true
+}
+verify_hash_file(){
+  file="$1"; sumfile="$2"
+  [ -s "$file" ] && [ -s "$sumfile" ] || return 1
+  (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sumfile")" >/dev/null 2>&1)
+}
+packaged_selftest(){
+  verify_hash_file "$PACKAGED" "$PACKAGED_SHA" || return 90
+  verify_hash_file "$FIXTURE_GZ" "$FIXTURE_SHA" || return 91
+  command -v gzip >/dev/null 2>&1 || return 92
+  fixture="/run/r36os-fsck-selftest.img"
+  rm -f "$fixture" 2>/dev/null || true
+  gzip -dc "$FIXTURE_GZ" >"$fixture" 2>/dev/null || { rm -f "$fixture"; return 93; }
+  "$PACKAGED" -n "$fixture" >/run/r36os-fsck-selftest.out 2>&1
+  rc=$?
+  rm -f "$fixture" 2>/dev/null || true
+  return "$rc"
+}
+checker_candidates(){
+  if [ -n "${R36OS_FSCK_FAT:-}" ]; then
+    [ -x "$R36OS_FSCK_FAT" ] && printf '%s\n' "$R36OS_FSCK_FAT"
+    return 0
+  fi
+  [ "${PACKAGED_OK:-0}" = 1 ] && [ -x "$PACKAGED" ] && printf '%s\n' "$PACKAGED"
+  if [ -n "${R36OS_FSCK_NATIVE_CANDIDATES:-}" ]; then
+    for x in $R36OS_FSCK_NATIVE_CANDIDATES; do
+      [ -x "$x" ] && printf '%s\n' "$x"
+    done
+    return 0
+  fi
+  for x in /usr/local/sbin/fsck.fat /usr/sbin/fsck.fat /sbin/fsck.fat /usr/local/sbin/dosfsck /usr/sbin/dosfsck /sbin/dosfsck; do
+    [ -x "$x" ] || continue
+    [ "$x" = "$PACKAGED" ] && continue
+    printf '%s\n' "$x"
+  done
+}
+status(){
+  src="$(mounted_source)"; typ="$(mounted_type)"; uuid="$(device_uuid "$EXPECTED_DEV")"
+  warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
+  marker="$(armed_marker)"
+  {
+    echo 'format=R36OS_R36UPDATE_REPAIR_STATUS_V2'
+    echo "mount=$MOUNT"
+    echo "source=${src:-unmounted}"
+    echo "fstype=${typ:-unknown}"
+    echo "uuid=${uuid:-unknown}"
+    echo "packaged_checker=$PACKAGED"
+    echo "armed_marker=${marker:-none}"
+    echo "device_warning=${warn:-none}"
+  }
+}
+repair(){
+  rm -f "$RESULT" "$PROGRESS" "$CHECKER_STATUS" 2>/dev/null || true
+  progress RUNNING 2 "Checking R36UPDATE" "Verifying exact device, UUID and repair prerequisites"
+
+  [ "$(id -u)" = 0 ] || fail 40 not-root
+  mountpoint -q "$STATE" 2>/dev/null || fail 41 r36state-not-mounted
+  src="$(mounted_source)"; [ "$src" = "$EXPECTED_DEV" ] || fail 42 "unexpected-r36update-source-${src:-none}"
+  [ "$(mounted_type)" = vfat ] || fail 43 r36update-not-vfat
+  uuid="$(device_uuid "$EXPECTED_DEV")"; [ "$uuid" = "$EXPECTED_UUID" ] || fail 44 "unexpected-r36update-uuid-${uuid:-none}"
+  [ -z "$(armed_marker)" ] || fail 45 k1-one-shot-marker-present
+
+  avail_kb="$(df -Pk "$STATE" 2>/dev/null | awk 'NR==2{print $4}')"
+  echo "$avail_kb" | grep -Eq '^[0-9]+$' || fail 47 state-free-space-unknown
+  [ "$avail_kb" -ge 2097152 ] || fail 48 state-needs-at-least-2gib-free
+
+  progress RUNNING 8 "Testing FAT checker" "Verifying packaged checker and parsing a known-good FAT fixture"
+  PACKAGED_OK=0
+  packaged_selftest
+  SELFTEST_RC=$?
+  case "$SELFTEST_RC" in 0) PACKAGED_OK=1;; *) PACKAGED_OK=0;; esac
+  record_checker none "$SELFTEST_RC" not-run
+
+  progress RUNNING 12 "Validating K1 candidate" "Checking candidate hashes before filesystem work"
+  CID_BEFORE="$(candidate_identity)"
+  candidate_precheck || fail 49 k1-candidate-precheck-failed
+  MANIFEST_BEFORE="$(sha256sum "$NEXT/K1/MANIFEST.sha256" 2>/dev/null | awk '{print $1}')"
+
+  stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null)"; echo "$stamp" | grep -Eq '^[0-9]{8}-[0-9]{6}$' || stamp="unknown-$$"
+  mkdir -p "$LOGROOT" "$STATE/recovery/r36update" || fail 50 recovery-directory-create
+  BACKUP="$STATE/recovery/r36update/R36UPDATE-pre-fsck-$stamp.tar"
+  LOG="$LOGROOT/repair-$stamp.log"
+  {
+    echo "format=R36OS_R36UPDATE_REPAIR_LOG_V2"
+    echo "time=$(date -Is 2>/dev/null || date)"
+    echo "device=$EXPECTED_DEV"
+    echo "uuid=$EXPECTED_UUID"
+    echo "packaged_selftest_rc=$SELFTEST_RC"
+    echo "packaged_checker_sha=$(sha256sum "$PACKAGED" 2>/dev/null | awk '{print $1}')"
+  } >"$LOG" 2>/dev/null || true
+
+  progress RUNNING 20 "Backing up R36UPDATE" "Copying all current files to R36STATE before repair"
+  tar -C "$MOUNT" -cpf "$BACKUP.tmp" . >>"$LOG" 2>&1 || { rm -f "$BACKUP.tmp"; fail 51 pre-repair-backup-failed; }
+  tar -tf "$BACKUP.tmp" >/dev/null 2>>"$LOG" || { rm -f "$BACKUP.tmp"; fail 52 pre-repair-backup-verify-failed; }
+  mv -f "$BACKUP.tmp" "$BACKUP" || fail 53 pre-repair-backup-commit-failed
+  sha256sum "$BACKUP" >"$BACKUP.sha256" 2>>"$LOG" || fail 54 pre-repair-backup-sha-failed
+  sync
+
+  progress RUNNING 45 "Unmounting R36UPDATE" "No forced or lazy unmount is permitted"
+  umount "$MOUNT" >>"$LOG" 2>&1 || fail 55 r36update-busy-or-unmount-failed "$BACKUP"
+  mountpoint -q "$MOUNT" 2>/dev/null && fail 56 r36update-still-mounted "$BACKUP"
+
+  progress RUNNING 54 "Read-only FAT precheck" "Qualifying a checker against the real R36UPDATE before any write"
+  SELECTED=""; PRECHECK_RC=""
+  while IFS= read -r candidate; do
+    [ -x "$candidate" ] || continue
+    echo "checker_precheck=$candidate" >>"$LOG"
+    "$candidate" -n "$EXPECTED_DEV" >>"$LOG" 2>&1
+    rc=$?
+    echo "checker_precheck_rc=$rc checker=$candidate" >>"$LOG"
+    case "$rc" in
+      0|1) SELECTED="$candidate"; PRECHECK_RC="$rc"; break;;
+      *) ;;
+    esac
+  done < <(checker_candidates)
+
+  [ -n "$SELECTED" ] || { leave_readonly_if_possible; record_checker none "$SELFTEST_RC" no-compatible-checker; fail 57 no-compatible-fat-checker "$BACKUP" "" "" ""; }
+  record_checker "$SELECTED" "$SELFTEST_RC" "$PRECHECK_RC"
+
+  REPAIR_RC=not-needed
+  if [ "$PRECHECK_RC" -eq 1 ]; then
+    progress RUNNING 66 "Repairing FAT filesystem" "Using the checker that passed the read-only qualification"
+    echo "checker_write=$SELECTED" >>"$LOG"
+    "$SELECTED" -a "$EXPECTED_DEV" >>"$LOG" 2>&1
+    REPAIR_RC=$?
+    case "$REPAIR_RC" in
+      0|1) ;;
+      *) leave_readonly_if_possible; fail 58 "fat-repair-failed-rc-$REPAIR_RC" "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "" "$SELECTED";;
+    esac
+  fi
+
+  progress RUNNING 76 "Verifying FAT filesystem" "Running final read-only check with the same checker"
+  "$SELECTED" -n "$EXPECTED_DEV" >>"$LOG" 2>&1
+  VERIFY_RC=$?
+  [ "$VERIFY_RC" -eq 0 ] || { leave_readonly_if_possible; fail 59 "fat-verify-failed-rc-$VERIFY_RC" "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"; }
+
+  progress RUNNING 84 "Verifying candidate read-only" "Mounting R36UPDATE read-only and checking identity/integrity"
+  mount_readonly_for_verify || fail 60 readonly-remount-failed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"
+  [ "$(device_uuid "$EXPECTED_DEV")" = "$EXPECTED_UUID" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 61 uuid-changed-after-repair "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"; }
+  CID_AFTER="$(candidate_identity)"
+  MANIFEST_AFTER="$(sha256sum "$NEXT/K1/MANIFEST.sha256" 2>/dev/null | awk '{print $1}')"
+  [ "$CID_AFTER" = "$CID_BEFORE" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 62 candidate-id-changed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"; }
+  [ "$MANIFEST_AFTER" = "$MANIFEST_BEFORE" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 63 candidate-manifest-changed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"; }
+  candidate_precheck || { umount "$MOUNT" >/dev/null 2>&1; fail 64 k1-candidate-postcheck-failed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"; }
+
+  progress RUNNING 94 "Final safety unmount" "Leaving R36UPDATE unmounted until the required clean reboot"
+  sync
+  umount "$MOUNT" >>"$LOG" 2>&1 || fail 65 final-readonly-unmount-failed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"
+  mountpoint -q "$MOUNT" 2>/dev/null && fail 66 final-unmount-not-confirmed "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"
+
+  {
+    echo "checker=$SELECTED"
+    echo "packaged_selftest_rc=$SELFTEST_RC"
+    echo "precheck_rc=$PRECHECK_RC"
+    echo "candidate_id_before=$CID_BEFORE"
+    echo "candidate_id_after=$CID_AFTER"
+    echo "manifest_before=$MANIFEST_BEFORE"
+    echo "manifest_after=$MANIFEST_AFTER"
+    echo "backup_sha256=$(awk '{print $1}' "$BACKUP.sha256" 2>/dev/null)"
+    echo 'reboot_required=yes'
+  } >"$LOGROOT/LAST-extra.conf"
+
+  progress PASS 100 "R36UPDATE repair verified" "Filesystem verified clean; clean reboot is required before Boot Next Once"
+  result PASS_REBOOT_REQUIRED 0 repair-verified "$BACKUP" "$PRECHECK_RC" "$REPAIR_RC" "$VERIFY_RC" "$SELECTED"
+  echo "status=PASS_REBOOT_REQUIRED backup=$BACKUP checker=$SELECTED precheck_rc=$PRECHECK_RC repair_rc=$REPAIR_RC verify_rc=$VERIFY_RC"
+  exit 0
+}
+
+case "$CMD" in
+  status) status;;
+  repair) repair;;
+  *) echo 'usage: r36os-r36update-repair status|repair' >&2; exit 2;;
+esac
