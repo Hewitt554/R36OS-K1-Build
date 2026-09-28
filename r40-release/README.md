@@ -31,3 +31,15 @@ Current WIP behavior:
 UI behavior:
 - Diagnostics -> A(bottom) displays **Capture + upload logs**.
 - Final modal distinguishes uploaded / queued / setup-required while preserving the local archive path.
+
+
+R36UPDATE FAT repair:
+- Diagnostics -> R2 exposes an explicitly confirmed repair action.
+- It is hard-bound in production to /dev/mmcblk0p3, UUID C49E-0225 and vfat.
+- It refuses to run when a K1 one-shot/consumed marker exists.
+- It requires >=2 GiB free on R36STATE and creates a complete verified tar backup before unmounting.
+- It never force- or lazy-unmounts.
+- It runs a pinned static ARM64 dosfstools 4.2 fsck.fat while R36UPDATE is unmounted.
+- It performs a second read-only FAT check, mounts R36UPDATE read-only, re-verifies the K1 manifest/identity, then unmounts again.
+- Success requires a clean reboot before Boot Next Once is attempted again.
+- GitHub loopback integration test run 36436910787 passed, including the armed-marker refusal case.
