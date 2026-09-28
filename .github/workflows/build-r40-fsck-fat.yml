@@ -1,0 +1,65 @@
+name: Build R40 static fsck.fat
+
+on:
+  push:
+    branches:
+      - work/r40-general-log-upload-2026-09-28
+    paths:
+      - .github/workflows/build-r40-fsck-fat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install cross build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu autoconf automake autopoint gettext pkg-config git file
+
+      - name: Fetch pinned dosfstools 4.2 source
+        run: |
+          set -euo pipefail
+          git clone https://github.com/dosfstools/dosfstools.git
+          cd dosfstools
+          git checkout --detach 697f7692c951173c1b732901e13f72bd3182d575
+          test "$(git rev-parse HEAD)" = 697f7692c951173c1b732901e13f72bd3182d575
+
+      - name: Build static AArch64 fsck.fat
+        run: |
+          set -euo pipefail
+          cd dosfstools
+          autoreconf -fi
+          ./configure             --host=aarch64-linux-gnu             CC=aarch64-linux-gnu-gcc             CFLAGS='-O2 -fno-plt'             LDFLAGS='-static'
+          make -j2
+          test -x src/fsck.fat
+          mkdir -p ../out
+          cp src/fsck.fat ../out/fsck.fat-static
+          chmod 0755 ../out/fsck.fat-static
+
+      - name: Audit binary
+        run: |
+          set -euo pipefail
+          file out/fsck.fat-static | tee out/file.txt
+          grep -q 'ARM aarch64' out/file.txt
+          grep -q 'statically linked' out/file.txt
+          aarch64-linux-gnu-readelf -h out/fsck.fat-static > out/readelf-header.txt
+          if aarch64-linux-gnu-readelf -d out/fsck.fat-static 2>/dev/null | grep -q NEEDED; then
+            echo 'dynamic dependency found in supposed static binary' >&2
+            exit 20
+          fi
+          sha256sum out/fsck.fat-static | tee out/SHA256SUMS.txt
+          printf '%s\n'             'upstream=dosfstools/dosfstools'             'version=4.2'             'commit=697f7692c951173c1b732901e13f72bd3182d575'             'purpose=R36OS R40 offline R36UPDATE FAT repair'             > out/BUILD_INFO.txt
+
+      - name: Upload fsck.fat build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R40-static-fsck-fat
+          path: out/
+          if-no-files-found: error
+          retention-days: 90
