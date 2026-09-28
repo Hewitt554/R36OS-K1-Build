@@ -57,15 +57,35 @@ jobs:
           echo "=== extracted result tree ==="
           find extracted -maxdepth 6 -printf '%y %p %s bytes\n' | sort | tee run11-result-tree.txt
 
-          mapfile -t candidates < <(find extracted -type d -path '*/external_cp05_candidate/K1' -print)
+          # The packaged Run #11 result stores the final CP05 candidate at
+          # candidate/K1. Keep a fallback for the temporary build layout, but
+          # require exactly one unique candidate directory.
+          mapfile -t candidates < <(
+            {
+              find extracted -type d -path '*/candidate/K1' -print
+              find extracted -type d -path '*/external_cp05_candidate/K1' -print
+            } | sort -u
+          )
           if [[ "${#candidates[@]}" -ne 1 ]]; then
-            echo "ERROR: expected exactly one external_cp05_candidate/K1 directory, found ${#candidates[@]}" >&2
+            echo "ERROR: expected exactly one packaged K1 candidate directory, found ${#candidates[@]}" >&2
             printf '%s\n' "${candidates[@]:-}" >&2
             exit 1
           fi
 
           candidate="${candidates[0]}"
           echo "candidate_dir=$candidate"
+
+          for required in Image uInitrd rk3326-r36s-k1.dtb MANIFEST.sha256 modules.tar.xz BUILD_INFO.txt K1.conf; do
+            [[ -f "$candidate/$required" ]] || {
+              echo "ERROR: candidate missing required file: $required" >&2
+              exit 1
+            }
+          done
+
+          (
+            cd "$candidate"
+            sha256sum -c MANIFEST.sha256
+          )
 
           mkdir -p package/full/R36OS-KernelNext
           cp -a "$candidate" package/full/R36OS-KernelNext/K1
