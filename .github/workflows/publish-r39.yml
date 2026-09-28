@@ -1,0 +1,267 @@
+name: Publish R36OS Alpha 5R39
+
+on:
+  push:
+    paths:
+      - .github/workflows/publish-r39.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: r36os-alpha5r39-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync current main and guard update channel
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          test -s r36os-release-channel/latest.conf
+          version="$(awk -F= '$1=="version"{print $2}' r36os-release-channel/latest.conf)"
+          case "$version" in
+            0.5.38.0)
+              grep -qx 'sha256=68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0' r36os-release-channel/latest.conf
+              grep -qx 'candidate_id=e551eb6598d6da7a8e8320e9' r36os-release-channel/latest.conf
+              grep -qx 'kernel_release=6.12.94-r36os-k1' r36os-release-channel/latest.conf
+              ;;
+            0.5.39.0)
+              # Idempotent rerun is allowed only for the same K1 identity.
+              grep -qx 'candidate_id=e551eb6598d6da7a8e8320e9' r36os-release-channel/latest.conf
+              grep -qx 'kernel_release=6.12.94-r36os-k1' r36os-release-channel/latest.conf
+              ;;
+            *)
+              echo "Refusing unexpected update-channel version: $version" >&2
+              exit 9
+              ;;
+          esac
+
+      - name: Fetch and verify exact published R38 base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p r39-base
+          gh release download alpha5r38 \
+            --repo Hewitt554/R36OS-K1-Build \
+            --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' \
+            --dir r39-base
+          R38=r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  '"$R38" | sha256sum -c -
+          test "$(stat -c %s "$R38")" = 264539986
+
+      - name: Reconstruct and pin audited R39 sources
+        run: |
+          set -euo pipefail
+          rm -rf r39-final r39-source-tmp
+          mkdir -p r39-final r39-source-tmp
+
+          base64 -d r39-release/release-inputs.tar.gz.b64 > r39-source-tmp/base.tar.gz
+          echo 'e0f7187782ac682c7592c086ce2d4e1c79e4e69f7170004859157191f0795696  r39-source-tmp/base.tar.gz' | sha256sum -c -
+          tar -xzf r39-source-tmp/base.tar.gz -C r39-final
+
+          echo '83f8b5f1685f4eedb42d32eccd4dbbbf9b6e3786356a1846937c63a18b5b11f5  r39-final/build_release.sh' | sha256sum -c -
+          echo 'ce893250cd52748b6604e75c8d8af397e33c8b7829999ea7a8f20c9100d10407  r39-final/r36os-github-diagnostics' | sha256sum -c -
+          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-final/r36os-kernel-next-prepare' | sha256sum -c -
+          echo '5a62ef487c6ee1fcb30e89d3b02119d2dfc440067bb285ecdea835cc94250acc  r39-final/r36os-kernel-slot' | sha256sum -c -
+          echo '43d93da3988e739912d6ad82791cefe9218d40dd4ae00761dbcc4487ced1d4d7  r39-final/r36os-kernel-next-health' | sha256sum -c -
+          echo '2b9f6e76c4ea8bd02fc4efe4b7b86fce4af20fb524236057a67f9a5cf38a881f  r39-final/r36os-export-current-logs' | sha256sum -c -
+
+          base64 -d r39-release/final-source-overrides.tar.gz.b64 > r39-source-tmp/overrides.tar.gz
+          echo '20719b241e3d7df4690ecbafee3e01567ccfe165d152839ff213ba45e9141012  r39-source-tmp/overrides.tar.gz' | sha256sum -c -
+          tar -xzf r39-source-tmp/overrides.tar.gz -C r39-final
+
+          echo 'ef7e2c6e82d0f1f100c6f03e5deeb8e6851e8ec81cece4fcd1f4789e5e40a522  r39-final/build_release.sh' | sha256sum -c -
+          echo '14a8fed055ebc8d5d14a74182fef9fb4179c3f76a6a026b374d8c31a9d570f40  r39-final/r36os-github-diagnostics' | sha256sum -c -
+          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-final/r36os-kernel-next-prepare' | sha256sum -c -
+          echo '5a62ef487c6ee1fcb30e89d3b02119d2dfc440067bb285ecdea835cc94250acc  r39-final/r36os-kernel-slot' | sha256sum -c -
+          echo '43d93da3988e739912d6ad82791cefe9218d40dd4ae00761dbcc4487ced1d4d7  r39-final/r36os-kernel-next-health' | sha256sum -c -
+          echo '2b9f6e76c4ea8bd02fc4efe4b7b86fce4af20fb524236057a67f9a5cf38a881f  r39-final/r36os-export-current-logs' | sha256sum -c -
+          echo '4e5329f019b69ab880505f9481d9bd5b1c0658eac38d5c0cb8ba6207bf146756  r39-final/test_fat_guard.sh' | sha256sum -c -
+
+          chmod +x r39-final/build_release.sh r39-final/r36os-* r39-final/test_fat_guard.sh
+          for f in r39-final/build_release.sh r39-final/r36os-* r39-final/test_fat_guard.sh; do bash -n "$f"; done
+          r39-final/r36os-github-diagnostics selftest | grep -q 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'
+          r39-final/test_fat_guard.sh | tee r39-fat-guard-test.log
+          grep -q 'R39_FAT_GUARD_TEST=PASS' r39-fat-guard-test.log
+
+          install -m 0755 r39-final/build_release.sh r39-release/build_release.sh
+          install -m 0755 r39-final/r36os-github-diagnostics r39-release/r36os-github-diagnostics
+          install -m 0755 r39-final/r36os-kernel-next-prepare r39-release/r36os-kernel-next-prepare
+          install -m 0755 r39-final/r36os-kernel-slot r39-release/r36os-kernel-slot
+          install -m 0755 r39-final/r36os-kernel-next-health r39-release/r36os-kernel-next-health
+          install -m 0755 r39-final/r36os-export-current-logs r39-release/r36os-export-current-logs
+          install -m 0755 r39-final/test_fat_guard.sh r39-release/test_fat_guard.sh
+
+      - name: Commit audited R39 source checkpoint
+        run: |
+          set -euo pipefail
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r39-release/build_release.sh \
+                  r39-release/r36os-github-diagnostics \
+                  r39-release/r36os-kernel-next-prepare \
+                  r39-release/r36os-kernel-slot \
+                  r39-release/r36os-kernel-next-health \
+                  r39-release/r36os-export-current-logs \
+                  r39-release/test_fat_guard.sh
+          if ! git diff --cached --quiet; then
+            git commit -m 'Finalize audited Alpha 5R39 sources'
+            git push origin main
+          fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build R39 twice and prove deterministic output
+        run: |
+          set -euo pipefail
+          R38="$PWD/r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd"
+          ./r39-release/build_release.sh "$R38" "$PWD/release-out-a" | tee r39-release-build-a.log
+          ./r39-release/build_release.sh "$R38" "$PWD/release-out-b" | tee r39-release-build-b.log
+          cmp release-out-a/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd release-out-b/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd
+          cmp release-out-a/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256 release-out-b/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256
+          cmp release-out-a/latest.conf release-out-b/latest.conf
+          cmp release-out-a/RELEASE_REPORT.txt release-out-b/RELEASE_REPORT.txt
+          mv release-out-a release-out
+          rm -rf release-out-b
+
+      - name: Audit built R39 package
+        run: |
+          set -euo pipefail
+          PKG=release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd
+          test -s "$PKG"
+          (cd release-out && sha256sum -c 00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256)
+          rm -rf r39-package-audit
+          mkdir r39-package-audit
+          tar -xzf "$PKG" -C r39-package-audit
+          (cd r39-package-audit && sha256sum -c checksums.sha256)
+          grep -qx 'version=0.5.39.0' r39-package-audit/manifest.conf
+          grep -qx 'base_version=0.5.38.0' r39-package-audit/manifest.conf
+          grep -qx 'candidate_id=e551eb6598d6da7a8e8320e9' r39-package-audit/manifest.conf
+          grep -qx 'kernel_release=6.12.94-r36os-k1' r39-package-audit/manifest.conf
+          grep -qx 'k1_binary_change=no' r39-package-audit/manifest.conf
+          ! find r39-package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find r39-package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find r39-package-audit/payload/root -type l -print -quit | grep -q .
+          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare' | sha256sum -c -
+          echo '5a62ef487c6ee1fcb30e89d3b02119d2dfc440067bb285ecdea835cc94250acc  r39-package-audit/payload/root/usr/local/bin/r36os-kernel-slot' | sha256sum -c -
+          echo '43d93da3988e739912d6ad82791cefe9218d40dd4ae00761dbcc4487ced1d4d7  r39-package-audit/payload/root/usr/local/bin/r36os-kernel-next-health' | sha256sum -c -
+          echo '2b9f6e76c4ea8bd02fc4efe4b7b86fce4af20fb524236057a67f9a5cf38a881f  r39-package-audit/payload/root/usr/local/bin/r36os-export-current-logs' | sha256sum -c -
+          echo '14a8fed055ebc8d5d14a74182fef9fb4179c3f76a6a026b374d8c31a9d570f40  r39-package-audit/payload/root/usr/local/bin/r36os-github-diagnostics' | sha256sum -c -
+          grep -q 'public-build-repo-forbidden' r39-package-audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          grep -q 'private-repo-required-or-inaccessible' r39-package-audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          ! grep -Eq 'automatic\|ask\|off|automatic\|ask|ask\|off' r39-package-audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          grep -q 'r36os-github-diagnostics capture "export-\$WHY"' r39-package-audit/payload/root/usr/local/bin/r36os-export-current-logs
+          grep -Fq 'grep -F "FAT-fs ($DEV_BASE):"' r39-package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          SHA="$(sha256sum "$PKG" | awk '{print $1}')"
+          SIZE="$(stat -c %s "$PKG")"
+          grep -qx "sha256=$SHA" release-out/latest.conf
+          grep -qx "size_bytes=$SIZE" release-out/latest.conf
+          echo "PACKAGE_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "PACKAGE_SIZE=$SIZE" >> "$GITHUB_ENV"
+
+      - name: Publish and verify alpha5r39 release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PKG=release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd
+          if gh release view alpha5r39 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1; then
+            gh release edit alpha5r39 \
+              --repo Hewitt554/R36OS-K1-Build \
+              --target "$SOURCE_COMMIT" \
+              --title 'R36OS Alpha 5R39 — R36UPDATE FAT Guard + Private Diagnostics' \
+              --notes 'Userspace-only R39 hotfix. The K1 candidate and Linux 6.12.94-r36os-k1 binaries are unchanged. Boot Next Once still refuses code 25 when the actual R36UPDATE device is dirty; that safety check is not bypassed. Diagnostics queue to R36STATE first and remote upload requires a dedicated private repository and narrowly scoped token.'
+          else
+            gh release create alpha5r39 \
+              --repo Hewitt554/R36OS-K1-Build \
+              --target "$SOURCE_COMMIT" \
+              --title 'R36OS Alpha 5R39 — R36UPDATE FAT Guard + Private Diagnostics' \
+              --notes 'Userspace-only R39 hotfix. The K1 candidate and Linux 6.12.94-r36os-k1 binaries are unchanged. Boot Next Once still refuses code 25 when the actual R36UPDATE device is dirty; that safety check is not bypassed. Diagnostics queue to R36STATE first and remote upload requires a dedicated private repository and narrowly scoped token.'
+          fi
+          gh release upload alpha5r39 \
+            "$PKG" \
+            release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256 \
+            release-out/RELEASE_REPORT.txt \
+            --repo Hewitt554/R36OS-K1-Build --clobber
+
+          rel="$(gh api repos/Hewitt554/R36OS-K1-Build/releases/tags/alpha5r39)"
+          got_size="$(printf '%s' "$rel" | jq -r '.assets[] | select(.name=="00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd") | .size')"
+          got_digest="$(printf '%s' "$rel" | jq -r '.assets[] | select(.name=="00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd") | .digest')"
+          test "$got_size" = "$PACKAGE_SIZE"
+          test "$got_digest" = "sha256:$PACKAGE_SHA"
+
+      - name: Publish channel only after release verification
+        run: |
+          set -euo pipefail
+          cp release-out/latest.conf r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          if ! git diff --cached --quiet; then
+            git commit -m 'Publish Alpha 5R39 update channel'
+            git push origin main
+          fi
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+
+      - name: Verify published channel and write evidence
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 4 "https://raw.githubusercontent.com/Hewitt554/R36OS-K1-Build/main/r36os-release-channel/latest.conf?commit=$CHANNEL_COMMIT" -o remote-latest.conf
+          cmp release-out/latest.conf remote-latest.conf
+          grep -qx 'version=0.5.39.0' remote-latest.conf
+          grep -qx 'base_version=0.5.38.0' remote-latest.conf
+          grep -qx "sha256=$PACKAGE_SHA" remote-latest.conf
+          grep -qx "size_bytes=$PACKAGE_SIZE" remote-latest.conf
+          grep -qx 'candidate_id=e551eb6598d6da7a8e8320e9' remote-latest.conf
+          grep -qx 'kernel_release=6.12.94-r36os-k1' remote-latest.conf
+          cat > VERIFY_REPORT.txt <<EOF
+          R36OS Alpha 5R39 publication verification PASS
+          source_commit=$SOURCE_COMMIT
+          channel_commit=$CHANNEL_COMMIT
+          version=0.5.39.0
+          base_version=0.5.38.0
+          source_r38_sha256=68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0
+          package_sha256=$PACKAGE_SHA
+          package_size=$PACKAGE_SIZE
+          candidate_id=e551eb6598d6da7a8e8320e9
+          kernel_release=6.12.94-r36os-k1
+          k1_binary_change=no
+          active_boot_payload=no
+          installed_module_tree_payload=no
+          fat_guard_unrelated_boot_warning=PASS_STAGED
+          fat_guard_actual_mmcblk0p3_dirty=FAIL_CODE_25
+          diagnostics_queue_first=yes
+          diagnostics_modes=automatic,off
+          diagnostics_public_build_repo_forbidden=yes
+          diagnostics_private_repo_required=yes
+          manual_export_remote_bundle=redacted_subset_only
+          EOF
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R39-release-evidence
+          path: |
+            release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd
+            release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256
+            release-out/latest.conf
+            release-out/RELEASE_REPORT.txt
+            VERIFY_REPORT.txt
+            r39-fat-guard-test.log
+            r39-release-build-a.log
+            r39-release-build-b.log
+          if-no-files-found: error
+          retention-days: 30
