@@ -3,7 +3,10 @@ name: Publish R36OS Alpha 5R38
 on:
   push:
     paths:
-      - r38-release/release-inputs.tar.gz.b64
+      - r38-release/release-inputs.b64.part00
+      - r38-release/release-inputs.b64.part01
+      - r38-release/release-inputs.b64.part02
+      - r38-release/release-inputs.b64.part03
       - .github/workflows/publish-r38.yml
   workflow_dispatch:
 
@@ -37,7 +40,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p r38-inputs
-          base64 -d r38-release/release-inputs.tar.gz.b64 > r38-inputs.tar.gz
+          cat             r38-release/release-inputs.b64.part00             r38-release/release-inputs.b64.part01             r38-release/release-inputs.b64.part02             r38-release/release-inputs.b64.part03             > r38-inputs.b64
+          base64 -d r38-inputs.b64 > r38-inputs.tar.gz
           echo "893042d4353b4740bd20f226363c56d17456795c0d16032f1276b8433eac6254  r38-inputs.tar.gz" | sha256sum -c -
           tar -xzf r38-inputs.tar.gz -C r38-inputs
           bash -n r38-inputs/build_release.sh
@@ -59,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view alpha5r38 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1; then
-            gh release create alpha5r38               --repo Hewitt554/R36OS-K1-Build               --target "${GITHUB_SHA}"               --title "R36OS Alpha 5R38 — K1 Boot Next Once"               --notes "First GitHub-delivered K1 Boot Next Once test update. Requires Alpha 5R37 GitHub Updater Bootstrap. Legacy Linux 4.4 remains the normal/default boot."
+            gh release create alpha5r38               --repo Hewitt554/R36OS-K1-Build               --target "${GITHUB_SHA}"               --title "R36OS Alpha 5R38 — K1 Boot Next Once"               --notes "GitHub-delivered K1 Boot Next Once test update. Requires Alpha 5R37 GitHub Updater Bootstrap. Legacy Linux 4.4 remains the normal/default boot."
           fi
           gh release upload alpha5r38             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd             release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd.sha256             release-out/RELEASE_REPORT.txt             --repo Hewitt554/R36OS-K1-Build             --clobber
 
