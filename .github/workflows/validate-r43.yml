@@ -1,0 +1,223 @@
+name: Validate R36OS Alpha 5R43
+
+on:
+  push:
+    branches:
+      - work/r43-fat-repair-runtime-fix-2026-09-28
+    paths:
+      - 'r43-release/**'
+      - '.github/workflows/validate-r43.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dosfstools qemu-user-static file binutils-aarch64-linux-gnu
+
+      - name: Download exact R41 and pinned dosfstools source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r41 --repo Hewitt554/R36OS-K1-Build             --pattern '00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd' --dir inputs
+          echo 'ac3e350a7332ee3da4624952a15cfdc83cb04c767038e0c0d1015a078a237567  inputs/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd' | sha256sum -c -
+          curl -fL --retry 3 -o inputs/dosfstools-4.2.tar.gz             https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz
+          echo '64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527  inputs/dosfstools-4.2.tar.gz' | sha256sum -c -
+
+      - name: Build old-runtime AArch64 fsck.fat twice
+        run: |
+          set -euo pipefail
+          for n in a b; do
+            rm -rf "fsck-$n"
+            mkdir -p "fsck-$n"
+            docker run --rm -v "$PWD:/work" -w /work debian:11-slim bash -euxc "
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends                 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu autoconf automake autopoint gettext pkg-config make file ca-certificates
+              rm -rf /tmp/dosfstools
+              mkdir /tmp/dosfstools
+              tar -xzf /work/inputs/dosfstools-4.2.tar.gz -C /tmp/dosfstools --strip-components=1
+              cd /tmp/dosfstools
+              export SOURCE_DATE_EPOCH=1632009600
+              ./configure --host=aarch64-linux-gnu CC=aarch64-linux-gnu-gcc CFLAGS='-O2 -fno-plt' LDFLAGS='-static'
+              make -j2
+              cp src/fsck.fat /work/fsck-$n/fsck.fat-static
+              chmod 0755 /work/fsck-$n/fsck.fat-static
+              aarch64-linux-gnu-gcc --version | head -1 > /work/fsck-$n/toolchain.txt
+            "
+          done
+          cmp fsck-a/fsck.fat-static fsck-b/fsck.fat-static
+          sha256sum fsck-a/fsck.fat-static | tee fsck-a/SHA256SUMS.txt
+          file fsck-a/fsck.fat-static | tee fsck-a/file.txt
+          grep -q 'ARM aarch64' fsck-a/file.txt
+          grep -q 'statically linked' fsck-a/file.txt
+          aarch64-linux-gnu-readelf -n fsck-a/fsck.fat-static | tee fsck-a/readelf-notes.txt
+          grep -q 'ABI: 3.7.0' fsck-a/readelf-notes.txt
+          if strings -a fsck-a/fsck.fat-static | grep -q '__libc_arm_za_disable'; then
+            echo 'newer SME glibc runtime unexpectedly present' >&2
+            exit 20
+          fi
+          qemu-aarch64-static fsck-a/fsck.fat-static --help >/tmp/fsck-help.txt 2>&1
+          truncate -s 64M /tmp/r43-fat.img
+          mkfs.fat -F 32 /tmp/r43-fat.img
+          qemu-aarch64-static fsck-a/fsck.fat-static -n /tmp/r43-fat.img | tee /tmp/fsck-readonly.txt
+          echo R43_OLD_RUNTIME_FSCK_TEST=PASS
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          for f in r43-release/build_release.sh r43-release/r36os-r36update-repair r43-release/r36os-firstboot-update-repair r43-release/r36os-diagnostic-snapshot r43-release/r36os-export-current-logs r43-release/r36os-firstboot-update-repair-generator; do
+            bash -n "$f"
+          done
+          grep -q 'LAST-fsck.log' r43-release/r36os-diagnostic-snapshot
+          grep -q '"$FSCK" -n "$EXPECTED_DEV"' r43-release/r36os-r36update-repair
+          grep -q '"$FSCK" -a "$EXPECTED_DEV"' r43-release/r36os-r36update-repair
+          ! grep -Fq '"$FSCK" -a -V' r43-release/r36os-r36update-repair
+          if grep -R -a -n -E 'github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}' r43-release .github/workflows/validate-r43.yml; then
+            echo 'credential-like token in R43 source' >&2
+            exit 21
+          fi
+
+      - name: Exercise generator activation
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /etc/r36os
+          sudo tee /etc/r36os/r36update-repair-once.conf >/dev/null <<'EOF'
+          format=R36OS_R36UPDATE_REPAIR_ONCE_V1
+          release=0.5.43.0
+          reason=validation
+          EOF
+          rm -rf /tmp/r43-generator
+          mkdir -p /tmp/r43-generator
+          sudo bash r43-release/r36os-firstboot-update-repair-generator /tmp/r43-generator
+          test -L /tmp/r43-generator/multi-user.target.wants/r36os-firstboot-update-repair.service
+          sudo rm -f /etc/r36os/r36update-repair-once.conf /run/r36os-firstboot-update-repair-generator.status
+          echo R43_GENERATOR_ACTIVATION_TEST=PASS
+
+      - name: End-to-end repair helper with AArch64 checker through qemu
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r43-r36update
+          STATE=/tmp/r43-r36state
+          IMG=/tmp/r43-r36update.img
+          WRAP=/tmp/r43-fsck-wrapper
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext/K1"
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do printf 'fixture-%s\n' "$f" | sudo tee "$MNT/R36OS-KernelNext/K1/$f" >/dev/null; done
+          sudo tee "$MNT/R36OS-KernelNext/K1/K1.conf" >/dev/null <<'EOF'
+          format=R36OS_K1_CANDIDATE_V1
+          candidate_id=e551eb6598d6da7a8e8320e9
+          EOF
+          (cd "$MNT/R36OS-KernelNext/K1" && sudo sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt | sudo tee MANIFEST.sha256 >/dev/null)
+          cat >"$WRAP" <<EOF
+          #!/bin/sh
+          exec qemu-aarch64-static "$PWD/fsck-a/fsck.fat-static" "\$@"
+          EOF
+          chmod +x "$WRAP"
+          sudo env R36OS_R36UPDATE_MOUNT="$MNT" R36OS_R36UPDATE_DEV="$LOOP" R36OS_R36UPDATE_UUID="$UUID" R36OS_STATE_ROOT="$STATE" R36OS_FSCK_FAT="$WRAP"             bash r43-release/r36os-r36update-repair repair | tee /tmp/r43-repair.out
+          grep -q 'status=PASS_REBOOT_REQUIRED' /tmp/r43-repair.out
+          ! mountpoint -q "$MNT"
+          grep -q '^verify_rc=0$' "$STATE/logs/r36update-repair/LAST.conf"
+          test -s "$STATE/logs/r36update-repair/LAST-fsck.log"
+          test -s "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar
+          echo R43_REPAIR_LOOPBACK=PASS
+
+      - name: Prove armed K1 marker still blocks repair
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r43-marker-update
+          STATE=/tmp/r43-marker-state
+          IMG=/tmp/r43-marker.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext"
+          printf 'armed\n' | sudo tee "$MNT/R36OS-KernelNext/boot-next.e551eb6598d6da7a8e8320e9.once" >/dev/null
+          set +e
+          sudo env R36OS_R36UPDATE_MOUNT="$MNT" R36OS_R36UPDATE_DEV="$LOOP" R36OS_R36UPDATE_UUID="$UUID" R36OS_STATE_ROOT="$STATE" R36OS_FSCK_FAT=/usr/sbin/fsck.fat             bash r43-release/r36os-r36update-repair repair >/tmp/r43-marker.out 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 45
+          grep -q 'k1-one-shot-marker-present' /tmp/r43-marker.out
+          mountpoint -q "$MNT"
+          echo R43_ARMED_MARKER_REFUSAL=PASS
+
+      - name: Build R43 twice
+        run: |
+          set -euo pipefail
+          chmod +x r43-release/build_release.sh
+          R41="$PWD/inputs/00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd"
+          ./r43-release/build_release.sh "$R41" "$PWD/fsck-a/fsck.fat-static" "$PWD/inputs/dosfstools-4.2.tar.gz" "$PWD/out-a" | tee r43-build-a.log
+          ./r43-release/build_release.sh "$R41" "$PWD/fsck-a/fsck.fat-static" "$PWD/inputs/dosfstools-4.2.tar.gz" "$PWD/out-b" | tee r43-build-b.log
+
+      - name: Determinism and package audit
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R43-FATRuntimeFix-FromR42.r36upd
+          B=out-b/00-R36OS-Alpha5R43-FATRuntimeFix-FromR42.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf audit
+          mkdir audit
+          tar -xzf "$A" -C audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.43.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.42.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test -f audit/payload/root/usr/local/libexec/r36os/fsck.fat-static
+          cmp audit/payload/root/usr/local/libexec/r36os/fsck.fat-static fsck-a/fsck.fat-static
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find audit/payload/root -type f | grep -q '/r36state/secrets/'
+          if grep -R -a -n -E 'github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}' audit; then exit 31; fi
+          grep -q '0.5.43.0' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.43.0' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          echo R43_PACKAGE_AUDIT=PASS
+
+      - name: Upload audited R43 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R43-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R43-FATRuntimeFix-FromR42.r36upd
+            out-a/00-R36OS-Alpha5R43-FATRuntimeFix-FromR42.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            out-a/THIRD_PARTY_NOTICES.txt
+            out-a/dosfstools-4.2.tar.gz
+            fsck-a/fsck.fat-static
+            fsck-a/SHA256SUMS.txt
+            fsck-a/toolchain.txt
+            fsck-a/file.txt
+            fsck-a/readelf-notes.txt
+            r43-build-a.log
+            r43-build-b.log
+            r43-release/AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
