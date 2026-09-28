@@ -1,14 +1,22 @@
-R40 UI upload-logs WIP build evidence
+R40 UI upload-logs + R36UPDATE repair WIP build evidence
 date=2026-09-28
 base_source=recovered CP08 R37 worktree source/r36os_alpha5.c
-base_source_sha256=faba6ff926db803de2443ea065e344e5b5035c536b04c9b9cb02e9cd8a691739
-modified_source_sha256=6a3304bb0d9947b89b8fdbe48aa2f87af8b69497b13ee5ff6de4ed71b071c6c2
-compiled_ui_sha256=d625f609cc8ff33ea43bd7204426656d6f4e84b42dbbbf5a1dea38c48b2c8645
+base_source_sha256=4234b7a100a1aa352e55f7a04bb63884b676756bfb358361337094398ede3a0a
+modified_source_sha256=54c493f219fe02f2c044f0fa018ab4ace3f6bf43f1f520244eec08a53dca4f18
+compiled_ui_sha256=c25c80a3b3c8f2a2bd925cf12b75a2b9b94a9e98e96fe5bea7a16ebe33bb7063
 target=aarch64-linux-gnu
 link=static freestanding lld
 warnings=-Wall -Wextra -Werror
-binary_compare=standard-build-vs-Werror-build-byte-identical
+compiled_ui=PASS
 diagnostics_action=A(bottom) Capture + upload logs
+fat_repair_action=R2 Repair UPDATE with explicit A/B confirmation
 private_repo=Hewitt554/R36OS-Device-Logs
 full_manual_archive_upload=no
 redacted_remote_bundle=yes
+static_fsck_source=dosfstools-4.2
+static_fsck_source_sha256=64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527
+static_fsck_arm64_sha256=fe165b0784dd3c301cdf422691b1e5630bd5fab11bca15b8419906b10900d665
+static_fsck_build_run=36436741219
+r36update_repair_loopback_test=PASS
+r36update_repair_test_run=36436910787
+repair_safety=full pre-fsck backup; exact device+UUID; no armed marker; no force/lazy unmount; offline fsck; read-only verify; K1 manifest verify; leave unmounted until reboot
