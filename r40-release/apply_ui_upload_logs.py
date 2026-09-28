@@ -8,6 +8,12 @@ if len(sys.argv) != 2:
 p=Path(sys.argv[1])
 s=p.read_text()
 
+secret_writer_old='static int write_file(const char*p,const char*b,int n,int append){int fl=O_WRONLY|O_CREAT|(append?O_APPEND:O_TRUNC);int fd=openf(p,fl,0644);if(fd<0)return -1;int r=(int)sc3(SYS_write,fd,(long)b,n);sc1(SYS_close,fd);return r;}'
+secret_writer_new=secret_writer_old+'\\nstatic int write_secret_file(const char*p,const char*b,int n){int fd=openf(p,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd<0)return -1;int r=(int)sc3(SYS_write,fd,(long)b,n);sc1(SYS_close,fd);return r;}'
+if secret_writer_old not in s:
+    raise SystemExit("secret writer anchor missing")
+s=s.replace(secret_writer_old,secret_writer_new,1)
+
 old='''  if(contains(es,"PASS")&&ea[0]){draw_export_panel("PASS",100,"Export complete","Verified and flushed safely to SD1",ea,el[0]?el:"BOOT/R36OS-Logs",1);logmsg("Diagnostics archive verified on user-visible SD1");}
   else{draw_export_panel("FAIL",100,"Export failed",ed[0]?ed:"No verified archive was created","",el,1);logmsg("ERROR diagnostic export failed verification");}
   wait_export_ok();
@@ -15,8 +21,7 @@ old='''  if(contains(es,"PASS")&&ea[0]){draw_export_panel("PASS",100,"Export com
 '''
 new='''  if(contains(es,"PASS")&&ea[0]){
     draw_export_panel("RUNNING",94,"Local export complete","Uploading privacy-redacted OS / game / kernel logs to private GitHub",ea,el[0]?el:"BOOT/R36OS-Logs",0);
-    logmsg("Diagnostics archive verified locally; private GitHub upload requested");
-    run_sh("/usr/local/bin/r36os-github-diagnostics upload-queued >/dev/null 2>&1");
+    logmsg("Diagnostics archive verified locally; checking private GitHub upload result");
     char gs[1024],gstat[48],gdetail[192],gremote[224];memzero(gs,sizeof(gs));memzero(gstat,sizeof(gstat));memzero(gdetail,sizeof(gdetail));memzero(gremote,sizeof(gremote));
     read_file("/run/r36os-github-diagnostics.status",gs,sizeof(gs));cfg_val(gs,"status",gstat,sizeof(gstat));cfg_val(gs,"detail",gdetail,sizeof(gdetail));cfg_val(gs,"remote_path",gremote,sizeof(gremote));
     if(contains(gstat,"UPLOADED")){draw_export_panel("PASS",100,"Logs uploaded","Local archive saved; redacted diagnostic bundle uploaded to private GitHub",ea,gremote[0]?gremote:"R36OS-Device-Logs",1);logmsg("Private GitHub diagnostic upload PASS");}
