@@ -21,7 +21,13 @@ mkdir -p   "$WORK/base"   "$WORK/update/payload/root/etc/r36os"   "$WORK/update/
 [[ "$(sha256sum "$R39" | awk '{print $1}')" == "$EXPECTED_R39" ]] || { echo 'R39 source package SHA-256 mismatch' >&2; exit 10; }
 [[ "$(sha256sum "$FSCK_STATIC" | awk '{print $1}')" == "$EXPECTED_FSCK" ]] || { echo 'static fsck.fat SHA-256 mismatch' >&2; exit 11; }
 
-tar -xzf "$R39" -C "$WORK/base"   manifest.conf   payload/root/etc/r36os-core-manifest.sha256   payload/root/usr/local/bin/r36os-kernel-next-prepare   payload/root/usr/local/bin/r36os-kernel-slot
+tar -xzf "$R39" -C "$WORK/base" \
+  manifest.conf \
+  payload/root/etc/r36os-core-manifest.sha256 \
+  payload/root/usr/local/bin/r36os-kernel-next-prepare \
+  payload/root/usr/local/bin/r36os-kernel-slot \
+  payload/root/usr/local/bin/r36os-github-diagnostics \
+  payload/root/usr/local/bin/r36os-export-current-logs
 
 [[ "$(awk -F= '$1=="version"{print $2}' "$WORK/base/manifest.conf")" == '0.5.39.0' ]] || { echo 'R39 base version mismatch' >&2; exit 12; }
 [[ "$(awk -F= '$1=="base_version"{print $2}' "$WORK/base/manifest.conf")" == '0.5.38.0' ]] || { echo 'R39 source base mismatch' >&2; exit 13; }
@@ -46,11 +52,30 @@ out=src.replace("0.5.39.0","0.5.40.0")
 Path(sys.argv[2]).write_text(out)
 PY
 
-for f in   r36os-github-diagnostics   r36os-export-current-logs   r36os-r36update-repair   r36os-r40-firstboot-repair; do
+# Keep the proven R39 uploader byte-for-byte unchanged.
+cp "$WORK/base/payload/root/usr/local/bin/r36os-github-diagnostics" \
+  "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
+chmod 0755 "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
+bash -n "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
+
+# Preserve the verified R39 exporter under libexec and put a tiny R40 wrapper at
+# its original path. The wrapper snapshots the latest game/OS evidence first.
+cp "$WORK/base/payload/root/usr/local/bin/r36os-export-current-logs" \
+  "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
+chmod 0755 "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
+
+for f in r36os-export-current-logs-wrapper r36os-r40-github-snapshot r36os-r36update-repair r36os-r40-firstboot-repair; do
   bash -n "$HERE/$f"
-  cp "$HERE/$f" "$WORK/update/payload/root/usr/local/bin/$f"
-  chmod 0755 "$WORK/update/payload/root/usr/local/bin/$f"
 done
+cp "$HERE/r36os-export-current-logs-wrapper" "$WORK/update/payload/root/usr/local/bin/r36os-export-current-logs"
+cp "$HERE/r36os-r40-github-snapshot" "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
+cp "$HERE/r36os-r36update-repair" "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair"
+cp "$HERE/r36os-r40-firstboot-repair" "$WORK/update/payload/root/usr/local/bin/r36os-r40-firstboot-repair"
+chmod 0755 \
+  "$WORK/update/payload/root/usr/local/bin/r36os-export-current-logs" \
+  "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot" \
+  "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair" \
+  "$WORK/update/payload/root/usr/local/bin/r36os-r40-firstboot-repair"
 
 cp "$HERE/r36os-r40-repair-generator" "$WORK/update/payload/root/usr/lib/systemd/system-generators/r36os-r40-repair-generator"
 chmod 0755 "$WORK/update/payload/root/usr/lib/systemd/system-generators/r36os-r40-repair-generator"
@@ -87,7 +112,9 @@ R36OS Alpha 5R40
 EOF_FEATURE
 chmod 0644 "$WORK/update/payload/root/etc/r36os-release" "$WORK/update/payload/root/opt/r36os/features/alpha5r40"
 
-"$HERE/r36os-github-diagnostics" selftest | grep -q 'PASS'
+"$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics" selftest | grep -q 'PASS'
+cmp "$WORK/base/payload/root/usr/local/bin/r36os-github-diagnostics" \
+    "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
 
 # Patch the inherited full core manifest with R40's persistent files.
 python3 - "$WORK/base/payload/root/etc/r36os-core-manifest.sha256" "$WORK/update/payload/root" "$WORK/update/payload/root/etc/r36os-core-manifest.sha256" <<'PY'
@@ -104,6 +131,8 @@ paths=[
 '/usr/local/bin/r36os-kernel-slot',
 '/usr/local/bin/r36os-github-diagnostics',
 '/usr/local/bin/r36os-export-current-logs',
+'/usr/local/bin/r36os-r40-github-snapshot',
+'/usr/local/libexec/r36os/r39-export-current-logs',
 '/usr/local/bin/r36os-r36update-repair',
 '/usr/local/bin/r36os-r40-firstboot-repair',
 '/usr/local/libexec/r36os/fsck.fat-static',
@@ -148,10 +177,14 @@ grep -q '0.5.40.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-slot"
 ! grep -q '0.5.39.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-next-prepare"
 ! grep -q '0.5.39.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-slot"
 
-grep -q 'Hewitt554/R36OS-Device-Logs' "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
-grep -q 'latest-game-session' "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
-grep -q 'find "$tmp" -type f -print0' "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
-grep -q 'r36os-github-diagnostics upload-queued' "$WORK/update/payload/root/usr/local/bin/r36os-export-current-logs"
+# The R39 uploader is immutable; R40 feeds it one bounded snapshot .conf.
+cmp "$WORK/base/payload/root/usr/local/bin/r36os-github-diagnostics" \
+    "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
+grep -q 'r36os-r40-github-snapshot' "$WORK/update/payload/root/usr/local/bin/r36os-export-current-logs"
+grep -q 'latest_game_session=' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
+grep -q 'game-output' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
+grep -q 'weston-session' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
+grep -q 'r36os-github-diagnostics capture "export-\$WHY"' "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
 
 grep -q 'EXPECTED_DEV="${R36OS_R36UPDATE_DEV:-/dev/mmcblk0p3}"' "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair"
 grep -q 'EXPECTED_UUID="${R36OS_R36UPDATE_UUID:-C49E-0225}"' "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair"
