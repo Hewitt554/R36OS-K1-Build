@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x r38-inputs/build_release.sh
-          ./r38-inputs/build_release.sh run11-device release-out 2>&1 | tee r38-release-build.log
+          ./r38-inputs/build_release.sh "$PWD/run11-device" "$PWD/release-out" 2>&1 | tee r38-release-build.log
           test -s release-out/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
           test -s release-out/latest.conf
           test -s release-out/RELEASE_REPORT.txt
