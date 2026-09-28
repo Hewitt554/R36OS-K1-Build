@@ -1,0 +1,50 @@
+name: Audit R43 source only
+
+on:
+  push:
+    branches:
+      - work/r43-audited-fat-repair-2026-09-28
+    paths:
+      - '.github/workflows/audit-r43-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify and extract source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c r43-release/SOURCE_ARCHIVE.sha256
+          if tar -tzf r43-release/source.tar.gz | grep -E '(^/|(^|/)\.\.(/|$))'; then
+            echo 'unsafe archive member' >&2
+            exit 20
+          fi
+          mkdir -p extracted
+          tar -xzf r43-release/source.tar.gz -C extracted
+          find extracted -type f -printf '%P\n' | sort | tee extracted/FILE_LIST.txt
+          find extracted -type f -name '*.sh' -o -type f -name 'r36os-*' | while read -r f; do
+            case "$f" in
+              *.md|*.txt|*.conf) ;;
+              *) bash -n "$f" ;;
+            esac
+          done
+          if grep -R -n -E 'github_pat_|ghp_' extracted; then
+            echo 'credential pattern found in source archive' >&2
+            exit 21
+          fi
+
+      - name: Preserve exact extracted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: R43-source-audit-extracted
+          path: extracted/
+          if-no-files-found: error
+          retention-days: 7
