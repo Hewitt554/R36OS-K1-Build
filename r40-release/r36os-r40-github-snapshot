@@ -1,0 +1,71 @@
+#!/bin/bash
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+STATE=/r36state
+OUTDIR="$STATE/logs/kernel-next"
+OUT="$OUTDIR/r40-game-os-snapshot.conf"
+TMP="$OUT.tmp"
+
+mountpoint -q "$STATE" 2>/dev/null || exit 20
+mkdir -p "$OUTDIR" || exit 21
+umask 077
+: >"$TMP" || exit 22
+
+section(){
+  label="$1"; file="$2"; limit="${3:-131072}"
+  [ -f "$file" ] || return 0
+  printf '\n===== %s =====\n' "$label" >>"$TMP"
+  tail -c "$limit" "$file" >>"$TMP" 2>/dev/null || true
+  printf '\n===== END %s =====\n' "$label" >>"$TMP"
+}
+
+{
+  echo 'format=R36OS_R40_GAME_OS_SNAPSHOT_V1'
+  echo "time=$(date -Is 2>/dev/null || date)"
+  echo "kernel=$(uname -r 2>/dev/null || echo unknown)"
+} >>"$TMP"
+
+GSDIR="$(cat /run/r36os-current-game-session 2>/dev/null)"
+[ -d "$GSDIR" ] || GSDIR="$(cat "$STATE/logs/game-sessions/LATEST" 2>/dev/null)"
+if [ ! -d "$GSDIR" ]; then
+  GCONF="$(find "$STATE/logs/game-sessions" -mindepth 3 -maxdepth 3 -name session.conf -type f -printf '%T@|%p\n' 2>/dev/null | sort -nr | head -1 | cut -d'|' -f2-)"
+  [ -n "$GCONF" ] && GSDIR="$(dirname "$GCONF")"
+fi
+GSREAL="$(readlink -f "$GSDIR" 2>/dev/null)"
+case "$GSREAL" in
+  "$STATE"/logs/game-sessions/*)
+    printf 'latest_game_session=%s\n' "$(basename "$(dirname "$GSREAL")")/$(basename "$GSREAL")" >>"$TMP"
+    section game-session-conf "$GSREAL/session.conf" 65536
+    section game-session "$GSREAL/session.log" 131072
+    section game-output "$GSREAL/game-output.log" 196608
+    section launch-results "$GSREAL/launch-results.log" 131072
+    section milestones "$GSREAL/milestones.log" 131072
+    section performance-summary "$GSREAL/performance-summary.txt" 131072
+    section linux-preflight "$GSREAL/linux-preflight.txt" 131072
+    section weston-session "$GSREAL/weston-session.log" 131072
+    ;;
+esac
+
+OSDIR="$(cat /run/r36os-alpha5-logdir 2>/dev/null)"
+[ -d "$OSDIR" ] || OSDIR="$(find "$STATE/logs" -maxdepth 1 -type d -name 'alpha5r*-*' -printf '%T@|%p\n' 2>/dev/null | sort -nr | head -1 | cut -d'|' -f2-)"
+OSREAL="$(readlink -f "$OSDIR" 2>/dev/null)"
+case "$OSREAL" in
+  "$STATE"/logs/alpha5r*-*)
+    section ui-log "$OSREAL/ui.log" 131072
+    section manual-game-scan "$OSREAL/manual-game-scan.log" 131072
+    section graphics-test "$OSREAL/graphics-test-latest.conf" 65536
+    section benchmark-suite "$OSREAL/benchmark-suite-latest.txt" 65536
+    ;;
+esac
+
+section resource-log "$STATE/logs/r36os-resource.log" 131072
+printf '\n===== systemd-failed =====\n' >>"$TMP"
+systemctl --failed --no-pager 2>/dev/null | tail -c 131072 >>"$TMP" || true
+
+bytes="$(stat -c %s "$TMP" 2>/dev/null || echo 0)"
+[ "$bytes" -gt 0 ] && [ "$bytes" -le 1572864 ] || { rm -f "$TMP"; exit 23; }
+mv -f "$TMP" "$OUT" || exit 24
+chmod 0600 "$OUT" 2>/dev/null || true
+exit 0
