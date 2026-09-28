@@ -31,13 +31,13 @@ jobs:
           396e6fcea8961cbfea4bafad92573e41fdfee80df1eae73f4eb8ee13a6687082  r43-release/r36os-r36update-repair
           3e4badccac4eb3e7930b8f586f366b8369da61d0bb20d316c87ef6f07059d159  r43-release/test_r43_repair.sh
           53151785c6c39f1a15c7a38deff0ecfc9a36ce7c3c6981d1aef1b3e024738526  r43-release/test_target_fsck.sh
-          cb1e598a687160d7278b07dbaee1bd881a2d56ee1dd6cfbf8260940fc04a063b  .github/workflows/validate-r43-clean.yml
+          72e1499974a5a41f08e15079db145bdf726019bc30201d087eb79d09b0b472bd  .github/workflows/validate-r43-clean.yml
           EOF
           sha256sum -c /tmp/r43-expected.sha256
           for f in r43-release/*.sh r43-release/r36os-*; do bash -n "$f"; done
           python3 -m py_compile r43-release/fat_fixture_tool.py
           rm -rf r43-release/__pycache__
-          if grep -R -n -E 'github_pat_|gh[pousr]_' r43-release R43_FULL_AUDIT.md .github/workflows/validate-r43-clean.yml; then
+          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r43-release R43_FULL_AUDIT.md .github/workflows/validate-r43-clean.yml; then
             echo credential-pattern-found >&2
             exit 20
           fi
