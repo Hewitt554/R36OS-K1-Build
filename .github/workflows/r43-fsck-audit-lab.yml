@@ -54,7 +54,7 @@ jobs:
               tar -xzf /work/inputs/dosfstools-4.2.tar.gz -C /tmp/src-$n --strip-components=1
               cd /tmp/src-$n
               ./configure --host=aarch64-linux-gnu --without-iconv CC=aarch64-linux-gnu-gcc CFLAGS='-O2 -fno-plt' LDFLAGS='-static' >/tmp/config-$n.log
-              make -j2 src/fsck.fat >/tmp/make-$n.log
+              make -j2 >/tmp/make-$n.log
               cp src/fsck.fat /work/build-$n/fsck.fat-static
               chmod 0755 /work/build-$n/fsck.fat-static
             "
