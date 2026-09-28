@@ -50,7 +50,7 @@ jobs:
           grep -q 'R36OS_FSCK_NATIVE_CANDIDATES' r43-release/r36os-r36update-repair
           grep -q 'r36update-repair-full-log' r43-release/r36os-diagnostic-snapshot
           grep -q 'unexpected R41 firstboot identity' r43-release/build_release.sh
-          if grep -R -n -E 'github_pat_|gh[pousr]_' r43-release R43_FULL_AUDIT.md; then
+          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r43-release R43_FULL_AUDIT.md; then
             echo credential-pattern-found-in-public-source >&2
             exit 20
           fi
@@ -140,7 +140,7 @@ jobs:
           test ! -e package-audit/payload/root/r36state
           ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
           ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
-          if grep -R -n -E 'github_pat_|gh[pousr]_' package-audit/payload/root; then
+          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' package-audit/payload/root; then
             echo credential-pattern-found-in-package >&2
             exit 30
           fi
