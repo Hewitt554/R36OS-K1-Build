@@ -5,8 +5,8 @@ on:
     branches:
       - work/r40-general-log-upload-2026-09-28
     paths:
-      - r40-release/**
-      - .github/workflows/validate-r40.yml
+      - 'r40-release/**'
+      - '.github/workflows/validate-r40.yml'
   workflow_dispatch:
 
 permissions:
@@ -16,24 +16,35 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
+
     steps:
-      - name: Checkout R40 work branch
+      - name: Checkout audited R40 source
         uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dosfstools
 
       - name: Download exact published R39 base
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p r39-base
+          mkdir -p r39-base r39-audit
           gh release download alpha5r39 \
             --repo Hewitt554/R36OS-K1-Build \
             --pattern '00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' \
             --dir r39-base
-          echo '406aa63aedf893b39fdff16f6131f605d99883aa759286228c1cf607dce74ebd  r39-base/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' | sha256sum -c -
+          R39=r39-base/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd
+          echo '406aa63aedf893b39fdff16f6131f605d99883aa759286228c1cf607dce74ebd  '"$R39" | sha256sum -c -
+          tar -xzf "$R39" -C r39-audit payload/root/usr/local/bin/r36os-github-diagnostics
+          bash -n r39-audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          r39-audit/payload/root/usr/local/bin/r36os-github-diagnostics selftest | grep -q PASS
 
-      - name: Download frozen static ARM64 fsck.fat
+      - name: Download and verify frozen static ARM64 fsck.fat
         uses: actions/download-artifact@v4
         with:
           name: R36OS-R40-static-fsck-fat
@@ -41,23 +52,115 @@ jobs:
           github-token: ${{ github.token }}
           run-id: 36436741219
 
-      - name: Verify static repair binary
+      - name: Audit static repair binary
         run: |
           set -euo pipefail
           echo 'fe165b0784dd3c301cdf422691b1e5630bd5fab11bca15b8419906b10900d665  fsck-artifact/fsck.fat-static' | sha256sum -c -
-          file fsck-artifact/fsck.fat-static
-          file fsck-artifact/fsck.fat-static | grep -q 'ARM aarch64'
-          file fsck-artifact/fsck.fat-static | grep -q 'statically linked'
+          file fsck-artifact/fsck.fat-static | tee fsck-file.txt
+          grep -q 'ARM aarch64' fsck-file.txt
+          grep -q 'statically linked' fsck-file.txt
 
-      - name: Syntax and privacy self-tests
+      - name: Audit authoritative R40 source set
         run: |
           set -euo pipefail
-          for f in             r40-release/build_release.sh             r40-release/r36os-github-diagnostics             r40-release/r36os-export-current-logs             r40-release/r36os-r36update-repair             r40-release/r36os-r40-firstboot-repair             r40-release/r36os-r40-repair-generator; do
+          for f in \
+            r40-release/build_release.sh \
+            r40-release/r36os-export-current-logs-wrapper \
+            r40-release/r36os-r40-github-snapshot \
+            r40-release/r36os-r36update-repair \
+            r40-release/r36os-r40-firstboot-repair \
+            r40-release/r36os-r40-repair-generator; do
             bash -n "$f"
           done
-          r40-release/r36os-github-diagnostics selftest | grep -q PASS
+          for dead in \
+            r40-release/r36os-github-diagnostics \
+            r40-release/r36os-export-current-logs \
+            r40-release/apply_ui_upload_logs.py \
+            r40-release/UI_BUILD_INFO.txt \
+            r40-release/r36os-k1-version-compat \
+            r40-release/r36os-kernel-next-prepare-wrapper; do
+            test ! -e "$dead"
+          done
+          grep -q 'base-export-current-logs' r40-release/r36os-export-current-logs-wrapper
+          grep -q 'latest_game_session=' r40-release/r36os-r40-github-snapshot
+          grep -q 'game-output' r40-release/r36os-r40-github-snapshot
+          grep -q 'weston-session' r40-release/r36os-r40-github-snapshot
+          grep -q 'C49E-0225' r40-release/r36os-r36update-repair
+          grep -q '/dev/mmcblk0p3' r40-release/r36os-r36update-repair
+          ! grep -Eq 'umount[[:space:]]+-(f|l)|umount[[:space:]]+--force|umount[[:space:]]+--lazy' r40-release/r36os-r36update-repair
 
-      - name: Build R40 twice
+      - name: Exercise successful FAT repair on isolated loopback
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r40-r36update
+          STATE=/tmp/r40-r36state
+          IMG=/tmp/r40-r36update.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext/K1"
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do
+            printf 'fixture-%s\n' "$f" | sudo tee "$MNT/R36OS-KernelNext/K1/$f" >/dev/null
+          done
+          sudo tee "$MNT/R36OS-KernelNext/K1/K1.conf" >/dev/null <<'EOF'
+          format=R36OS_K1_CANDIDATE_V1
+          candidate_id=e551eb6598d6da7a8e8320e9
+          EOF
+          (
+            cd "$MNT/R36OS-KernelNext/K1"
+            sudo sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt | sudo tee MANIFEST.sha256 >/dev/null
+          )
+          sudo env \
+            R36OS_R36UPDATE_MOUNT="$MNT" \
+            R36OS_R36UPDATE_DEV="$LOOP" \
+            R36OS_R36UPDATE_UUID="$UUID" \
+            R36OS_STATE_ROOT="$STATE" \
+            R36OS_FSCK_FAT=/usr/sbin/fsck.fat \
+            bash r40-release/r36os-r36update-repair repair | tee /tmp/r40-repair.out
+          grep -q 'status=PASS_REBOOT_REQUIRED' /tmp/r40-repair.out
+          grep -q '^status=PASS_REBOOT_REQUIRED$' /run/r36os-r36update-repair.result
+          ! mountpoint -q "$MNT"
+          test -s "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar
+          tar -tf "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar >/dev/null
+
+      - name: Prove armed K1 marker blocks repair before unmount
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r40-marker-update
+          STATE=/tmp/r40-marker-state
+          IMG=/tmp/r40-marker.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup(){ sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext"
+          printf 'armed\n' | sudo tee "$MNT/R36OS-KernelNext/boot-next.e551eb6598d6da7a8e8320e9.once" >/dev/null
+          set +e
+          sudo env \
+            R36OS_R36UPDATE_MOUNT="$MNT" \
+            R36OS_R36UPDATE_DEV="$LOOP" \
+            R36OS_R36UPDATE_UUID="$UUID" \
+            R36OS_STATE_ROOT="$STATE" \
+            R36OS_FSCK_FAT=/usr/sbin/fsck.fat \
+            bash r40-release/r36os-r36update-repair repair >/tmp/r40-marker.out 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 45
+          grep -q 'k1-one-shot-marker-present' /tmp/r40-marker.out
+          mountpoint -q "$MNT"
+
+      - name: Build R40 twice from exact inputs
         run: |
           set -euo pipefail
           chmod +x r40-release/build_release.sh
@@ -75,6 +178,7 @@ jobs:
           test "$(sha256sum "$A" | awk '{print $1}')" = "$(sha256sum "$B" | awk '{print $1}')"
           diff -u out-a/latest.conf out-b/latest.conf
           diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          diff -u out-a/THIRD_PARTY_NOTICES.txt out-b/THIRD_PARTY_NOTICES.txt
           echo R40_DETERMINISTIC_BUILD=PASS
 
       - name: Audit built package
@@ -83,45 +187,90 @@ jobs:
           rm -rf audit
           mkdir audit
           tar -xzf out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd -C audit
-          (cd audit && sha256sum -c checksums.sha256)
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
           test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.40.0
           test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.39.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' audit/manifest.conf)" = e551eb6598d6da7a8e8320e9
+          test "$(awk -F= '$1=="kernel_release"{print $2}' audit/manifest.conf)" = 6.12.94-r36os-k1
           ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
           ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
-          grep -q 'r36os-r40-github-snapshot' audit/payload/root/usr/local/bin/r36os-export-current-logs
+          cmp r39-audit/payload/root/usr/local/bin/r36os-github-diagnostics audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          grep -q 'base-export-current-logs' audit/payload/root/usr/local/bin/r36os-export-current-logs
           grep -q 'latest_game_session=' audit/payload/root/usr/local/bin/r36os-r40-github-snapshot
-          grep -q 'Hewitt554/R36OS-Device-Logs' audit/payload/root/usr/local/bin/r36os-r40-firstboot-repair
-          grep -q '^R36OS_PACKAGE_VERSION="0.5.40.0"
+          grep -q '^R36OS_PACKAGE_VERSION="0.5.40.0"$' audit/payload/root/etc/r36os-release
           test -f audit/payload/root/etc/r36os/r40-r36update-repair-once
+          test "$(sha256sum audit/payload/root/usr/local/libexec/r36os/fsck.fat-static | awk '{print $1}')" = fe165b0784dd3c301cdf422691b1e5630bd5fab11bca15b8419906b10900d665
+          if grep -R -n -E '0\.5\.39\.0|Alpha[[:space:]]*5R39|r39-runtime-lock' \
+            audit/payload/root/usr/local/bin \
+            audit/payload/root/usr/local/libexec/r36os \
+            audit/payload/root/usr/lib/systemd/system-generators 2>/dev/null; then
+            echo 'stale R39 runtime identity found in built R40 package' >&2
+            exit 30
+          fi
           echo R40_PACKAGE_AUDIT=PASS
 
-      - name: Upload validation candidate
+      - name: Exercise game-log snapshot through immutable redaction path
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /r36state
+          sudo mount -t tmpfs -o size=64M tmpfs /r36state
+          cleanup(){ sudo umount /r36state 2>/dev/null || true; sudo rm -f /run/r36os-current-game-session; }
+          trap cleanup EXIT
+          sudo mkdir -p /r36state/logs/game-sessions/teeworlds/test /r36state/logs/kernel-next
+          printf '%s\n' '/r36state/logs/game-sessions/teeworlds/test' | sudo tee /run/r36os-current-game-session >/dev/null
+          sudo tee /r36state/logs/game-sessions/teeworlds/test/session.conf >/dev/null <<'EOF'
+          game=Teeworlds
+          status=failed
+          EOF
+          sudo tee /r36state/logs/game-sessions/teeworlds/test/game-output.log >/dev/null <<'EOF'
+          SDL video: wayland not available
+          ssid=Audit Network With Spaces
+          password=temporary validation secret
+          endpoint=https://alice:secret@example.invalid/path
+          client=192.168.9.44
+          email=audit@example.invalid
+          EOF
+          sudo tee /r36state/logs/game-sessions/teeworlds/test/launch-results.log >/dev/null <<'EOF'
+          backend=box64
+          result=SDL-WAYLAND-UNAVAILABLE
+          EOF
+          sudo bash audit/payload/root/usr/local/bin/r36os-r40-github-snapshot
+          test -s /r36state/logs/kernel-next/r40-game-os-snapshot.conf
+          sudo env R36OS_STATE_ROOT=/r36state bash audit/payload/root/usr/local/bin/r36os-github-diagnostics capture r40-validation >/tmp/r40-bundle-path
+          BUNDLE="$(tail -1 /tmp/r40-bundle-path)"
+          test -s "$BUNDLE"
+          mkdir remote-audit
+          tar -xzf "$BUNDLE" -C remote-audit
+          grep -R -q 'R36OS_R40_GAME_OS_SNAPSHOT_V1' remote-audit
+          grep -R -q 'SDL video: wayland not available' remote-audit
+          grep -R -q 'SDL-WAYLAND-UNAVAILABLE' remote-audit
+          if grep -R -E 'Audit Network With Spaces|temporary validation secret|alice:secret|192\.168\.9\.44|audit@example\.invalid' remote-audit; then
+            echo 'private game-log data survived remote redaction' >&2
+            exit 31
+          fi
+          echo R40_GAME_LOG_REDACTION_INTEGRATION=PASS
+
+      - name: Preserve corresponding dosfstools source
+        run: |
+          set -euo pipefail
+          mkdir -p third-party
+          curl -fL --retry 3 -o third-party/dosfstools-4.2.tar.gz \
+            https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz
+          echo '64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527  third-party/dosfstools-4.2.tar.gz' | sha256sum -c -
+
+      - name: Upload single audited validation candidate
         uses: actions/upload-artifact@v4
         with:
-          name: R36OS-Alpha5R40-validation-candidate
+          name: R36OS-Alpha5R40-audited-validation-candidate
           path: |
             out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
             out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd.sha256
             out-a/latest.conf
             out-a/RELEASE_REPORT.txt
+            out-a/THIRD_PARTY_NOTICES.txt
+            third-party/dosfstools-4.2.tar.gz
             r40-build-a.log
             r40-build-b.log
-          if-no-files-found: error
-          retention-days: 30
- audit/payload/root/etc/r36os-release
-          test -f audit/payload/root/etc/r36os/r40-r36update-repair-once
-          echo R40_PACKAGE_AUDIT=PASS
-
-      - name: Upload validation candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-Alpha5R40-validation-candidate
-          path: |
-            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd
-            out-a/00-R36OS-Alpha5R40-LogsAndFATRepair-FromR39.r36upd.sha256
-            out-a/latest.conf
-            out-a/RELEASE_REPORT.txt
-            r40-build-a.log
-            r40-build-b.log
+            r40-release/AUDIT.md
           if-no-files-found: error
           retention-days: 30

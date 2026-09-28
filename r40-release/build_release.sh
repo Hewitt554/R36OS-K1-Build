@@ -48,7 +48,16 @@ import sys
 src=Path(sys.argv[1]).read_text()
 if src.count("0.5.39.0") != 1:
     raise SystemExit("unexpected R39 slot version-guard count")
-out=src.replace("0.5.39.0","0.5.40.0")
+if src.count("Alpha 5R39") != 1:
+    raise SystemExit("unexpected R39 slot comment count")
+if src.count("r39-runtime-lock") != 1:
+    raise SystemExit("unexpected R39 slot lock-detail count")
+out=(src
+     .replace("0.5.39.0","0.5.40.0")
+     .replace("Alpha 5R39","Alpha 5R40")
+     .replace("r39-runtime-lock","r40-runtime-lock"))
+if "0.5.39.0" in out or "Alpha 5R39" in out or "r39-runtime-lock" in out:
+    raise SystemExit("stale R39 slot identity remains")
 Path(sys.argv[2]).write_text(out)
 PY
 
@@ -61,8 +70,8 @@ bash -n "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
 # Preserve the verified R39 exporter under libexec and put a tiny R40 wrapper at
 # its original path. The wrapper snapshots the latest game/OS evidence first.
 cp "$WORK/base/payload/root/usr/local/bin/r36os-export-current-logs" \
-  "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
-chmod 0755 "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
+  "$WORK/update/payload/root/usr/local/libexec/r36os/base-export-current-logs"
+chmod 0755 "$WORK/update/payload/root/usr/local/libexec/r36os/base-export-current-logs"
 
 for f in r36os-export-current-logs-wrapper r36os-r40-github-snapshot r36os-r36update-repair r36os-r40-firstboot-repair; do
   bash -n "$HERE/$f"
@@ -132,7 +141,7 @@ paths=[
 '/usr/local/bin/r36os-github-diagnostics',
 '/usr/local/bin/r36os-export-current-logs',
 '/usr/local/bin/r36os-r40-github-snapshot',
-'/usr/local/libexec/r36os/r39-export-current-logs',
+'/usr/local/libexec/r36os/base-export-current-logs',
 '/usr/local/bin/r36os-r36update-repair',
 '/usr/local/bin/r36os-r40-firstboot-repair',
 '/usr/local/libexec/r36os/fsck.fat-static',
@@ -176,15 +185,22 @@ grep -q '0.5.40.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-next-pr
 grep -q '0.5.40.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-slot"
 ! grep -q '0.5.39.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-next-prepare"
 ! grep -q '0.5.39.0' "$WORK/update/payload/root/usr/local/bin/r36os-kernel-slot"
+if grep -R -n -E '0\.5\.39\.0|Alpha[[:space:]]*5R39|r39-runtime-lock' \
+  "$WORK/update/payload/root/usr/local/bin" \
+  "$WORK/update/payload/root/usr/local/libexec/r36os" \
+  "$WORK/update/payload/root/usr/lib/systemd/system-generators" 2>/dev/null; then
+  echo 'stale R39 runtime identity found in R40 payload' >&2
+  exit 23
+fi
 
-# The R39 uploader is immutable; R40 feeds it one bounded snapshot .conf.
+# The verified R39 uploader is immutable; R40 feeds it one bounded snapshot .conf.
 cmp "$WORK/base/payload/root/usr/local/bin/r36os-github-diagnostics" \
     "$WORK/update/payload/root/usr/local/bin/r36os-github-diagnostics"
 grep -q 'r36os-r40-github-snapshot' "$WORK/update/payload/root/usr/local/bin/r36os-export-current-logs"
 grep -q 'latest_game_session=' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
 grep -q 'game-output' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
 grep -q 'weston-session' "$WORK/update/payload/root/usr/local/bin/r36os-r40-github-snapshot"
-grep -q 'r36os-github-diagnostics capture "export-\$WHY"' "$WORK/update/payload/root/usr/local/libexec/r36os/r39-export-current-logs"
+grep -q 'r36os-github-diagnostics capture "export-\$WHY"' "$WORK/update/payload/root/usr/local/libexec/r36os/base-export-current-logs"
 
 grep -q 'EXPECTED_DEV="${R36OS_R36UPDATE_DEV:-/dev/mmcblk0p3}"' "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair"
 grep -q 'EXPECTED_UUID="${R36OS_R36UPDATE_UUID:-C49E-0225}"' "$WORK/update/payload/root/usr/local/bin/r36os-r36update-repair"
@@ -220,6 +236,19 @@ url=https://github.com/$REPO/releases/download/$TAG/$NAME
 candidate_id=$CID
 kernel_release=$KREL
 EOF_LATEST
+
+cat > "$OUT/THIRD_PARTY_NOTICES.txt" <<EOF_NOTICE
+R36OS Alpha 5R40 third-party component
+component=fsck.fat
+upstream=dosfstools/dosfstools
+version=4.2
+source_archive=dosfstools-4.2.tar.gz
+source_sha256=64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527
+binary_sha256=$EXPECTED_FSCK
+license=GNU General Public License version 3 (see upstream COPYING)
+source_release=https://github.com/dosfstools/dosfstools/releases/tag/v4.2
+note=Corresponding source archive is preserved alongside the R40 validation/release evidence.
+EOF_NOTICE
 
 cat > "$OUT/RELEASE_REPORT.txt" <<EOF_REPORT
 R36OS Alpha 5R40 release build PASS
