@@ -1,0 +1,91 @@
+name: Test R40 R36UPDATE repair
+
+on:
+  push:
+    branches:
+      - work/r40-general-log-upload-2026-09-28
+    paths:
+      - r40-release/r36os-r36update-repair
+      - .github/workflows/test-r40-r36update-repair.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          bash -n r40-release/r36os-r36update-repair
+
+      - name: Install host FAT tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dosfstools
+
+      - name: Exercise repair against isolated FAT loopback
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r40-r36update
+          STATE=/tmp/r40-r36state
+          IMG=/tmp/r40-r36update.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          trap 'sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true' EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext/K1"
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do
+            printf 'fixture-%s\n' "$f" | sudo tee "$MNT/R36OS-KernelNext/K1/$f" >/dev/null
+          done
+          sudo tee "$MNT/R36OS-KernelNext/K1/K1.conf" >/dev/null <<'EOF'
+          format=R36OS_K1_CANDIDATE_V1
+          candidate_id=e551eb6598d6da7a8e8320e9
+          EOF
+          (
+            cd "$MNT/R36OS-KernelNext/K1"
+            sudo sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt | sudo tee MANIFEST.sha256 >/dev/null
+          )
+          sudo env             R36OS_R36UPDATE_MOUNT="$MNT"             R36OS_R36UPDATE_DEV="$LOOP"             R36OS_R36UPDATE_UUID="$UUID"             R36OS_STATE_ROOT="$STATE"             R36OS_FSCK_FAT=/usr/sbin/fsck.fat             bash r40-release/r36os-r36update-repair repair | tee /tmp/repair.out
+          grep -q 'status=PASS_REBOOT_REQUIRED' /tmp/repair.out
+          grep -q '^status=PASS_REBOOT_REQUIRED$' /run/r36os-r36update-repair.result
+          ! mountpoint -q "$MNT"
+          test -s "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar
+          tar -tf "$STATE"/recovery/r36update/R36UPDATE-pre-fsck-*.tar >/dev/null
+
+      - name: Prove armed marker blocks repair before unmount
+        run: |
+          set -euo pipefail
+          MNT=/tmp/r40-marker-r36update
+          STATE=/tmp/r40-marker-state
+          IMG=/tmp/r40-marker.img
+          sudo mkdir -p "$MNT" "$STATE"
+          sudo mount -t tmpfs -o size=3G tmpfs "$STATE"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36UPDATE "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          trap 'sudo umount "$MNT" 2>/dev/null || true; sudo umount "$STATE" 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true' EXIT
+          UUID="$(sudo blkid -s UUID -o value "$LOOP")"
+          sudo mount -t vfat "$LOOP" "$MNT"
+          sudo mkdir -p "$MNT/R36OS-KernelNext"
+          printf 'armed\n' | sudo tee "$MNT/R36OS-KernelNext/boot-next.e551eb6598d6da7a8e8320e9.once" >/dev/null
+          set +e
+          sudo env             R36OS_R36UPDATE_MOUNT="$MNT"             R36OS_R36UPDATE_DEV="$LOOP"             R36OS_R36UPDATE_UUID="$UUID"             R36OS_STATE_ROOT="$STATE"             R36OS_FSCK_FAT=/usr/sbin/fsck.fat             bash r40-release/r36os-r36update-repair repair >/tmp/marker.out 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 45
+          grep -q 'k1-one-shot-marker-present' /tmp/marker.out
+          mountpoint -q "$MNT"
+
+      - name: Result
+        run: echo R40_R36UPDATE_REPAIR_TEST=PASS
