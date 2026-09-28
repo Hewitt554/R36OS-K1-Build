@@ -1,0 +1,14 @@
+R40 UI upload-logs WIP build evidence
+date=2026-09-28
+base_source=recovered CP08 R37 worktree source/r36os_alpha5.c
+base_source_sha256=faba6ff926db803de2443ea065e344e5b5035c536b04c9b9cb02e9cd8a691739
+modified_source_sha256=52a151a7eaf799789af7d141da7048a04e65cdc372f12213ec64227345dfb4e0
+compiled_ui_sha256=43ae5a564b3f3a3ea15fb63fe8058cd17ad45af82ef6fd9568905e8c8df76f4c
+target=aarch64-linux-gnu
+link=static freestanding lld
+warnings=-Wall -Wextra -Werror
+binary_compare=standard-build-vs-Werror-build-byte-identical
+diagnostics_action=A(bottom) Capture + upload logs
+private_repo=Hewitt554/R36OS-Device-Logs
+full_manual_archive_upload=no
+redacted_remote_bundle=yes
