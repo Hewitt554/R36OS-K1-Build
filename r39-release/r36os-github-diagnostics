@@ -1,0 +1,222 @@
+#!/bin/bash
+# R36OS privacy-redacted GitHub diagnostics queue/uploader.
+# Raw credentials are never included in diagnostic bundles or logs.
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+BASE="$STATE/logs/github-diagnostics"
+QUEUE="$BASE/queue"
+SENT="$BASE/sent"
+CFGDIR="$STATE/config"
+SECDIR="$STATE/secrets"
+CFG="$CFGDIR/github-diagnostics.conf"
+TOKEN_FILE="$SECDIR/github-diagnostics.token"
+DEVICE_ID_FILE="$CFGDIR/github-diagnostics-device-id"
+STATUS=/run/r36os-github-diagnostics.status
+API_BASE="${R36OS_GITHUB_DIAGNOSTICS_API_BASE:-https://api.github.com}"
+CMD="${1:-status}"
+ARG="${2:-manual}"
+
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+safe_reason(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._+-' '-' | cut -c1-80; }
+write_status(){
+  st="$1"; detail="$2"; bundle="${3:-}"; remote="${4:-}"
+  mkdir -p "$BASE" 2>/dev/null || true
+  {
+    echo 'format=R36OS_GITHUB_DIAGNOSTICS_STATUS_V1'
+    echo "status=$st"
+    echo "detail=$detail"
+    echo "bundle=$bundle"
+    echo "remote_path=$remote"
+    echo "queued=$(find "$QUEUE" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+    echo "sent=$(find "$SENT" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$STATUS" 2>/dev/null || true
+}
+ensure_dirs(){
+  mountpoint -q "$STATE" 2>/dev/null || return 1
+  mkdir -p "$QUEUE" "$SENT" "$CFGDIR" "$SECDIR" || return 1
+  chmod 0700 "$SECDIR" 2>/dev/null || true
+  return 0
+}
+ensure_device_id(){
+  [ -s "$DEVICE_ID_FILE" ] || {
+    umask 077
+    (head -c 32 /dev/urandom 2>/dev/null || printf '%s-%s' "$(date +%s 2>/dev/null)" "$$") | sha256sum | awk '{print substr($1,1,16)}' >"$DEVICE_ID_FILE.tmp" || return 1
+    mv -f "$DEVICE_ID_FILE.tmp" "$DEVICE_ID_FILE" || return 1
+    chmod 0600 "$DEVICE_ID_FILE" 2>/dev/null || true
+  }
+  DEVICE_ID="$(tr -cd '0-9a-f' <"$DEVICE_ID_FILE" | head -c16)"
+  [ "${#DEVICE_ID}" -eq 16 ]
+}
+redact_file(){
+  f="$1"; [ -f "$f" ] || return 0
+  sed -E -i     -e 's/(Authorization:[[:space:]]*).*/\1<REDACTED>/Ig'     -e 's/((password|passwd|passphrase|psk|token|authorization|secret|cookie)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1<REDACTED>/Ig'     -e 's/((ssid|essid)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1<REDACTED>/Ig'     -e 's/([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}/<REDACTED-MAC>/g'     -e 's/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<REDACTED-IPV4>/g'     "$f" 2>/dev/null || true
+}
+import_config(){
+  ensure_dirs || return 1
+  for root in /boot /r36update /roms2; do
+    c="$root/R36OS-GITHUB-DIAGNOSTICS.conf"
+    t="$root/R36OS-GITHUB-DIAGNOSTICS.token"
+    if [ -s "$c" ]; then
+      fmt="$(val "$c" format)"; mode="$(val "$c" mode)"; repo="$(val "$c" repo)"; branch="$(val "$c" branch)"
+      [ "$fmt" = R36OS_GITHUB_DIAGNOSTICS_V1 ] || continue
+      case "$mode" in automatic|ask|off) ;; *) continue;; esac
+      echo "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || continue
+      echo "${branch:-main}" | grep -Eq '^[A-Za-z0-9._/-]+$' || continue
+      umask 077
+      {
+        echo 'format=R36OS_GITHUB_DIAGNOSTICS_V1'
+        echo "mode=$mode"
+        echo "repo=$repo"
+        echo "branch=${branch:-main}"
+      } >"$CFG.tmp" && mv -f "$CFG.tmp" "$CFG"
+      chmod 0600 "$CFG" 2>/dev/null || true
+    fi
+    if [ -s "$t" ]; then
+      tok="$(tr -d '\r\n' <"$t")"
+      if [ "${#tok}" -ge 20 ] && [ "${#tok}" -le 512 ]; then
+        umask 077; printf '%s\n' "$tok" >"$TOKEN_FILE.tmp" && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+        chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
+        rm -f "$t" 2>/dev/null || true
+      fi
+      unset tok
+    fi
+  done
+  return 0
+}
+capture(){
+  reason="$(safe_reason "$1")"; [ -n "$reason" ] || reason=manual
+  ensure_dirs || { write_status ERROR state-not-mounted; return 20; }
+  ensure_device_id || { write_status ERROR device-id; return 21; }
+  stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null)"; echo "$stamp" | grep -Eq '^[0-9]{8}-[0-9]{6}$' || stamp="unknown-$$"
+  ver="$(/usr/local/bin/r36os-version version 2>/dev/null)"; [ -n "$ver" ] || ver=unknown
+  tag="$(/usr/local/bin/r36os-version tag 2>/dev/null)"; [ -n "$tag" ] || tag=R36OS
+  cid="$(awk -F= '$1=="candidate_id"{print $2;exit}' /r36update/R36OS-KernelNext/K1/K1.conf 2>/dev/null)"
+  [ -n "$cid" ] || cid="$(awk -F= '$1=="candidate_id"{print $2;exit}' /opt/r36os/kernel-next/K1/K1.conf 2>/dev/null)"
+  tmp="$BASE/.capture-$stamp-$$"; rm -rf "$tmp"; mkdir -p "$tmp" || return 22
+  {
+    echo 'format=R36OS_GITHUB_DIAGNOSTICS_BUNDLE_V1'
+    echo "reason=$reason"
+    echo "device_id=$DEVICE_ID"
+    echo "version=$ver"
+    echo "release_tag=$tag"
+    echo "kernel_running=$(uname -r 2>/dev/null || echo unknown)"
+    echo "candidate_id=${cid:-unknown}"
+    echo "failure_code=${R36OS_DIAG_FAILURE_CODE:-}"
+    echo "failure_detail=${R36OS_DIAG_FAILURE_DETAIL:-}"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$tmp/summary.conf"
+  cp -f /etc/r36os-release "$tmp/r36os-release.txt" 2>/dev/null || true
+  cp -f /run/r36os-k1-prepare.result "$tmp/k1-prepare-result.txt" 2>/dev/null || true
+  cp -f /run/r36os-k1-prepare.progress "$tmp/k1-prepare-progress.txt" 2>/dev/null || true
+  cp -f /run/r36os-r36update-fat-health.conf "$tmp/r36update-fat-health.txt" 2>/dev/null || true
+  cp -f /run/r36os-kernel-slot.status "$tmp/kernel-slot-status.txt" 2>/dev/null || true
+  cp -f /run/r36os-kernel-slot.result "$tmp/kernel-slot-result.txt" 2>/dev/null || true
+  cp -f /run/r36os-github-update.status "$tmp/github-update-status.txt" 2>/dev/null || true
+  cp -f /r36state/logs/kernel-next/*.conf "$tmp/" 2>/dev/null || true
+  if [ -s /r36update/R36OS-KernelNext/K1/K1.conf ]; then cp -f /r36update/R36OS-KernelNext/K1/K1.conf "$tmp/K1.conf"; elif [ -s /opt/r36os/kernel-next/K1/K1.conf ]; then cp -f /opt/r36os/kernel-next/K1/K1.conf "$tmp/K1.conf"; fi
+  (dmesg 2>/dev/null | tail -2500 >"$tmp/dmesg-tail.txt") || true
+  (findmnt /boot /r36update /r36state /roms2 2>/dev/null >"$tmp/mounts.txt") || true
+  (df -hT /boot /r36update /r36state /roms2 2>/dev/null >"$tmp/storage.txt") || true
+  (blkid 2>/dev/null >"$tmp/block-identities.txt") || true
+  (cat /proc/cmdline 2>/dev/null >"$tmp/cmdline.txt") || true
+  (lsmod 2>/dev/null >"$tmp/lsmod.txt") || true
+  (journalctl -b -u r36os-kernel-next-health.service --no-pager -n 400 2>/dev/null >"$tmp/kernel-next-health-journal.txt") || true
+  for f in "$tmp"/*; do [ -f "$f" ] && redact_file "$f"; done
+  bundle="$QUEUE/R36OS-${tag}-diag-${stamp}-${reason}-${DEVICE_ID}.tar.gz"
+  tar -C "$tmp" -czf "$bundle.tmp" . >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-create; return 23; }
+  tar -tzf "$bundle.tmp" >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-verify; return 24; }
+  bytes="$(stat -c %s "$bundle.tmp" 2>/dev/null || echo 0)"
+  [ "$bytes" -gt 0 ] && [ "$bytes" -le 8388608 ] || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-size; return 25; }
+  mv -f "$bundle.tmp" "$bundle" || { rm -rf "$tmp"; return 26; }
+  sha256sum "$bundle" >"$bundle.sha256" 2>/dev/null || true
+  rm -rf "$tmp"
+  ls -1t "$QUEUE"/*.tar.gz 2>/dev/null | awk 'NR>12' | while IFS= read -r old; do rm -f "$old" "$old.sha256" 2>/dev/null || true; done
+  write_status QUEUED "$reason" "$bundle"
+  printf '%s\n' "$bundle"
+  return 0
+}
+load_config(){
+  import_config >/dev/null 2>&1 || true
+  MODE="$(val "$CFG" mode)"; REPO="$(val "$CFG" repo)"; BRANCH="$(val "$CFG" branch)"
+  [ -n "$BRANCH" ] || BRANCH=main
+  case "$MODE" in automatic|ask|off) ;; *) MODE=off;; esac
+  echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || REPO=""
+  echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || BRANCH=main
+}
+upload_one(){
+  b="$1"; [ -s "$b" ] || return 1
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 2; }
+  ensure_device_id || { unset token; return 3; }
+  name="$(basename "$b")"; day="$(date +%Y-%m-%d 2>/dev/null || echo unknown)"
+  remote="uploads/$DEVICE_ID/$day/$name"
+  req="$BASE/.upload-request-$$.json"; resp="$BASE/.upload-response-$$.json"
+  umask 077
+  {
+    printf '{"message":"R36OS diagnostics %s","branch":"%s","content":"' "$name" "$BRANCH"
+    base64 -w 0 "$b" 2>/dev/null
+    printf '"}\n'
+  } >"$req" || { rm -f "$req"; unset token; return 4; }
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 20 --max-time 180 --retry 2     -X PUT     -H "Authorization: Bearer $token"     -H 'Accept: application/vnd.github+json'     -H 'X-GitHub-Api-Version: 2022-11-28'     -H 'Content-Type: application/json'     --data-binary "@$req"     "$API_BASE/repos/$REPO/contents/$remote" 2>/dev/null)"
+  unset token; rm -f "$req"
+  case "$code" in
+    200|201)
+      rm -f "$resp"
+      mv -f "$b" "$SENT/$name" || return 5
+      [ -f "$b.sha256" ] && mv -f "$b.sha256" "$SENT/$name.sha256" 2>/dev/null || true
+      REMOTE_PATH="$remote"
+      return 0;;
+    *)
+      printf 'http_status=%s\n' "$code" >"$BASE/last-upload-error.txt" 2>/dev/null || true
+      rm -f "$resp"
+      return 6;;
+  esac
+}
+upload_queued(){
+  ensure_dirs || { write_status ERROR state-not-mounted; return 20; }
+  load_config
+  count="$(find "$QUEUE" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$count" -gt 0 ] || { write_status IDLE no-queued-bundles; return 0; }
+  [ "$MODE" != off ] || { write_status QUEUED upload-disabled; return 0; }
+  [ -n "$REPO" ] || { write_status QUEUED_NOT_CONFIGURED private-repo-not-configured; return 0; }
+  [ -s "$TOKEN_FILE" ] || { write_status QUEUED_NOT_CONFIGURED token-not-configured; return 0; }
+  command -v curl >/dev/null 2>&1 || { write_status QUEUED curl-unavailable; return 0; }
+  sent=0
+  for b in $(ls -1tr "$QUEUE"/*.tar.gz 2>/dev/null | head -4); do
+    if upload_one "$b"; then sent=$((sent+1)); write_status UPLOADED "sent=$sent" "$SENT/$(basename "$b")" "$REMOTE_PATH"; else write_status QUEUED upload-failed "$b"; break; fi
+  done
+  ls -1t "$SENT"/*.tar.gz 2>/dev/null | awk 'NR>10' | while IFS= read -r old; do rm -f "$old" "$old.sha256" 2>/dev/null || true; done
+  return 0
+}
+selftest(){
+  t="${TMPDIR:-/tmp}/r36os-github-diag-selftest.$$"; mkdir -p "$t" || exit 1
+  cat >"$t/sample.txt" <<'S'
+ssid=MyHome
+password=hunter2
+psk=abcdef
+Authorization: Bearer abcdef
+mac=aa:bb:cc:dd:ee:ff
+ip=192.168.1.22
+candidate_id=e551eb6598d6da7a8e8320e9
+S
+  redact_file "$t/sample.txt"
+  grep -q '<REDACTED>' "$t/sample.txt" || { rm -rf "$t"; exit 2; }
+  grep -q '<REDACTED-MAC>' "$t/sample.txt" || { rm -rf "$t"; exit 3; }
+  grep -q '<REDACTED-IPV4>' "$t/sample.txt" || { rm -rf "$t"; exit 4; }
+  grep -q 'candidate_id=e551eb6598d6da7a8e8320e9' "$t/sample.txt" || { rm -rf "$t"; exit 5; }
+  if grep -Eq 'MyHome|hunter2|abcdef|aa:bb:cc:dd:ee:ff|192\.168\.1\.22' "$t/sample.txt"; then rm -rf "$t"; exit 6; fi
+  rm -rf "$t"; echo 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'; exit 0
+}
+
+case "$CMD" in
+  status) ensure_dirs >/dev/null 2>&1; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH"; cat "$STATUS" 2>/dev/null;;
+  import) import_config; load_config; write_status STATUS "mode=$MODE repo=${REPO:-not-configured} branch=$BRANCH";;
+  capture|queue) capture "$ARG";;
+  upload-queued) upload_queued;;
+  send) capture "$ARG" >/dev/null && upload_queued;;
+  selftest) selftest;;
+  *) echo 'usage: status|import|capture REASON|upload-queued|send REASON|selftest' >&2; exit 2;;
+esac
