@@ -102,19 +102,10 @@ jobs:
           tar -C package/core -czf package/R36OS-K1-Run11-core.tar.gz .
           sha256sum package/R36OS-K1-Run11-core.tar.gz > package/R36OS-K1-Run11-core.tar.gz.sha256
 
-          # Preserve the entire candidate too, but split it into connector-friendly pieces.
+          # Run #1 inspection proved the packaged candidate is ~202 MiB, so it fits
+          # comfortably below the connector's 512 MiB single-artifact limit.
           tar -C package/full -czf package/R36OS-K1-Run11-full.tar.gz .
           sha256sum package/R36OS-K1-Run11-full.tar.gz > package/R36OS-K1-Run11-full.tar.gz.sha256
-          split -b 125M -d -a 2 package/R36OS-K1-Run11-full.tar.gz package/R36OS-K1-Run11-full.tar.gz.part
-
-          part_count="$(find package -maxdepth 1 -type f -name 'R36OS-K1-Run11-full.tar.gz.part*' | wc -l)"
-          echo "split_part_count=$part_count"
-          if [[ "$part_count" -gt 6 ]]; then
-            echo "ERROR: full candidate exceeded six 125 MiB parts; update extraction workflow deliberately" >&2
-            exit 1
-          fi
-
-          sha256sum package/R36OS-K1-Run11-full.tar.gz.part* > package/R36OS-K1-Run11-full.parts.sha256
 
           {
             echo "=== candidate disk usage ==="
@@ -140,63 +131,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload full package reconstruction metadata
+      - name: Upload full device candidate
         uses: actions/upload-artifact@v4
         with:
-          name: R36OS-K1-Run11-full-metadata
+          name: R36OS-K1-Run11-device-candidate
           path: |
+            package/R36OS-K1-Run11-full.tar.gz
             package/R36OS-K1-Run11-full.tar.gz.sha256
-            package/R36OS-K1-Run11-full.parts.sha256
             package/CANDIDATE_TREE.txt
             package/CANDIDATE_SHA256SUMS.txt
+            package/CANDIDATE_SIZES.txt
             package/RUN11_PROVENANCE.txt
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload full part 00
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part00') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part00
-          path: package/R36OS-K1-Run11-full.tar.gz.part00
-          retention-days: 30
-
-      - name: Upload full part 01
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part01') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part01
-          path: package/R36OS-K1-Run11-full.tar.gz.part01
-          retention-days: 30
-
-      - name: Upload full part 02
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part02') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part02
-          path: package/R36OS-K1-Run11-full.tar.gz.part02
-          retention-days: 30
-
-      - name: Upload full part 03
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part03') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part03
-          path: package/R36OS-K1-Run11-full.tar.gz.part03
-          retention-days: 30
-
-      - name: Upload full part 04
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part04') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part04
-          path: package/R36OS-K1-Run11-full.tar.gz.part04
-          retention-days: 30
-
-      - name: Upload full part 05
-        if: ${{ hashFiles('package/R36OS-K1-Run11-full.tar.gz.part05') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-K1-Run11-full-part05
-          path: package/R36OS-K1-Run11-full.tar.gz.part05
           retention-days: 30
