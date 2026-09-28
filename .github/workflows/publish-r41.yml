@@ -1,0 +1,211 @@
+name: Publish R36OS Alpha 5R41
+
+on:
+  push:
+    branches:
+      - work/r41-firstboot-repair-fix-2026-09-28
+    paths:
+      - '.github/workflows/publish-r41.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: r36os-alpha5r41-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      TAG: alpha5r41
+      SOURCE_COMMIT: e2f9ea987862f821c72d1925700cbacdb92c5dc7
+      VALIDATION_RUN: '36452763827'
+      VALIDATION_ARTIFACT: R36OS-Alpha5R41-audited-validation-candidate
+      PACKAGE: 00-R36OS-Alpha5R41-FirstBootRepairFix-FromR40.r36upd
+      EXPECTED_SIZE: '12730'
+      EXPECTED_SHA256: ac3e350a7332ee3da4624952a15cfdc83cb04c767038e0c0d1015a078a237567
+      R40_SHA256: 448c056d9b1eac99443d0fad1ff10be9c9b40c7a8ffc4be33015c52d44ecd1e2
+      CANDIDATE_ID: e551eb6598d6da7a8e8320e9
+      KERNEL_RELEASE: 6.12.94-r36os-k1
+
+    steps:
+      - name: Checkout publisher source
+        uses: actions/checkout@v4
+
+      - name: Download exact audited R41 candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VALIDATION_ARTIFACT }}
+          path: publish-input
+          github-token: ${{ github.token }}
+          run-id: ${{ env.VALIDATION_RUN }}
+
+      - name: Verify audited candidate
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t PKGS < <(find publish-input -type f -name "$PACKAGE" -print)
+          test "${#PKGS[@]}" -eq 1
+          PKG="${PKGS[0]}"
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA256"
+
+          mapfile -t SIDECARS < <(find publish-input -type f -name "$PACKAGE.sha256" -print)
+          test "${#SIDECARS[@]}" -eq 1
+          grep -q "^$EXPECTED_SHA256  $PACKAGE$" "${SIDECARS[0]}"
+
+          mapfile -t LATESTS < <(find publish-input -type f -name latest.conf -print)
+          test "${#LATESTS[@]}" -eq 1
+          LATEST="${LATESTS[0]}"
+          grep -q '^version=0.5.41.0$' "$LATEST"
+          grep -q '^base_version=0.5.40.0$' "$LATEST"
+          grep -q "^filename=$PACKAGE$" "$LATEST"
+          grep -q "^size_bytes=$EXPECTED_SIZE$" "$LATEST"
+          grep -q "^sha256=$EXPECTED_SHA256$" "$LATEST"
+          grep -q "^candidate_id=$CANDIDATE_ID$" "$LATEST"
+          grep -q "^kernel_release=$KERNEL_RELEASE$" "$LATEST"
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$PKG" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' package-audit/manifest.conf)" = 0.5.41.0
+          test "$(awk -F= '$1=="base_version"{print $2}' package-audit/manifest.conf)" = 0.5.40.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' package-audit/manifest.conf)" = "$CANDIDATE_ID"
+          test "$(awk -F= '$1=="kernel_release"{print $2}' package-audit/manifest.conf)" = "$KERNEL_RELEASE"
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' package-audit/manifest.conf)" = no
+          test -f package-audit/payload/root/etc/systemd/system-generators/r36os-firstboot-update-repair-generator
+          test -f package-audit/payload/root/lib/systemd/system-generators/r36os-firstboot-update-repair-generator
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+
+          mapfile -t REPORTS < <(find publish-input -type f -name RELEASE_REPORT.txt -print)
+          test "${#REPORTS[@]}" -eq 1
+
+          echo "pkg=$PKG" >>"$GITHUB_OUTPUT"
+          echo "sidecar=${SIDECARS[0]}" >>"$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >>"$GITHUB_OUTPUT"
+          echo "report=${REPORTS[0]}" >>"$GITHUB_OUTPUT"
+          echo R41_PUBLISH_INPUT_AUDIT=PASS
+
+      - name: Verify channel is still exact R40
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/r36os-release-channel/latest.conf?ref=main" --jq .content | tr -d '\n' | base64 -d > current-latest.conf
+          grep -q '^version=0.5.40.0$' current-latest.conf
+          grep -q '^base_version=0.5.39.0$' current-latest.conf
+          grep -q "^sha256=$R40_SHA256$" current-latest.conf
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; refusing duplicate publication" >&2
+            exit 20
+          fi
+          echo R41_PREPUBLISH_CHANNEL_GUARD=PASS
+
+      - name: Create Alpha 5R41 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKG: ${{ steps.verify.outputs.pkg }}
+          SIDECAR: ${{ steps.verify.outputs.sidecar }}
+          REPORT: ${{ steps.verify.outputs.report }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          R36OS Alpha 5R41
+
+          Audited validation run: $VALIDATION_RUN
+          Audited source commit: $SOURCE_COMMIT
+          Base package SHA-256 (Alpha 5R40): $R40_SHA256
+          R41 package SHA-256: $EXPECTED_SHA256
+          R41 package size: $EXPECTED_SIZE bytes
+          K1 candidate: $CANDIDATE_ID
+          Kernel: $KERNEL_RELEASE
+          K1 binary change: no
+
+          This narrow update fixes first-boot activation of the already-validated R36UPDATE FAT repair path on the device's systemd 242 userspace. It also records repair/generator evidence in diagnostics. It does not replace K1 binaries, the diagnostics uploader, or the FAT repair engine.
+          EOF
+
+          gh release create "$TAG"             --repo "$REPO"             --target "$SOURCE_COMMIT"             --title 'R36OS Alpha 5R41'             --prerelease             --notes-file release-notes.md             "$PKG" "$SIDECAR" "$REPORT"
+
+      - name: Verify release asset before channel move
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)"
+          test "$TAG_SHA" = "$SOURCE_COMMIT"
+          rm -rf release-check
+          mkdir release-check
+          gh release download "$TAG" --repo "$REPO" --pattern "$PACKAGE" --dir release-check
+          test "$(stat -c %s "release-check/$PACKAGE")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "release-check/$PACKAGE" | awk '{print $1}')" = "$EXPECTED_SHA256"
+          gh api "repos/$REPO/releases/tags/$TAG" > release-api.json
+          test "$(jq -r .target_commitish release-api.json)" = "$SOURCE_COMMIT"
+          test "$(jq -r --arg n "$PACKAGE" '.assets[] | select(.name==$n) | .size' release-api.json)" = "$EXPECTED_SIZE"
+          test "$(jq -r --arg n "$PACKAGE" '.assets[] | select(.name==$n) | .state' release-api.json)" = uploaded
+          echo R41_RELEASE_ASSET_VERIFY=PASS
+
+      - name: Publish exact R41 latest.conf to main
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.verify.outputs.latest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUR_JSON="$(gh api "repos/$REPO/contents/r36os-release-channel/latest.conf?ref=main")"
+          CUR_SHA="$(printf '%s' "$CUR_JSON" | jq -r .sha)"
+          printf '%s' "$CUR_JSON" | jq -r .content | tr -d '\n' | base64 -d > pre-channel.conf
+          grep -q '^version=0.5.40.0$' pre-channel.conf
+          grep -q "^sha256=$R40_SHA256$" pre-channel.conf
+          BODY="$(base64 -w0 "$LATEST")"
+          gh api --method PUT "repos/$REPO/contents/r36os-release-channel/latest.conf"             -f message='Publish Alpha 5R41 update channel'             -f branch=main             -f sha="$CUR_SHA"             -f content="$BODY" >channel-update.json
+          echo "commit=$(jq -r .commit.sha channel-update.json)" >>"$GITHUB_OUTPUT"
+
+      - name: End-to-end publication verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_LATEST: ${{ steps.verify.outputs.latest }}
+          CHANNEL_COMMIT: ${{ steps.channel.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/r36os-release-channel/latest.conf?ref=main" --jq .content | tr -d '\n' | base64 -d > published-latest.conf
+          cmp "$EXPECTED_LATEST" published-latest.conf
+          cat > PUBLISH_EVIDENCE.txt <<EOF
+          R36OS Alpha 5R41 publication PASS
+          validation_run=$VALIDATION_RUN
+          validation_artifact=$VALIDATION_ARTIFACT
+          source_commit=$SOURCE_COMMIT
+          channel_commit=$CHANNEL_COMMIT
+          tag=$TAG
+          package=$PACKAGE
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA256
+          candidate_id=$CANDIDATE_ID
+          kernel_release=$KERNEL_RELEASE
+          k1_binary_change=no
+          EOF
+          gh release upload "$TAG" PUBLISH_EVIDENCE.txt --repo "$REPO"
+          echo R41_PUBLICATION_VERIFICATION=PASS
+
+      - name: Preserve publish evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R41-publish-evidence
+          path: |
+            PUBLISH_EVIDENCE.txt
+            published-latest.conf
+            release-api.json
+          if-no-files-found: error
+          retention-days: 90
