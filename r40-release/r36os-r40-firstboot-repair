@@ -12,7 +12,7 @@ mkdir -p "$LOGDIR" 2>/dev/null || true
 
 warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
 if [ -z "$warn" ]; then
-  printf 'status=SKIPPED\ndetail=no-mmclbk0p3-dirty-warning\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  printf 'status=SKIPPED\ndetail=no-mmcblk0p3-dirty-warning\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
   rm -f "$MARKER"
   exit 0
 fi
