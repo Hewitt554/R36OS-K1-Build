@@ -8,6 +8,19 @@ LOGDIR=/r36state/logs/r36update-repair
 RESULT="$LOGDIR/R40-FIRSTBOOT.conf"
 
 mkdir -p "$LOGDIR" 2>/dev/null || true
+
+# Non-secret R40 diagnostics defaults. The authentication token remains device-local.
+mkdir -p /r36state/config 2>/dev/null || true
+if [ ! -s /r36state/config/github-diagnostics.conf ]; then
+  cat > /r36state/config/github-diagnostics.conf <<'EOF_CFG'
+format=R36OS_GITHUB_DIAGNOSTICS_V1
+mode=automatic
+repo=Hewitt554/R36OS-Device-Logs
+branch=main
+EOF_CFG
+  chmod 0600 /r36state/config/github-diagnostics.conf 2>/dev/null || true
+fi
+
 [ -f "$MARKER" ] || exit 0
 
 warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
