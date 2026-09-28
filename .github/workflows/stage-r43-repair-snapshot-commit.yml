@@ -1,0 +1,47 @@
+name: Commit R43 repair and snapshot staging
+
+on:
+  push:
+    branches:
+      - work/r43-source-staging-2026-09-28
+    paths:
+      - '.github/workflows/stage-r43-repair-snapshot-commit.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover exact audited repair and snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('.github/workflows/stage-r43-repair-source.yml').read_text()
+          def extract(marker, end):
+              a=src.index(marker)
+              a=src.index('\n', a)+1
+              b=src.index('\n          '+end, a)
+              lines=src[a:b].splitlines()
+              return '\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n'
+          Path('r43-release/r36os-r36update-repair').write_text(extract("cat > r43-release/r36os-r36update-repair <<'EOF_REPAIR'", 'EOF_REPAIR'))
+          Path('r43-release/r36os-diagnostic-snapshot').write_text(extract("cat > r43-release/r36os-diagnostic-snapshot <<'EOF_SNAPSHOT'", 'EOF_SNAPSHOT'))
+          PY
+          chmod 0755 r43-release/r36os-r36update-repair r43-release/r36os-diagnostic-snapshot
+          bash -n r43-release/r36os-r36update-repair
+          bash -n r43-release/r36os-diagnostic-snapshot
+          echo '396e6fcea8961cbfea4bafad92573e41fdfee80df1eae73f4eb8ee13a6687082  r43-release/r36os-r36update-repair' | sha256sum -c -
+          echo 'df0ba17d4d22580ca4e2a9a42e511a30df666afcf332fe179000fa6b32f9c694  r43-release/r36os-diagnostic-snapshot' | sha256sum -c -
+      - name: Commit staging source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'R36OS Build Bot'
+          git config user.email 'r36os-build-bot@users.noreply.github.com'
+          git add r43-release/r36os-r36update-repair r43-release/r36os-diagnostic-snapshot
+          git commit -m 'Stage exact R43 repair and snapshot source'
+          git push origin HEAD:work/r43-source-staging-2026-09-28
