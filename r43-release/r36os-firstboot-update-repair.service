@@ -1,0 +1,10 @@
+[Unit]
+Description=R36OS one-time R36UPDATE FAT repair
+After=local-fs.target
+Before=r36os.service r36os-health-watchdog.service
+ConditionPathExists=/etc/r36os/r36update-repair-once.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/r36os-firstboot-update-repair
+TimeoutStartSec=15min

@@ -1,0 +1,232 @@
+#!/bin/bash
+# R36OS safe FAT repair for the dedicated R36UPDATE partition.
+# Never run fsck on a mounted filesystem and never force/lazy-unmount.
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+MOUNT="${R36OS_R36UPDATE_MOUNT:-/r36update}"
+EXPECTED_DEV="${R36OS_R36UPDATE_DEV:-/dev/mmcblk0p3}"
+EXPECTED_UUID="${R36OS_R36UPDATE_UUID:-C49E-0225}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+NEXT="$MOUNT/R36OS-KernelNext"
+RESULT=/run/r36os-r36update-repair.result
+PROGRESS=/run/r36os-r36update-repair.progress
+LOGROOT="$STATE/logs/r36update-repair"
+CMD="${1:-status}"
+LOG=""
+FSCK=""
+FSCK_SHA=""
+HELP_RC=""
+PREFLIGHT_RC=""
+REPAIR_RC=""
+VERIFY_RC=""
+
+progress(){
+  printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >"$PROGRESS" 2>/dev/null || true
+}
+save_log(){
+  [ -n "$LOG" ] && [ -f "$LOG" ] || return 0
+  cp -f "$LOG" "$LOGROOT/LAST-fsck.log" 2>/dev/null || true
+  chmod 0600 "$LOGROOT/LAST-fsck.log" 2>/dev/null || true
+}
+result(){
+  st="$1"; code="$2"; detail="$3"; backup="${4:-}"
+  mkdir -p "$LOGROOT" 2>/dev/null || true
+  {
+    echo 'format=R36OS_R36UPDATE_REPAIR_RESULT_V3'
+    echo "status=$st"
+    echo "code=$code"
+    echo "detail=$detail"
+    echo "device=$EXPECTED_DEV"
+    echo "expected_uuid=$EXPECTED_UUID"
+    echo "backup=$backup"
+    echo "fsck_tool=$FSCK"
+    echo "fsck_sha256=$FSCK_SHA"
+    echo "help_rc=$HELP_RC"
+    echo "preflight_rc=$PREFLIGHT_RC"
+    echo "repair_rc=$REPAIR_RC"
+    echo "verify_rc=$VERIFY_RC"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$RESULT" 2>/dev/null || true
+  cp -f "$RESULT" "$LOGROOT/LAST.conf" 2>/dev/null || true
+}
+fail(){
+  code="$1"; detail="$2"; backup="${3:-}"
+  save_log
+  progress FAIL 100 "R36UPDATE repair stopped" "$detail"
+  result FAIL "$code" "$detail" "$backup"
+  echo "status=FAIL code=$code detail=$detail"
+  exit "$code"
+}
+mounted_source(){ findmnt -rn -o SOURCE --target "$MOUNT" 2>/dev/null | head -1; }
+mounted_type(){ findmnt -rn -o FSTYPE --target "$MOUNT" 2>/dev/null | head -1; }
+device_uuid(){ blkid -s UUID -o value "$1" 2>/dev/null | head -1; }
+choose_fsck(){
+  if [ -n "${R36OS_FSCK_FAT:-}" ] && [ -x "$R36OS_FSCK_FAT" ]; then printf '%s\n' "$R36OS_FSCK_FAT"; return 0; fi
+  for x in     /usr/local/libexec/r36os/fsck.fat-static     /usr/local/sbin/fsck.fat /usr/sbin/fsck.fat /sbin/fsck.fat     /usr/local/sbin/fsck.vfat /usr/sbin/fsck.vfat /sbin/fsck.vfat     /usr/local/sbin/dosfsck /usr/sbin/dosfsck /sbin/dosfsck; do
+    [ -x "$x" ] && { printf '%s\n' "$x"; return 0; }
+  done
+  command -v fsck.fat 2>/dev/null || command -v fsck.vfat 2>/dev/null || command -v dosfsck 2>/dev/null
+}
+armed_marker(){
+  find "$NEXT" -maxdepth 1 -type f \( -name 'boot-next.*.once' -o -name 'boot-next.*.consumed' \) -print -quit 2>/dev/null
+}
+candidate_precheck(){
+  K1="$NEXT/K1"
+  [ -d "$K1" ] || return 0
+  [ -s "$K1/MANIFEST.sha256" ] || return 1
+  (cd "$K1" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1)
+}
+candidate_identity(){
+  awk -F= '$1=="candidate_id"{print $2;exit}' "$NEXT/K1/K1.conf" 2>/dev/null
+}
+mount_readonly_for_verify(){
+  mkdir -p "$MOUNT" || return 1
+  mount -t vfat -o ro "$EXPECTED_DEV" "$MOUNT" >/dev/null 2>&1
+}
+leave_readonly_if_possible(){
+  mountpoint -q "$MOUNT" 2>/dev/null && return 0
+  mount_readonly_for_verify >/dev/null 2>&1 || true
+}
+status(){
+  src="$(mounted_source)"; typ="$(mounted_type)"; uuid="$(device_uuid "$EXPECTED_DEV")"; fsck="$(choose_fsck)"
+  warn="$(dmesg 2>/dev/null | grep -F "FAT-fs (mmcblk0p3):" | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
+  marker="$(armed_marker)"
+  {
+    echo 'format=R36OS_R36UPDATE_REPAIR_STATUS_V3'
+    echo "mount=$MOUNT"
+    echo "source=${src:-unmounted}"
+    echo "fstype=${typ:-unknown}"
+    echo "uuid=${uuid:-unknown}"
+    echo "fsck_tool=${fsck:-missing}"
+    [ -n "$fsck" ] && echo "fsck_sha256=$(sha256sum "$fsck" 2>/dev/null | awk '{print $1}')"
+    echo "armed_marker=${marker:-none}"
+    echo "device_warning=${warn:-none}"
+  }
+}
+repair(){
+  rm -f "$RESULT" "$PROGRESS" 2>/dev/null || true
+  mkdir -p "$LOGROOT" 2>/dev/null || true
+  rm -f "$LOGROOT/LAST-extra.conf" "$LOGROOT/LAST-fsck.log" 2>/dev/null || true
+  progress RUNNING 2 "Checking R36UPDATE" "Verifying exact device, UUID and repair prerequisites"
+
+  [ "$(id -u)" = 0 ] || fail 40 not-root
+  mountpoint -q "$STATE" 2>/dev/null || fail 41 r36state-not-mounted
+  src="$(mounted_source)"; [ "$src" = "$EXPECTED_DEV" ] || fail 42 "unexpected-r36update-source-${src:-none}"
+  [ "$(mounted_type)" = vfat ] || fail 43 r36update-not-vfat
+  uuid="$(device_uuid "$EXPECTED_DEV")"; [ "$uuid" = "$EXPECTED_UUID" ] || fail 44 "unexpected-r36update-uuid-${uuid:-none}"
+  [ -z "$(armed_marker)" ] || fail 45 k1-one-shot-marker-present
+
+  FSCK="$(choose_fsck)"; [ -n "$FSCK" ] && [ -x "$FSCK" ] || fail 46 fat-fsck-tool-missing
+  FSCK_SHA="$(sha256sum "$FSCK" 2>/dev/null | awk '{print $1}')"
+  avail_kb="$(df -Pk "$STATE" 2>/dev/null | awk 'NR==2{print $4}')"
+  echo "$avail_kb" | grep -Eq '^[0-9]+$' || fail 47 state-free-space-unknown
+  [ "$avail_kb" -ge 2097152 ] || fail 48 state-needs-at-least-2gib-free
+
+  stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null)"; echo "$stamp" | grep -Eq '^[0-9]{8}-[0-9]{6}$' || stamp="unknown-$$"
+  mkdir -p "$STATE/recovery/r36update" || fail 50 recovery-directory-create
+  LOG="$LOGROOT/repair-$stamp.log"
+  {
+    echo 'format=R36OS_R36UPDATE_FSCK_LOG_V3'
+    echo "time=$(date -Is 2>/dev/null || date)"
+    echo "device=$EXPECTED_DEV"
+    echo "uuid=$uuid"
+    echo "fsck_tool=$FSCK"
+    echo "fsck_sha256=$FSCK_SHA"
+    echo "kernel=$(uname -r 2>/dev/null || echo unknown)"
+    echo "--- fsck help preflight ---"
+  } >"$LOG" 2>&1
+
+  "$FSCK" --help >>"$LOG" 2>&1
+  HELP_RC=$?
+  echo "help_rc=$HELP_RC" >>"$LOG"
+  echo "--- end help preflight ---" >>"$LOG"
+  [ "$HELP_RC" -eq 0 ] || fail 49 "fsck-help-preflight-failed-rc-$HELP_RC"
+
+  progress RUNNING 10 "Validating K1 candidate" "Checking any existing candidate hashes before filesystem repair"
+  CID_BEFORE="$(candidate_identity)"
+  candidate_precheck || fail 51 k1-candidate-precheck-failed
+  MANIFEST_BEFORE="$(sha256sum "$NEXT/K1/MANIFEST.sha256" 2>/dev/null | awk '{print $1}')"
+
+  BACKUP="$STATE/recovery/r36update/R36UPDATE-pre-fsck-$stamp.tar"
+  progress RUNNING 20 "Backing up R36UPDATE" "Copying all current files to R36STATE before repair"
+  tar -C "$MOUNT" -cpf "$BACKUP.tmp" . >>"$LOG" 2>&1 || { rm -f "$BACKUP.tmp"; fail 52 pre-repair-backup-failed; }
+  tar -tf "$BACKUP.tmp" >/dev/null 2>>"$LOG" || { rm -f "$BACKUP.tmp"; fail 53 pre-repair-backup-verify-failed; }
+  mv -f "$BACKUP.tmp" "$BACKUP" || fail 54 pre-repair-backup-commit-failed
+  sha256sum "$BACKUP" >"$BACKUP.sha256" 2>>"$LOG" || fail 55 pre-repair-backup-sha-failed
+  sync
+
+  progress RUNNING 45 "Unmounting R36UPDATE" "No forced or lazy unmount is permitted"
+  umount "$MOUNT" >>"$LOG" 2>&1 || fail 56 r36update-busy-or-unmount-failed "$BACKUP"
+  mountpoint -q "$MOUNT" 2>/dev/null && fail 57 r36update-still-mounted "$BACKUP"
+
+  progress RUNNING 52 "Read-only FAT preflight" "Proving this checker can scan the real volume before any repair write"
+  echo "--- readonly preflight ---" >>"$LOG"
+  "$FSCK" -n "$EXPECTED_DEV" >>"$LOG" 2>&1
+  PREFLIGHT_RC=$?
+  echo "readonly_preflight_rc=$PREFLIGHT_RC" >>"$LOG"
+  case "$PREFLIGHT_RC" in
+    0|1) ;;
+    *) leave_readonly_if_possible; fail 58 "fat-readonly-preflight-failed-rc-$PREFLIGHT_RC" "$BACKUP";;
+  esac
+
+  progress RUNNING 62 "Repairing FAT filesystem" "Running automatic FAT repair on the unmounted exact partition"
+  echo "--- automatic repair ---" >>"$LOG"
+  # R40 used -a -V in one process. R43 deliberately avoids -V and performs
+  # verification in a fresh read-only process after repair.
+  "$FSCK" -a "$EXPECTED_DEV" >>"$LOG" 2>&1
+  REPAIR_RC=$?
+  echo "repair_rc=$REPAIR_RC" >>"$LOG"
+  case "$REPAIR_RC" in
+    0|1) ;;
+    *) leave_readonly_if_possible; fail 59 "fat-repair-failed-rc-$REPAIR_RC" "$BACKUP";;
+  esac
+
+  progress RUNNING 76 "Verifying FAT filesystem" "Running an independent read-only check after repair"
+  echo "--- readonly verification ---" >>"$LOG"
+  "$FSCK" -n "$EXPECTED_DEV" >>"$LOG" 2>&1
+  VERIFY_RC=$?
+  echo "verify_rc=$VERIFY_RC" >>"$LOG"
+  [ "$VERIFY_RC" -eq 0 ] || { leave_readonly_if_possible; fail 60 "fat-verify-failed-rc-$VERIFY_RC" "$BACKUP"; }
+
+  progress RUNNING 84 "Verifying candidate read-only" "Mounting R36UPDATE read-only and checking any K1 candidate manifest"
+  mount_readonly_for_verify || fail 61 readonly-remount-failed "$BACKUP"
+  [ "$(device_uuid "$EXPECTED_DEV")" = "$EXPECTED_UUID" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 62 uuid-changed-after-repair "$BACKUP"; }
+  CID_AFTER="$(candidate_identity)"
+  MANIFEST_AFTER="$(sha256sum "$NEXT/K1/MANIFEST.sha256" 2>/dev/null | awk '{print $1}')"
+  [ "$CID_AFTER" = "$CID_BEFORE" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 63 candidate-id-changed "$BACKUP"; }
+  [ "$MANIFEST_AFTER" = "$MANIFEST_BEFORE" ] || { umount "$MOUNT" >/dev/null 2>&1; fail 64 candidate-manifest-changed "$BACKUP"; }
+  candidate_precheck || { umount "$MOUNT" >/dev/null 2>&1; fail 65 k1-candidate-postcheck-failed "$BACKUP"; }
+
+  progress RUNNING 94 "Final safety unmount" "Leaving R36UPDATE unmounted until the required clean reboot"
+  sync
+  umount "$MOUNT" >>"$LOG" 2>&1 || fail 66 final-readonly-unmount-failed "$BACKUP"
+  mountpoint -q "$MOUNT" 2>/dev/null && fail 67 final-unmount-not-confirmed "$BACKUP"
+
+  {
+    echo "candidate_id_before=$CID_BEFORE"
+    echo "candidate_id_after=$CID_AFTER"
+    echo "manifest_before=$MANIFEST_BEFORE"
+    echo "manifest_after=$MANIFEST_AFTER"
+    echo "backup_sha256=$(awk '{print $1}' "$BACKUP.sha256" 2>/dev/null)"
+    echo "fsck_sha256=$FSCK_SHA"
+    echo "help_rc=$HELP_RC"
+    echo "preflight_rc=$PREFLIGHT_RC"
+    echo "repair_rc=$REPAIR_RC"
+    echo "verify_rc=$VERIFY_RC"
+    echo 'reboot_required=yes'
+  } >"$LOGROOT/LAST-extra.conf"
+  save_log
+
+  progress PASS 100 "R36UPDATE repair verified" "Filesystem and any existing K1 candidate verified; clean reboot required before Boot Next Once"
+  result PASS_REBOOT_REQUIRED 0 repair-verified "$BACKUP"
+  echo "status=PASS_REBOOT_REQUIRED backup=$BACKUP help_rc=$HELP_RC preflight_rc=$PREFLIGHT_RC repair_rc=$REPAIR_RC verify_rc=$VERIFY_RC"
+  exit 0
+}
+
+case "$CMD" in
+  status) status;;
+  repair) repair;;
+  *) echo 'usage: r36os-r36update-repair status|repair' >&2; exit 2;;
+esac

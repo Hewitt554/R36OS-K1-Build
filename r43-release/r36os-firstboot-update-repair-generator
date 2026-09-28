@@ -1,0 +1,14 @@
+#!/bin/sh
+MARKER=/etc/r36os/r36update-repair-once.conf
+[ -f "$MARKER" ] || exit 0
+OUT="${1:-/run/systemd/generator}"
+mkdir -p "$OUT/multi-user.target.wants" /run 2>/dev/null || exit 1
+ln -sf /etc/systemd/system/r36os-firstboot-update-repair.service \
+  "$OUT/multi-user.target.wants/r36os-firstboot-update-repair.service" || exit 1
+{
+  echo 'format=R36OS_FIRSTBOOT_REPAIR_GENERATOR_V1'
+  echo 'status=ARMED'
+  echo "output=$OUT"
+  echo "time=$(date -Is 2>/dev/null || date)"
+} >/run/r36os-firstboot-update-repair-generator.status 2>/dev/null || true
+exit 0
