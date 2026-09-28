@@ -240,11 +240,11 @@ jobs:
           BUNDLE="$(tail -1 /tmp/r40-bundle-path)"
           test -s "$BUNDLE"
           mkdir remote-audit
-          tar -xzf "$BUNDLE" -C remote-audit
-          grep -R -q 'R36OS_R40_GAME_OS_SNAPSHOT_V1' remote-audit
-          grep -R -q 'SDL video: wayland not available' remote-audit
-          grep -R -q 'SDL-WAYLAND-UNAVAILABLE' remote-audit
-          if grep -R -E 'Audit Network With Spaces|temporary validation secret|alice:secret|192\.168\.9\.44|audit@example\.invalid' remote-audit; then
+          sudo tar -xzf "$BUNDLE" -C remote-audit
+          sudo grep -R -q 'R36OS_R40_GAME_OS_SNAPSHOT_V1' remote-audit
+          sudo grep -R -q 'SDL video: wayland not available' remote-audit
+          sudo grep -R -q 'SDL-WAYLAND-UNAVAILABLE' remote-audit
+          if sudo grep -R -E 'Audit Network With Spaces|temporary validation secret|alice:secret|192\.168\.9\.44|audit@example\.invalid' remote-audit; then
             echo 'private game-log data survived remote redaction' >&2
             exit 31
           fi
