@@ -1,0 +1,69 @@
+#!/bin/bash
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+MARKER=/etc/r36os/r36update-repair-once.conf
+LOGDIR=/r36state/logs/r36update-repair
+RESULT="$LOGDIR/FIRSTBOOT-UPDATE-REPAIR.conf"
+
+mkdir -p "$LOGDIR" 2>/dev/null || true
+cp -f /run/r36os-firstboot-update-repair-generator.status "$LOGDIR/GENERATOR.conf" 2>/dev/null || true
+
+# Keep the generic R41+ runtime and clean obsolete version-labelled WIP files.
+find /usr/local/bin -maxdepth 1 -type f -name 'r36os-r*-github-snapshot' -delete 2>/dev/null || true
+find /usr/local/bin -maxdepth 1 -type f -name 'r36os-r*-firstboot-repair' -delete 2>/dev/null || true
+find /usr/lib/systemd/system-generators -maxdepth 1 -type f -name 'r36os-r*-repair-generator' -delete 2>/dev/null || true
+find /etc/systemd/system -maxdepth 1 -type f -name 'r36os-r*-firstboot-repair.service' -delete 2>/dev/null || true
+find /etc/r36os -maxdepth 1 -type f -name 'r*-r36update-repair-once' -delete 2>/dev/null || true
+
+# Non-secret destination defaults. Preserve an existing device-local credential.
+mkdir -p /r36state/config 2>/dev/null || true
+if [ ! -s /r36state/config/github-diagnostics.conf ]; then
+  cat > /r36state/config/github-diagnostics.conf <<'EOF_CFG'
+format=R36OS_GITHUB_DIAGNOSTICS_V1
+mode=automatic
+repo=Hewitt554/R36OS-Device-Logs
+branch=main
+EOF_CFG
+  chmod 0600 /r36state/config/github-diagnostics.conf 2>/dev/null || true
+fi
+
+[ -f "$MARKER" ] || exit 0
+rm -f "$MARKER.failed" 2>/dev/null || true
+expected="$(awk -F= '$1=="release"{print $2;exit}' "$MARKER" 2>/dev/null)"
+[ "$expected" = 0.5.43.0 ] || {
+  printf 'status=FAIL\ndetail=marker-release-mismatch\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  mv -f "$MARKER" "$MARKER.failed" 2>/dev/null || rm -f "$MARKER"
+  exit 30
+}
+
+warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
+if [ -z "$warn" ]; then
+  printf 'status=SKIPPED\ndetail=no-mmcblk0p3-dirty-warning\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  rm -f "$MARKER"
+  exit 0
+fi
+
+/usr/local/bin/r36os-r36update-repair repair >"$LOGDIR/firstboot-console.txt" 2>&1
+rc=$?
+
+if [ "$rc" -eq 0 ] && grep -q '^status=PASS_REBOOT_REQUIRED$' /run/r36os-r36update-repair.result 2>/dev/null; then
+  printf 'status=PASS_REBOOT_REQUIRED\ndetail=repair-verified\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  rm -f "$MARKER"
+  /usr/local/bin/r36os-diagnostic-snapshot >/dev/null 2>&1 || true
+  if command -v r36os-github-diagnostics >/dev/null 2>&1; then
+    r36os-github-diagnostics capture 'r36update-repair-pass' >/dev/null 2>&1 || true
+  fi
+  sync
+  systemctl --no-block reboot
+  exit 0
+fi
+
+printf 'status=FAIL\ncode=%s\ndetail=repair-helper-failed\ntime=%s\n' "$rc" "$(date -Is 2>/dev/null || date)" >"$RESULT"
+/usr/local/bin/r36os-diagnostic-snapshot >/dev/null 2>&1 || true
+if command -v r36os-github-diagnostics >/dev/null 2>&1; then
+  r36os-github-diagnostics capture "r36update-repair-fail-$rc" >/dev/null 2>&1 || true
+fi
+mv -f "$MARKER" "$MARKER.failed" 2>/dev/null || rm -f "$MARKER"
+exit "$rc"
