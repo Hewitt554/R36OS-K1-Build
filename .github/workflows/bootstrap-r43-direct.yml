@@ -1,0 +1,19 @@
+name: Bootstrap clean R43 direct sources
+
+on:
+  push:
+    branches:
+      - work/r43-clean-rebuild-2026-09-28
+    paths:
+      - '.github/workflows/bootstrap-r43-direct.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Transport checkpoint only
+        run: echo R43_BOOTSTRAP_TRANSPORT_READY
