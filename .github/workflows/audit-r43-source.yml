@@ -22,12 +22,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (cd r43-release && sha256sum -c SOURCE_ARCHIVE.sha256)
+          RECORDED="$(awk '{print $1}' r43-release/SOURCE_ARCHIVE.sha256)"
+          ACTUAL="$(sha256sum r43-release/source.tar.gz | awk '{print $1}')"
+          printf 'recorded_sha256=%s\nactual_sha256=%s\n' "$RECORDED" "$ACTUAL" | tee /tmp/R43_ARCHIVE_IDENTITY.txt
           if tar -tzf r43-release/source.tar.gz | grep -E '(^/|(^|/)\.\.(/|$))'; then
             echo 'unsafe archive member' >&2
             exit 20
           fi
           mkdir -p extracted
+          cp /tmp/R43_ARCHIVE_IDENTITY.txt extracted/R43_ARCHIVE_IDENTITY.txt
           tar -xzf r43-release/source.tar.gz -C extracted
           find extracted -type f -printf '%P\n' | sort | tee extracted/FILE_LIST.txt
           find extracted -type f -name '*.sh' -o -type f -name 'r36os-*' | while read -r f; do
