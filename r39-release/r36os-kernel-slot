@@ -10,7 +10,11 @@ VERSION_HELPER="${R36OS_VERSION_HELPER:-/usr/local/bin/r36os-version}"
 PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
 sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
-marker_paths(){ [ -n "${CID:-}" ] || return 1; REQ="$NEXT/boot-next.$CID.once"; CONSUMED="$NEXT/boot-next.$CID.consumed"; }
+marker_paths(){
+  [ -n "${CID:-}" ] || return 1
+  REQ="$NEXT/boot-next.$CID.once"
+  CONSUMED="$NEXT/boot-next.$CID.consumed"
+}
 verify_candidate(){
   [ "$("$VERSION_HELPER" version 2>/dev/null)" = 0.5.39.0 ] || return 19
   "$PREFLIGHT" "$K1" >/dev/null 2>&1 || return $?
@@ -23,6 +27,7 @@ verify_candidate(){
   [ "$(val "$K1/K1.conf" boot_mode)" = R36OS_K1_BOOT_ONCE ] || return 26
   CID="$(val "$K1/K1.conf" candidate_id)"; echo "$CID" | grep -Eq '^[0-9a-f]{24}$' || return 29
   marker_paths || return 30
+  return 0
 }
 verify_hook(){
   [ -s "$META" ] && [ -s "$BOOT" ] || return 40
@@ -32,6 +37,7 @@ verify_hook(){
   [ "$(sha "$BOOT")" = "$H" ] || return 43
   grep -qF '# R36OS-K1-BOOT-ONCE-HOOK' "$BOOT" || return 44
   grep -qF "# candidate_id=$CID" "$BOOT" || return 45
+  return 0
 }
 arm(){
   [ "$UNLOCK" = 1 ] || { echo 'status=FAIL code=95 detail=r39-runtime-lock'; return 95; }
@@ -41,14 +47,19 @@ arm(){
   [ ! -e "$CONSUMED" ] || return 61
   MID="$(sha "$K1/MANIFEST.sha256")"
   { echo 'format=R36OS_K1_BOOT_REQUEST_V1'; echo "candidate_id=$CID"; echo "candidate_manifest_sha256=$MID"; } >"$REQ.tmp" || return 62
-  sync; mv -f "$REQ.tmp" "$REQ" || return 63; sync
+  sync
+  mv -f "$REQ.tmp" "$REQ" || return 63
+  sync
   [ "$(val "$REQ" candidate_id)" = "$CID" ] || return 64
   [ "$(val "$REQ" candidate_manifest_sha256)" = "$MID" ] || return 65
   echo "status=PASS candidate_id=$CID"
 }
 disarm(){
   verify_candidate >/dev/null 2>&1
-  [ $? -eq 0 ] && rm -f "$REQ" "$CONSUMED" "$REQ.tmp"
+  if [ $? -eq 0 ]; then
+    rm -f "$REQ" "$CONSUMED" "$REQ.tmp"
+  fi
+  # Also clear obsolete generic CP06-prestage markers; never touch candidate payloads.
   rm -f "$NEXT/boot-next.once" "$NEXT/boot-next.consumed" "$NEXT/boot-next.once.tmp"
   sync; echo status=PASS
 }
@@ -58,6 +69,8 @@ status(){
   if [ -n "$REQ" ]; then
     echo "request_path=$REQ"; echo "consumed_path=$CONSUMED"
     echo "armed=$([ -s "$REQ" ]&&echo yes||echo no)"; echo "consumed=$([ -s "$CONSUMED" ]&&echo yes||echo no)"
-  else echo "armed=no"; echo "consumed=no"; fi
+  else
+    echo "armed=no"; echo "consumed=no"
+  fi
 }
 case "$CMD" in status) status;; arm-once) arm;; disarm) disarm;; *) echo 'usage: status|arm-once|disarm' >&2; exit 2;; esac

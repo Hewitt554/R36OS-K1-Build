@@ -12,9 +12,13 @@ EXPECTED_ROOT='e139ce78-9841-40fe-8823-96a304a09859'
 EXPECTED_STATE='a25488c6-742d-4555-82d1-e28ffc848af3'
 EXPECTED_MODEL='R36OS R36S K1 Panel 4'
 PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
+
 sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
-cmdval(){ [ -r "$CMDLINE" ] || return 1; tr ' ' '\n' <"$CMDLINE" | awk -F= -v k="$1" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\""; }
+cmdval(){
+  [ -r "$CMDLINE" ] || return 1
+  tr ' ' '\n' <"$CMDLINE" | awk -F= -v k="$1" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\""
+}
 valid_cid(){ echo "$1" | grep -Eq '^[0-9a-f]{24}$'; }
 verify_candidate(){
   "$PREFLIGHT" "$K1" >/dev/null 2>&1 || return $?
@@ -31,6 +35,7 @@ verify_candidate(){
   CID="$(val "$K1/K1.conf" candidate_id)"; valid_cid "$CID" || return 29
   REQ="$NEXT/boot-next.$CID.once"; CONSUMED="$NEXT/boot-next.$CID.consumed"
   MANSHA="$(sha "$K1/MANIFEST.sha256")"; [ -n "$MANSHA" ] || return 31
+  return 0
 }
 verify_request(){
   [ -s "$REQ" ] && [ -s "$CONSUMED" ] || return 50
@@ -38,6 +43,7 @@ verify_request(){
   [ "$(val "$REQ" candidate_id)" = "$CID" ] || return 52
   [ "$(val "$REQ" candidate_manifest_sha256)" = "$MANSHA" ] || return 53
   [ "$(sha "$CONSUMED")" = "$(sha "$REQ")" ] || return 54
+  return 0
 }
 write_record(){
   KIND="$1"; OUTDIR="$STATE/logs/kernel-next"; OUT="$OUTDIR/$KIND-$CID.conf"; TMP="$OUT.tmp"
@@ -52,10 +58,13 @@ write_record(){
     echo "legacy_boot_untouched=yes"
     echo "watchdog_armed=no"
   } >"$TMP" || return 71
-  sync; mv -f "$TMP" "$OUT" || return 72; sync
+  sync
+  mv -f "$TMP" "$OUT" || return 72
+  sync
   [ "$(val "$OUT" candidate_id)" = "$CID" ] || return 73
   [ "$(val "$OUT" status)" = "$KIND" ] || return 74
   RECORD="$OUT"
+  return 0
 }
 clear_markers(){ rm -f "$REQ" "$CONSUMED" "$REQ.tmp"; sync; [ ! -e "$REQ" ] && [ ! -e "$CONSUMED" ]; }
 
@@ -63,6 +72,7 @@ verify_candidate || { R=$?; echo "status=FAIL code=$R detail=candidate-verificat
 SLOT="$(cmdval r36os.kernel_slot)"; ATTEMPT="$(cmdval r36os.kernel_attempt)"; BOOTCID="$(cmdval r36os.kernel_candidate)"
 
 if [ "$SLOT" = next ]; then
+  # A K1 userspace health pass must be tied to the exact armed candidate.
   [ "$ATTEMPT" = K1 ] || { echo 'status=FAIL code=80 detail=attempt-identity'; exit 80; }
   [ "$BOOTCID" = "$CID" ] || { echo 'status=FAIL code=81 detail=candidate-identity'; exit 81; }
   [ "$(cmdval root)" = "UUID=$EXPECTED_ROOT" ] || { echo 'status=FAIL code=82 detail=root-identity'; exit 82; }
@@ -92,10 +102,12 @@ if [ "$SLOT" = next ]; then
   exit 0
 fi
 
+# Legacy userspace: request-only means a future one-shot is still pending; do not disturb it.
 if [ -s "$REQ" ] && [ ! -e "$CONSUMED" ]; then
   echo "status=PASS result=ARMED_PENDING candidate_id=$CID"
   exit 0
 fi
+# A consumed request while legacy is running means K1 did not reach/retain healthy userspace.
 if [ -s "$REQ" ] && [ -s "$CONSUMED" ]; then
   verify_request || { R=$?; echo "status=FAIL code=$R detail=fallback-request-chain"; exit "$R"; }
   write_record FALLBACK || { R=$?; echo "status=FAIL code=$R detail=fallback-record"; exit "$R"; }
@@ -120,9 +132,12 @@ if [ -s "$REQ" ] && [ -s "$CONSUMED" ]; then
   echo "status=PASS result=K1_FALLBACK_RECORDED candidate_id=$CID pstore_files=$COPIED record=$RECORD"
   exit 0
 fi
+
+# Consumed-without-request is anomalous. Preserve it for diagnostics instead of silently clearing it.
 if [ ! -e "$REQ" ] && [ -s "$CONSUMED" ]; then
   echo "status=FAIL code=94 detail=orphan-consumed-marker"
   exit 94
 fi
+
 echo "status=PASS result=NO_K1_ATTEMPT candidate_id=$CID"
 exit 0

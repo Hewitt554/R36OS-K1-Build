@@ -38,11 +38,14 @@ progress RUNNING 8 "K1 candidate verified" "Checking R36UPDATE safety"
 CID="$(val "$SRC/K1.conf" candidate_id)"; [ -n "$CID" ] || fail 12 candidate-id
 [ -s "$HOOK" ] && [ -s "$META_SRC" ] || fail 13 packaged-hook-missing
 [ "$(val "$META_SRC" candidate_id)" = "$CID" ] || fail 14 packaged-hook-candidate
+# R36UPDATE must be the frozen SD1 update partition, not merely any writable directory.
 mountpoint -q "$UPDATE_MOUNT" 2>/dev/null || fail 20 r36update-not-mounted
 DEV="$(findmnt -n -o SOURCE "$UPDATE_MOUNT" 2>/dev/null | head -1)"; [ -n "$DEV" ] || fail 21 r36update-source
 UUID="$(blkid -s UUID -o value "$DEV" 2>/dev/null | tr 'a-f' 'A-F')"; [ "$UUID" = "$EXPECTED_UPDATE_UUID" ] || fail 22 r36update-uuid
 [ -w "$UPDATE_MOUNT" ] || fail 23 r36update-readonly
 progress RUNNING 14 "R36UPDATE verified" "Checking FAT health and staging area"
+# Refuse only if the FAT warning belongs to the actual mounted R36UPDATE device.
+# Earlier R38 code treated a warning from any FAT volume (including BOOT) as R36UPDATE.
 DEV_REAL="$(readlink -f "$DEV" 2>/dev/null || printf '%s' "$DEV")"
 DEV_BASE="${DEV_REAL##*/}"
 FSTYPE="$(findmnt -n -o FSTYPE "$UPDATE_MOUNT" 2>/dev/null | head -1)"
@@ -64,12 +67,14 @@ case ",$MOPTS," in *,ro,*) fail 23 r36update-readonly;; esac
 if [ -n "$FAT_WARN" ]; then fail 25 "r36update-fat-health-$DEV_BASE"; fi
 mkdir -p "$NEXT" || fail 24 next-root-create
 progress RUNNING 18 "Checking update space" "Reserving room for the verified K1 candidate"
+# A fresh candidate copy needs its full staged size plus 64 MiB FAT headroom.
 if [ ! -d "$DST" ]; then
   SRC_KB="$(du -sk "$SRC" 2>/dev/null | awk '{print $1}')"; echo "$SRC_KB" | grep -Eq '^[0-9]+$' || fail 26 r36update-space-measure
   UPDATE_AVAIL_KB="$(df -Pk "$UPDATE_MOUNT" 2>/dev/null | awk 'NR>1{v=$4} END{print v}')"; echo "$UPDATE_AVAIL_KB" | grep -Eq '^[0-9]+$' || fail 26 r36update-space-measure
   UPDATE_NEED_KB=$((SRC_KB + 65536)); [ "$UPDATE_AVAIL_KB" -ge "$UPDATE_NEED_KB" ] || fail 26 r36update-space
 fi
 progress RUNNING 20 "Staging K1 candidate" "Copying verified Boot Once payload"
+# Stage via a fresh sibling directory and never overwrite an unknown/different candidate.
 if [ -d "$DST" ]; then
   "$PREFLIGHT" "$DST" >/dev/null 2>&1 || fail 30 existing-candidate-invalid
   [ "$(sha "$DST/MANIFEST.sha256")" = "$(sha "$SRC/MANIFEST.sha256")" ] || fail 31 different-candidate-present
@@ -81,6 +86,7 @@ else
   mv "$TMP" "$DST" || { rm -rf "$TMP"; fail 35 stage-rename; }
   sync
 fi
+# Candidate-bound metadata can be installed before the hook; it cannot affect boot by itself.
 cp -f "$META_SRC" "$META.tmp" || fail 40 hook-meta-copy
 sync "$META.tmp" 2>/dev/null || sync
 mv -f "$META.tmp" "$META" || fail 41 hook-meta-activate
@@ -91,6 +97,7 @@ if [ "$CMD" = stage-only ]; then
 fi
 [ "$CMD" = arm-once ] || fail 2 usage
 progress RUNNING 32 "Checking R36STATE" "Verifying module storage partition"
+# The K1 module tree is staged on expanded R36STATE, never over legacy 4.4 modules.
 mountpoint -q "$STATE_MOUNT" 2>/dev/null || fail 60 r36state-not-mounted
 SDEV="$(findmnt -n -o SOURCE "$STATE_MOUNT" 2>/dev/null | head -1)"; [ -n "$SDEV" ] || fail 61 r36state-source
 SUUID="$(blkid -s UUID -o value "$SDEV" 2>/dev/null | tr 'A-F' 'a-f')"; [ "$SUUID" = "$EXPECTED_STATE_UUID" ] || fail 62 r36state-uuid
@@ -124,6 +131,7 @@ else
   progress RUNNING 42 "Preparing K1 modules" "Validating module archive before extraction"
   mkdir -p "$MODBASE" || fail 68 modules-root-create
   TMPM="$MODBASE/.stage-$CID-$$"; rm -rf "$TMPM"; mkdir -p "$TMPM" || fail 69 modules-stage-create
+  # Authenticated archive is already covered by K1 MANIFEST; reject unsafe paths/links before extraction.
   tar -tJf "$DST/modules.tar.xz" >/run/r36os-k1-modules-list.$$ 2>/dev/null || { rm -rf "$TMPM"; fail 70 modules-list; }
   if grep -Eq '(^/|(^|/)\.\.(/|$))' /run/r36os-k1-modules-list.$$; then rm -rf "$TMPM" /run/r36os-k1-modules-list.$$; fail 71 modules-path; fi
   if tar -tvJf "$DST/modules.tar.xz" 2>/dev/null | awk 'substr($1,1,1)=="l" || substr($1,1,1)=="h" {bad=1} END{exit bad?0:1}'; then rm -rf "$TMPM" /run/r36os-k1-modules-list.$$; fail 72 modules-link; fi
@@ -151,6 +159,7 @@ else
   verify_modules || fail 81 modules-readback
   progress RUNNING 82 "K1 modules ready" "R36STATE module tree verified"
 fi
+# This is the first boot-affecting operation and happens only after explicit user action.
 progress RUNNING 88 "Installing one-shot boot guard" "Preserving exact legacy boot recovery copy"
 "$HOOK_INSTALL" "$HOOK" "$META" >/run/r36os-k1-hook-install.result 2>&1 || fail 50 hook-install
 progress RUNNING 95 "Arming next boot only" "Writing candidate-bound one-shot request"

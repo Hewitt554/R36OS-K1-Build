@@ -53,7 +53,39 @@ ensure_device_id(){
 }
 redact_file(){
   f="$1"; [ -f "$f" ] || return 0
-  sed -E -i     -e 's/(Authorization:[[:space:]]*).*/\1<REDACTED>/Ig'     -e 's/((password|passwd|passphrase|psk|token|authorization|secret|cookie)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1<REDACTED>/Ig'     -e 's/((ssid|essid)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1<REDACTED>/Ig'     -e 's/([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}/<REDACTED-MAC>/g'     -e 's/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<REDACTED-IPV4>/g'     "$f" 2>/dev/null || true
+  # Privacy-first redaction. Diagnostic bundles are deliberately smaller than
+  # manual exports, so it is better to hide extra network/account text than to
+  # risk leaking credentials or identity data to the remote logs repository.
+  sed -E -i \
+    -e 's/(Authorization:[[:space:]]*).*/\1<REDACTED>/Ig' \
+    -e 's/((Bearer|Basic)[[:space:]]+)[A-Za-z0-9._~+\/=:-]+/\1<REDACTED>/Ig' \
+    -e 's#https?://[^[:space:]"<>]+#<REDACTED-URL>#Ig' \
+    -e 's/github_pat_[A-Za-z0-9_]+/<REDACTED-GITHUB-TOKEN>/g' \
+    -e 's/gh[pousr]_[A-Za-z0-9_]+/<REDACTED-GITHUB-TOKEN>/g' \
+    -e 's/^([[:space:]]*[A-Za-z0-9_.-]*(password|passwd|passphrase|psk|token|authorization|secret|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)[A-Za-z0-9_.-]*[[:space:]]*[=:][[:space:]]*).*/\1<REDACTED>/Ig' \
+    -e 's/^([[:space:]]*"(password|passwd|passphrase|psk|token|authorization|secret|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)"[[:space:]]*:[[:space:]]*).*/\1"<REDACTED>"/Ig' \
+    -e 's/^([[:space:]]*(password|passwd|passphrase|psk|token|authorization|secret|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)[[:space:]]+).*/\1<REDACTED>/Ig' \
+    -e 's/^([[:space:]]*(ssid|essid|802-11-wireless\.ssid)[[:space:]]*[=:][[:space:]]*).*/\1<REDACTED>/Ig' \
+    -e 's/(ESSID:).*/\1<REDACTED>/Ig' \
+    -e 's/([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}/<REDACTED-MAC>/g' \
+    -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<REDACTED-IPV4>/g' \
+    -e 's/([[:xdigit:]]{1,4}:){3,}[[:xdigit:]:]{1,39}/<REDACTED-IPV6>/g' \
+    -e 's/(^|[[:space:]])[[:xdigit:]]{1,4}::[[:xdigit:]:]*/\1<REDACTED-IPV6>/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<REDACTED-EMAIL>/g' \
+    "$f" 2>/dev/null || return 1
+  return 0
+}
+privacy_scan_file(){
+  f="$1"; [ -f "$f" ] || return 0
+  # Fail closed if a recognizable secret/network identifier survives redaction.
+  if grep -Eiv '<REDACTED' "$f" 2>/dev/null | grep -Eiq \
+    'Authorization:[[:space:]]*(Bearer|Basic)|(^|[^A-Za-z0-9_])(password|passwd|passphrase|psk|token|secret|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|ssid|essid)[[:space:]]*[=:]|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+'; then
+    return 1
+  fi
+  if grep -Eq '([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}|([0-9]{1,3}\.){3}[0-9]{1,3}|https?://|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$f" 2>/dev/null; then
+    return 1
+  fi
+  return 0
 }
 import_config(){
   ensure_dirs || return 1
@@ -63,7 +95,7 @@ import_config(){
     if [ -s "$c" ]; then
       fmt="$(val "$c" format)"; mode="$(val "$c" mode)"; repo="$(val "$c" repo)"; branch="$(val "$c" branch)"
       [ "$fmt" = R36OS_GITHUB_DIAGNOSTICS_V1 ] || continue
-      case "$mode" in automatic|ask|off) ;; *) continue;; esac
+      case "$mode" in automatic|off) ;; *) continue;; esac
       echo "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || continue
       echo "${branch:-main}" | grep -Eq '^[A-Za-z0-9._/-]+$' || continue
       umask 077
@@ -80,7 +112,14 @@ import_config(){
       if [ "${#tok}" -ge 20 ] && [ "${#tok}" -le 512 ]; then
         umask 077; printf '%s\n' "$tok" >"$TOKEN_FILE.tmp" && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE"
         chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
+        # A transport copy must not be left behind on BOOT/R36UPDATE/SD2. If it
+        # cannot be removed, discard the imported copy and require the user to
+        # fix the transport location before remote upload can become active.
         rm -f "$t" 2>/dev/null || true
+        if [ -e "$t" ]; then
+          rm -f "$TOKEN_FILE" 2>/dev/null || true
+          write_status ERROR token-transport-removal-failed "" "$root"
+        fi
       fi
       unset tok
     fi
@@ -125,7 +164,11 @@ capture(){
   (cat /proc/cmdline 2>/dev/null >"$tmp/cmdline.txt") || true
   (lsmod 2>/dev/null >"$tmp/lsmod.txt") || true
   (journalctl -b -u r36os-kernel-next-health.service --no-pager -n 400 2>/dev/null >"$tmp/kernel-next-health-journal.txt") || true
-  for f in "$tmp"/*; do [ -f "$f" ] && redact_file "$f"; done
+  for f in "$tmp"/*; do
+    [ -f "$f" ] || continue
+    redact_file "$f" || { rm -rf "$tmp"; write_status ERROR redaction-failed; return 27; }
+    privacy_scan_file "$f" || { rm -rf "$tmp"; write_status ERROR privacy-scan-failed; return 28; }
+  done
   bundle="$QUEUE/R36OS-${tag}-diag-${stamp}-${reason}-${DEVICE_ID}.tar.gz"
   tar -C "$tmp" -czf "$bundle.tmp" . >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-create; return 23; }
   tar -tzf "$bundle.tmp" >/dev/null 2>&1 || { rm -rf "$tmp" "$bundle.tmp"; write_status ERROR archive-verify; return 24; }
@@ -134,6 +177,7 @@ capture(){
   mv -f "$bundle.tmp" "$bundle" || { rm -rf "$tmp"; return 26; }
   sha256sum "$bundle" >"$bundle.sha256" 2>/dev/null || true
   rm -rf "$tmp"
+  # Keep queue bounded even while offline/not configured.
   ls -1t "$QUEUE"/*.tar.gz 2>/dev/null | awk 'NR>12' | while IFS= read -r old; do rm -f "$old" "$old.sha256" 2>/dev/null || true; done
   write_status QUEUED "$reason" "$bundle"
   printf '%s\n' "$bundle"
@@ -143,9 +187,23 @@ load_config(){
   import_config >/dev/null 2>&1 || true
   MODE="$(val "$CFG" mode)"; REPO="$(val "$CFG" repo)"; BRANCH="$(val "$CFG" branch)"
   [ -n "$BRANCH" ] || BRANCH=main
-  case "$MODE" in automatic|ask|off) ;; *) MODE=off;; esac
+  case "$MODE" in automatic|off) ;; *) MODE=off;; esac
   echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || REPO=""
   echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || BRANCH=main
+}
+verify_private_repo(){
+  token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 1; }
+  resp="$BASE/.repo-check-$$.json"
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 15 --max-time 45 --retry 1 \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$API_BASE/repos/$REPO" 2>/dev/null)"
+  unset token
+  ok=1
+  if [ "$code" = 200 ] && grep -Eq '"private"[[:space:]]*:[[:space:]]*true' "$resp" 2>/dev/null; then ok=0; fi
+  rm -f "$resp" 2>/dev/null || true
+  return "$ok"
 }
 upload_one(){
   b="$1"; [ -s "$b" ] || return 1
@@ -160,7 +218,14 @@ upload_one(){
     base64 -w 0 "$b" 2>/dev/null
     printf '"}\n'
   } >"$req" || { rm -f "$req"; unset token; return 4; }
-  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 20 --max-time 180 --retry 2     -X PUT     -H "Authorization: Bearer $token"     -H 'Accept: application/vnd.github+json'     -H 'X-GitHub-Api-Version: 2022-11-28'     -H 'Content-Type: application/json'     --data-binary "@$req"     "$API_BASE/repos/$REPO/contents/$remote" 2>/dev/null)"
+  code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 20 --max-time 180 --retry 2 \
+    -X PUT \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$req" \
+    "$API_BASE/repos/$REPO/contents/$remote" 2>/dev/null)"
   unset token; rm -f "$req"
   case "$code" in
     200|201)
@@ -170,6 +235,7 @@ upload_one(){
       REMOTE_PATH="$remote"
       return 0;;
     *)
+      # Keep only the HTTP status; GitHub response bodies may contain identifiers.
       printf 'http_status=%s\n' "$code" >"$BASE/last-upload-error.txt" 2>/dev/null || true
       rm -f "$resp"
       return 6;;
@@ -180,10 +246,12 @@ upload_queued(){
   load_config
   count="$(find "$QUEUE" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
   [ "$count" -gt 0 ] || { write_status IDLE no-queued-bundles; return 0; }
-  [ "$MODE" != off ] || { write_status QUEUED upload-disabled; return 0; }
+  [ "$MODE" = automatic ] || { write_status QUEUED upload-disabled; return 0; }
   [ -n "$REPO" ] || { write_status QUEUED_NOT_CONFIGURED private-repo-not-configured; return 0; }
+  [ "$REPO" != 'Hewitt554/R36OS-K1-Build' ] || { write_status QUEUED_NOT_CONFIGURED public-build-repo-forbidden; return 0; }
   [ -s "$TOKEN_FILE" ] || { write_status QUEUED_NOT_CONFIGURED token-not-configured; return 0; }
   command -v curl >/dev/null 2>&1 || { write_status QUEUED curl-unavailable; return 0; }
+  verify_private_repo || { write_status QUEUED_NOT_CONFIGURED private-repo-required-or-inaccessible; return 0; }
   sent=0
   for b in $(ls -1tr "$QUEUE"/*.tar.gz 2>/dev/null | head -4); do
     if upload_one "$b"; then sent=$((sent+1)); write_status UPLOADED "sent=$sent" "$SENT/$(basename "$b")" "$REMOTE_PATH"; else write_status QUEUED upload-failed "$b"; break; fi
@@ -194,20 +262,38 @@ upload_queued(){
 selftest(){
   t="${TMPDIR:-/tmp}/r36os-github-diag-selftest.$$"; mkdir -p "$t" || exit 1
   cat >"$t/sample.txt" <<'S'
-ssid=MyHome
-password=hunter2
-psk=abcdef
-Authorization: Bearer abcdef
+ssid=My Home WiFi
+ssid="Family Network 5G"
+ESSID:"Quoted Network With Spaces"
+802-11-wireless.ssid: Cafe WiFi Guest
+password=hunter2 with spaces
+passwd: "odd value with spaces"
+psk = 'correct horse battery staple'
+wifi-sec.psk: another secret phrase
+token=abc.def.ghi
+"access_token": "json-token-value"
+client_secret super-secret-cli-value
+Authorization: Bearer abcdef.12345
+proxy=https://alice:pw@example.invalid/path?q=secret&token=abc
+raw_github=github_pat_11AAABBBCCCDDDEEE
+legacy_token=ghp_1234567890abcdefghijk
 mac=aa:bb:cc:dd:ee:ff
 ip=192.168.1.22
+ipv6=fe80:1:2:3:4:5:6:7
+email=user@example.com
 candidate_id=e551eb6598d6da7a8e8320e9
+kernel_release=6.12.94-r36os-k1
 S
-  redact_file "$t/sample.txt"
-  grep -q '<REDACTED>' "$t/sample.txt" || { rm -rf "$t"; exit 2; }
-  grep -q '<REDACTED-MAC>' "$t/sample.txt" || { rm -rf "$t"; exit 3; }
-  grep -q '<REDACTED-IPV4>' "$t/sample.txt" || { rm -rf "$t"; exit 4; }
-  grep -q 'candidate_id=e551eb6598d6da7a8e8320e9' "$t/sample.txt" || { rm -rf "$t"; exit 5; }
-  if grep -Eq 'MyHome|hunter2|abcdef|aa:bb:cc:dd:ee:ff|192\.168\.1\.22' "$t/sample.txt"; then rm -rf "$t"; exit 6; fi
+  redact_file "$t/sample.txt" || { rm -rf "$t"; exit 2; }
+  privacy_scan_file "$t/sample.txt" || { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 3; }
+  grep -q 'candidate_id=e551eb6598d6da7a8e8320e9' "$t/sample.txt" || { rm -rf "$t"; exit 4; }
+  grep -q 'kernel_release=6.12.94-r36os-k1' "$t/sample.txt" || { rm -rf "$t"; exit 5; }
+  for secret in 'My Home WiFi' 'Family Network 5G' 'Quoted Network With Spaces' 'Cafe WiFi Guest' \
+    hunter2 'odd value with spaces' 'correct horse battery staple' 'another secret phrase' \
+    abc.def.ghi json-token-value super-secret-cli-value abcdef.12345 alice:pw github_pat_ ghp_ \
+    aa:bb:cc:dd:ee:ff 192.168.1.22 fe80:1:2:3:4:5:6:7 user@example.com; do
+    grep -Fq "$secret" "$t/sample.txt" && { cat "$t/sample.txt" >&2; rm -rf "$t"; exit 6; }
+  done
   rm -rf "$t"; echo 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'; exit 0
 }
 
