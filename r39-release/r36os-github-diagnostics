@@ -157,6 +157,46 @@ capture(){
   cp -f /run/r36os-github-update.status "$tmp/github-update-status.txt" 2>/dev/null || true
   cp -f /r36state/logs/kernel-next/*.conf "$tmp/" 2>/dev/null || true
   if [ -s /r36update/R36OS-KernelNext/K1/K1.conf ]; then cp -f /r36update/R36OS-KernelNext/K1/K1.conf "$tmp/K1.conf"; elif [ -s /opt/r36os/kernel-next/K1/K1.conf ]; then cp -f /opt/r36os/kernel-next/K1/K1.conf "$tmp/K1.conf"; fi
+
+  # General R36OS/game troubleshooting evidence. Keep each potentially noisy file
+  # bounded; every copied file still passes the same redaction + privacy scan below.
+  cp -f /run/r36os-game-launch.result "$tmp/game-launch-result.txt" 2>/dev/null || true
+  cp -f /run/r36os-game-session.progress "$tmp/game-session-progress.txt" 2>/dev/null || true
+  cp -f /run/r36os-manual-games.tsv "$tmp/game-catalog.tsv" 2>/dev/null || true
+  (systemctl --failed --no-pager 2>/dev/null >"$tmp/systemd-failed.txt") || true
+  (tail -c 524288 /r36state/logs/r36os-resource.log 2>/dev/null >"$tmp/resource-log-tail.txt") || true
+
+  GSDIR="$(cat /run/r36os-current-game-session 2>/dev/null)"
+  [ -d "$GSDIR" ] || GSDIR="$(cat /r36state/logs/game-sessions/LATEST 2>/dev/null)"
+  if [ ! -d "$GSDIR" ]; then
+    GCONF="$(find /r36state/logs/game-sessions -mindepth 3 -maxdepth 3 -name session.conf -type f -printf '%T@|%p\n' 2>/dev/null | sort -nr | head -1 | cut -d'|' -f2-)"
+    [ -n "$GCONF" ] && GSDIR="$(dirname "$GCONF")"
+  fi
+  GSREAL="$(readlink -f "$GSDIR" 2>/dev/null)"
+  case "$GSREAL" in
+    /r36state/logs/game-sessions/*)
+      mkdir -p "$tmp/latest-game-session"
+      for gf in session.conf session.log session.partial.log game-output.log milestones.log launch-results.log performance-summary.txt performance-live.csv linux-preflight.txt weston-session.log; do
+        [ -f "$GSREAL/$gf" ] || continue
+        tail -c 1048576 "$GSREAL/$gf" >"$tmp/latest-game-session/$gf" 2>/dev/null || true
+      done
+      printf 'latest_game_session=%s\n' "$(basename "$(dirname "$GSREAL")")/$(basename "$GSREAL")" >>"$tmp/summary.conf"
+      ;;
+  esac
+
+  OSDIR="$(cat /run/r36os-alpha5-logdir 2>/dev/null)"
+  [ -d "$OSDIR" ] || OSDIR="$(find /r36state/logs -maxdepth 1 -type d -name 'alpha5r*-*' -printf '%T@|%p\n' 2>/dev/null | sort -nr | head -1 | cut -d'|' -f2-)"
+  OSREAL="$(readlink -f "$OSDIR" 2>/dev/null)"
+  case "$OSREAL" in
+    /r36state/logs/alpha5r*-*)
+      mkdir -p "$tmp/latest-os-session"
+      for of in ui.log manual-game-scan.log graphics-test-latest.conf benchmark-suite-latest.txt; do
+        [ -f "$OSREAL/$of" ] || continue
+        tail -c 1048576 "$OSREAL/$of" >"$tmp/latest-os-session/$of" 2>/dev/null || true
+      done
+      ;;
+  esac
+
   (dmesg 2>/dev/null | tail -2500 >"$tmp/dmesg-tail.txt") || true
   (findmnt /boot /r36update /r36state /roms2 2>/dev/null >"$tmp/mounts.txt") || true
   (df -hT /boot /r36update /r36state /roms2 2>/dev/null >"$tmp/storage.txt") || true
