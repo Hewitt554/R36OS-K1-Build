@@ -1,0 +1,145 @@
+name: Stage R43 small source files
+
+on:
+  push:
+    branches:
+      - work/r43-source-staging-2026-09-28
+    paths:
+      - '.github/workflows/stage-r43-source-small.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write audited small source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p r43-release
+
+          cat > r43-release/build_fsck.sh <<'EOF_BUILD_FSCK'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SRC="${1:?dosfstools-4.2.tar.gz required}"
+          OUT="${2:?output directory required}"
+          EXPECTED_SRC='64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527'
+          WORK="${RUNNER_TEMP:-/tmp}/r36os-r43-fsck"
+          rm -rf "$WORK" "$OUT"
+          mkdir -p "$WORK/src" "$OUT"
+          [[ "$(sha256sum "$SRC" | awk '{print $1}')" == "$EXPECTED_SRC" ]] || { echo source-sha-mismatch >&2; exit 10; }
+          tar -xzf "$SRC" -C "$WORK/src" --strip-components=1
+          cd "$WORK/src"
+          ./configure --host=aarch64-linux-gnu --without-iconv CC=aarch64-linux-gnu-gcc CFLAGS='-O2 -fno-plt' LDFLAGS='-static'
+          make -j2
+          test -x src/fsck.fat
+          cp src/fsck.fat "$OUT/fsck.fat-static"
+          chmod 0755 "$OUT/fsck.fat-static"
+          sha256sum "$OUT/fsck.fat-static" | sed 's#  .*/#  #' >"$OUT/fsck.fat-static.sha256"
+          cat >"$OUT/BUILD_INFO.txt" <<'EOF_INFO'
+          format=R36OS_FSCK_BUILD_V1
+          upstream=dosfstools/dosfstools
+          version=4.2
+          source_sha256=64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527
+          toolchain_os=ubuntu-20.04
+          arch=aarch64
+          link=static
+          iconv=disabled
+          locale=C
+          purpose=R36OS R43 offline R36UPDATE FAT repair
+          EOF_INFO
+          EOF_BUILD_FSCK
+
+          cat > r43-release/build_fixture.sh <<'EOF_BUILD_FIXTURE'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          OUT="${1:?output directory required}"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          IMG="$OUT/fsck-selftest.img"
+          truncate -s 64M "$IMG"
+          mkfs.fat -F 32 -n R36TEST -i 52343354 "$IMG" >/dev/null
+          printf 'R36OS-R43-FSCK-SELFTEST\n' >"$OUT/fixture-note.txt"
+          gzip -9 -n "$IMG"
+          sha256sum "$OUT/fsck-selftest.img.gz" | sed 's#  .*/#  #' >"$OUT/fsck-selftest.img.gz.sha256"
+          EOF_BUILD_FIXTURE
+
+          cat > r43-release/qemu-fsck-wrapper.sh <<'EOF_QEMU'
+          #!/bin/sh
+          : "${R36OS_FSCK_QEMU_BIN:?R36OS_FSCK_QEMU_BIN is required}"
+          exec /usr/bin/qemu-aarch64-static "$R36OS_FSCK_QEMU_BIN" "$@"
+          EOF_QEMU
+
+          cat > r43-release/fat_fixture_tool.py <<'EOF_PY'
+          #!/usr/bin/env python3
+          from pathlib import Path
+          import struct, sys
+
+          if len(sys.argv) != 3 or sys.argv[1] not in {"dirty", "assert-clean"}:
+              raise SystemExit("usage: fat_fixture_tool.py dirty|assert-clean IMAGE")
+          mode, name = sys.argv[1], sys.argv[2]
+          p = Path(name)
+          b = bytearray(p.read_bytes())
+          if len(b) < 4096:
+              raise SystemExit("image too small")
+          sector_size = struct.unpack_from("<H", b, 11)[0]
+          reserved = struct.unpack_from("<H", b, 14)[0]
+          fats = b[16]
+          fat_len = struct.unpack_from("<I", b, 36)[0]
+          if sector_size not in (512,1024,2048,4096) or reserved < 1 or fats < 1 or fat_len < 1:
+              raise SystemExit("not expected FAT32 layout")
+          fat0 = reserved * sector_size
+
+          def entry1_at(off):
+              return struct.unpack_from("<I", b, off + 4)[0]
+
+          if mode == "dirty":
+              b[65] |= 0x01
+              for i in range(fats):
+                  off = fat0 + i * fat_len * sector_size
+                  e = entry1_at(off) & ~0x08000000
+                  struct.pack_into("<I", b, off + 4, e)
+              p.write_bytes(b)
+          else:
+              if b[65] & 1:
+                  raise SystemExit(f"boot dirty bit remains: {b[65]:02x}")
+              for i in range(fats):
+                  off = fat0 + i * fat_len * sector_size
+                  e = entry1_at(off)
+                  if not (e & 0x08000000):
+                      raise SystemExit(f"FAT copy {i} clean-shutdown bit remains clear: {e:08x}")
+          EOF_PY
+
+          cat > r43-release/r36os-export-current-logs <<'EOF_EXPORT'
+          #!/bin/sh
+          /usr/local/bin/r36os-diagnostic-snapshot >/dev/null 2>&1 || true
+          /usr/local/libexec/r36os/base-export-current-logs "$@"
+          rc=$?
+          if command -v r36os-github-diagnostics >/dev/null 2>&1; then
+            r36os-github-diagnostics upload-queued >/dev/null 2>&1 || true
+            r36os-github-diagnostics upload-queued >/dev/null 2>&1 || true
+          fi
+          exit "$rc"
+          EOF_EXPORT
+
+          chmod 0755 r43-release/build_fsck.sh r43-release/build_fixture.sh r43-release/qemu-fsck-wrapper.sh r43-release/fat_fixture_tool.py r43-release/r36os-export-current-logs
+          bash -n r43-release/build_fsck.sh
+          bash -n r43-release/build_fixture.sh
+          bash -n r43-release/qemu-fsck-wrapper.sh
+          bash -n r43-release/r36os-export-current-logs
+          python3 -m py_compile r43-release/fat_fixture_tool.py
+          rm -rf r43-release/__pycache__
+
+      - name: Commit staging source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'R36OS Build Bot'
+          git config user.email 'r36os-build-bot@users.noreply.github.com'
+          git add r43-release/build_fsck.sh r43-release/build_fixture.sh r43-release/qemu-fsck-wrapper.sh r43-release/fat_fixture_tool.py r43-release/r36os-export-current-logs
+          git commit -m 'Stage R43 small source files'
+          git push origin HEAD:work/r43-source-staging-2026-09-28
