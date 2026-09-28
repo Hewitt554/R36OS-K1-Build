@@ -1,0 +1,33 @@
+#!/bin/bash
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+MARKER=/etc/r36os/r40-r36update-repair-once
+LOGDIR=/r36state/logs/r36update-repair
+RESULT="$LOGDIR/R40-FIRSTBOOT.conf"
+
+mkdir -p "$LOGDIR" 2>/dev/null || true
+[ -f "$MARKER" ] || exit 0
+
+warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
+if [ -z "$warn" ]; then
+  printf 'status=SKIPPED\ndetail=no-mmclbk0p3-dirty-warning\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  rm -f "$MARKER"
+  exit 0
+fi
+
+/usr/local/bin/r36os-r36update-repair repair >"$LOGDIR/R40-firstboot-console.txt" 2>&1
+rc=$?
+
+if [ "$rc" -eq 0 ] && grep -q '^status=PASS_REBOOT_REQUIRED$' /run/r36os-r36update-repair.result 2>/dev/null; then
+  printf 'status=PASS_REBOOT_REQUIRED\ndetail=repair-verified\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  rm -f "$MARKER"
+  sync
+  systemctl --no-block reboot
+  exit 0
+fi
+
+printf 'status=FAIL\ncode=%s\ndetail=repair-helper-failed\ntime=%s\n' "$rc" "$(date -Is 2>/dev/null || date)" >"$RESULT"
+mv -f "$MARKER" "$MARKER.failed" 2>/dev/null || rm -f "$MARKER"
+exit "$rc"
