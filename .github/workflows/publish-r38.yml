@@ -1,62 +1,17 @@
-name: Publish R36OS Alpha 5R39
+name: Archived R36OS Alpha 5R38 Publisher
 
 on:
-  push:
-    paths:
-      - .github/workflows/publish-r38.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish:
+  archived:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Fetch exact R38 and reconstruct R39 inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Archived publisher notice
         run: |
-          set -euo pipefail
-          mkdir -p r39-base r39-generated
-          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir r39-base
-          R38=r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
-          echo "68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  $R38" | sha256sum -c -
-          test -s r39-release/r36os-kernel-slot
-          test -s r39-release/r36os-kernel-next-health
-          chmod +x r39-release/r36os-* r39-release/build_release.sh
-          echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-release/r36os-kernel-next-prepare' | sha256sum -c -
-          echo 'ce893250cd52748b6604e75c8d8af397e33c8b7829999ea7a8f20c9100d10407  r39-release/r36os-github-diagnostics' | sha256sum -c -
-          for f in r39-release/r36os-*; do bash -n "$f"; done
-          r39-release/r36os-github-diagnostics selftest | grep -q PASS
-
-      - name: Build R39
-        run: |
-          set -euo pipefail
-          ./r39-release/build_release.sh "$PWD/r39-base/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd" "$PWD/release-out" | tee r39-release-build.log
-
-      - name: Publish R39 release and channel
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release view alpha5r39 --repo Hewitt554/R36OS-K1-Build >/dev/null 2>&1 || gh release create alpha5r39 --repo Hewitt554/R36OS-K1-Build --target "${GITHUB_SHA}" --title 'R36OS Alpha 5R39 — K1 FAT Guard + Remote Diagnostics' --notes 'Fixes Boot Next Once code 25 false positives and adds queue-first privacy-redacted diagnostics. K1 binaries are unchanged.'
-          gh release upload alpha5r39 release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd release-out/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd.sha256 release-out/RELEASE_REPORT.txt --repo Hewitt554/R36OS-K1-Build --clobber
-          cp release-out/latest.conf r36os-release-channel/latest.conf
-          git config user.name 'R36OS Release Bot'
-          git config user.email 'r36os-release-bot@users.noreply.github.com'
-          git add r36os-release-channel/latest.conf
-          git diff --cached --quiet || { git commit -m 'Publish Alpha 5R39 update channel'; git push; }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-Alpha5R39-release-evidence
-          path: |
-            release-out/*.sha256
-            release-out/latest.conf
-            release-out/RELEASE_REPORT.txt
-            r39-release-build.log
-          retention-days: 30
+          echo "Alpha 5R38 is already published and immutable as the R39 base."
+          echo "This workflow is intentionally read-only and cannot publish R39."
+          echo "Use .github/workflows/publish-r39.yml for the audited Alpha 5R39 release."
