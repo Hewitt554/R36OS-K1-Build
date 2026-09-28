@@ -44,6 +44,23 @@ jobs:
           base64 -d r38-inputs.b64 > r38-inputs.tar.gz
           echo "893042d4353b4740bd20f226363c56d17456795c0d16032f1276b8433eac6254  r38-inputs.tar.gz" | sha256sum -c -
           tar -xzf r38-inputs.tar.gz -C r38-inputs
+          # The Run11 extractor's checksum sidecar records its original package/ path.
+          # Normalize verification to the downloaded artifact's actual path without
+          # changing or weakening the expected SHA-256.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("r38-inputs/build_release.sh")
+          s = p.read_text()
+          old = 'if [[ -f "$FULL.sha256" ]]; then (cd "$(dirname "$FULL")" && sha256sum -c "$(basename "$FULL").sha256"); fi'
+          new = '''if [[ -f "$FULL.sha256" ]]; then
+            EXPECTED_FULL="$(awk 'NF{print $1; exit}' "$FULL.sha256")"
+            ACTUAL_FULL="$(sha256sum "$FULL" | awk '{print $1}')"
+            [[ "$EXPECTED_FULL" == "$ACTUAL_FULL" ]] || { echo "Run11 full candidate archive SHA-256 mismatch" >&2; exit 19; }
+          fi'''
+          if old not in s:
+              raise SystemExit("expected Run11 checksum verification line not found")
+          p.write_text(s.replace(old, new))
+          PY
           bash -n r38-inputs/build_release.sh
 
       - name: Build and validate R38 release
