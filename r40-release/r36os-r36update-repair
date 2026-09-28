@@ -5,10 +5,10 @@ set +e
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-MOUNT=/r36update
-EXPECTED_DEV=/dev/mmcblk0p3
-EXPECTED_UUID=C49E-0225
-STATE=/r36state
+MOUNT="${R36OS_R36UPDATE_MOUNT:-/r36update}"
+EXPECTED_DEV="${R36OS_R36UPDATE_DEV:-/dev/mmcblk0p3}"
+EXPECTED_UUID="${R36OS_R36UPDATE_UUID:-C49E-0225}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
 NEXT="$MOUNT/R36OS-KernelNext"
 RESULT=/run/r36os-r36update-repair.result
 PROGRESS=/run/r36os-r36update-repair.progress
@@ -46,6 +46,7 @@ mounted_source(){ findmnt -rn -o SOURCE --target "$MOUNT" 2>/dev/null | head -1;
 mounted_type(){ findmnt -rn -o FSTYPE --target "$MOUNT" 2>/dev/null | head -1; }
 device_uuid(){ blkid -s UUID -o value "$1" 2>/dev/null | head -1; }
 choose_fsck(){
+  if [ -n "${R36OS_FSCK_FAT:-}" ] && [ -x "$R36OS_FSCK_FAT" ]; then printf '%s\n' "$R36OS_FSCK_FAT"; return 0; fi
   for x in /usr/local/libexec/r36os/fsck.fat-static /usr/local/sbin/fsck.fat /usr/sbin/fsck.fat /sbin/fsck.fat /usr/local/sbin/dosfsck /usr/sbin/dosfsck /sbin/dosfsck; do
     [ -x "$x" ] && { printf '%s\n' "$x"; return 0; }
   done
