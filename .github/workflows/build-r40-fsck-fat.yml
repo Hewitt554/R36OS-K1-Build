@@ -22,19 +22,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu autoconf automake autopoint gettext pkg-config git file
 
-      - name: Fetch pinned dosfstools 4.2 source
+      - name: Fetch pinned dosfstools 4.2 release source
         run: |
           set -euo pipefail
-          git clone https://github.com/dosfstools/dosfstools.git
-          cd dosfstools
-          git checkout --detach 697f7692c951173c1b732901e13f72bd3182d575
-          test "$(git rev-parse HEAD)" = 697f7692c951173c1b732901e13f72bd3182d575
+          curl -fL --retry 3 -o dosfstools-4.2.tar.gz \
+            https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz
+          echo '64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527  dosfstools-4.2.tar.gz' | sha256sum -c -
+          tar -xzf dosfstools-4.2.tar.gz
 
       - name: Build static AArch64 fsck.fat
         run: |
           set -euo pipefail
-          cd dosfstools
-          autoreconf -fi
+          cd dosfstools-4.2
           ./configure             --host=aarch64-linux-gnu             CC=aarch64-linux-gnu-gcc             CFLAGS='-O2 -fno-plt'             LDFLAGS='-static'
           make -j2
           test -x src/fsck.fat
