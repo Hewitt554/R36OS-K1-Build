@@ -1,0 +1,5 @@
+#!/bin/sh
+case "${1:-}" in
+  version) printf '%s\n' '0.5.39.0';;
+  *) exec /usr/local/bin/r36os-version "$@";;
+esac
