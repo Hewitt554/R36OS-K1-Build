@@ -81,6 +81,10 @@ jobs:
           echo '5221baab89315da85b93c894bca4a3c81dfc2776c6d305da91cae9646700ae0d  r39-source-tmp/prepare.tar.gz' | sha256sum -c -
           tar -xzf r39-source-tmp/prepare.tar.gz -C r39-final
 
+          base64 -d r39-release/export-final.tar.gz.b64 > r39-source-tmp/export.tar.gz
+          echo 'd6db1a2a64003cdb26b152936d6ec57012802c8601e142096966ff51a75646c9  r39-source-tmp/export.tar.gz' | sha256sum -c -
+          tar -xzf r39-source-tmp/export.tar.gz -C r39-final
+
           echo 'ef7e2c6e82d0f1f100c6f03e5deeb8e6851e8ec81cece4fcd1f4789e5e40a522  r39-final/build_release.sh' | sha256sum -c -
           echo '14a8fed055ebc8d5d14a74182fef9fb4179c3f76a6a026b374d8c31a9d570f40  r39-final/r36os-github-diagnostics' | sha256sum -c -
           echo '29d257dfe7a8605df30291bf4b38c16e43cc73774ae1f31436ae9ca917d295ec  r39-final/r36os-kernel-next-prepare' | sha256sum -c -
