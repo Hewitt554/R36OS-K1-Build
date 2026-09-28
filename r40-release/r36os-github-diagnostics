@@ -233,7 +233,11 @@ load_config(){
   [ -n "$REPO" ] || REPO="Hewitt554/R36OS-Device-Logs"
   [ -n "$BRANCH" ] || BRANCH=main
   case "$MODE" in automatic|off) ;; *) MODE=off;; esac
-  echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+verify_private_repo(){
+  echo "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || REPO=""
+  [ "$REPO" != 'Hewitt554/R36OS-K1-Build' ] || REPO=""
+  echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || BRANCH=main
+}
+verify_private_repo(){
   token="$(tr -d '\r\n' <"$TOKEN_FILE" 2>/dev/null)"; [ "${#token}" -ge 20 ] || { unset token; return 1; }
   resp="$BASE/.repo-check-$$.json"
   code="$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 15 --max-time 45 --retry 1 \
