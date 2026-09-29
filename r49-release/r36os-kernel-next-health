@@ -13,6 +13,8 @@ EXPECTED_STATE='a25488c6-742d-4555-82d1-e28ffc848af3'
 EXPECTED_MODEL='R36OS R36S K1 Panel 4'
 PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
 POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"
+MAINT="${R36OS_R36UPDATE_MAINT:-/usr/local/bin/r36os-r36update-maint}"
+PRIVATE="${R36OS_R36UPDATE_PRIVATE_RW:-/run/r36os-r36update-rw}"
 
 sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
@@ -68,13 +70,16 @@ write_record(){
   return 0
 }
 clear_markers(){
-  [ -x "$POLICY" ] || return 1
-  "$POLICY" prepare-write >/dev/null 2>&1 || return 1
-  rm -f "$REQ" "$CONSUMED" "$REQ.tmp"
+  [ -x "$MAINT" ] || return 1
+  "$MAINT" marker-open >/dev/null 2>&1 || return 1
+  pnext="$PRIVATE/R36OS-KernelNext"
+  preq="$pnext/boot-next.$CID.once"
+  pcon="$pnext/boot-next.$CID.consumed"
+  rm -f "$preq" "$pcon" "$preq.tmp"
   sync
   ok=0
-  [ ! -e "$REQ" ] && [ ! -e "$CONSUMED" ] && ok=1
-  "$POLICY" finish-ro >/dev/null 2>&1 || return 1
+  [ ! -e "$preq" ] && [ ! -e "$pcon" ] && ok=1
+  "$MAINT" marker-abort-ro >/dev/null 2>&1 || return 1
   [ "$ok" -eq 1 ]
 }
 
