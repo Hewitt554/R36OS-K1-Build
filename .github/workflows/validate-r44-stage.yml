@@ -28,7 +28,7 @@ jobs:
 
       - name: Download exact published R43 helper and R38 K1 candidate
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p inputs r43 r38
