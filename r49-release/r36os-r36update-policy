@@ -1,0 +1,183 @@
+#!/bin/bash
+# R36OS Alpha 5R49 R36UPDATE isolation policy.
+# The real FAT filesystem is boot-handoff storage only.
+set +e
+CMD="${1:-normal}"
+MOUNT="${R36OS_UPDATE_MOUNT:-/r36update}"
+DEV="${R36OS_UPDATE_DEV:-/dev/mmcblk0p3}"
+EXPECTED_UUID="${R36OS_EXPECTED_UPDATE_UUID:-C49E-0225}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+STATUS="${R36OS_R36UPDATE_POLICY_STATUS:-/run/r36os-r36update-policy.conf}"
+BINDROOT="$STATE/compat/r36update"
+VFAT_OPTS='relatime,fmask=0022,dmask=0022,codepage=936,iocharset=utf8,shortname=mixed,errors=remount-ro'
+
+write_status(){
+  st="$1"; detail="$2"; mode="${3:-unknown}"
+  {
+    echo 'format=R36OS_R36UPDATE_POLICY_V1'
+    echo "status=$st"
+    echo "detail=$detail"
+    echo "mode=$mode"
+    echo "mount=$MOUNT"
+    echo "device=$DEV"
+    echo "uuid=$(blkid -s UUID -o value "$DEV" 2>/dev/null)"
+    echo "options=$(findmnt -n -o OPTIONS "$MOUNT" 2>/dev/null | head -1)"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$STATUS" 2>/dev/null || true
+}
+fail(){ write_status FAIL "$2" "${3:-unknown}"; echo "status=FAIL code=$1 detail=$2"; exit "$1"; }
+is_mounted(){ mountpoint -q "$MOUNT" 2>/dev/null; }
+base_source(){
+  findmnt -n -o SOURCE "$MOUNT" 2>/dev/null | head -1 | xargs -r readlink -f 2>/dev/null
+}
+verify_identity(){
+  [ -b "$DEV" ] || return 20
+  u="$(blkid -s UUID -o value "$DEV" 2>/dev/null | tr 'a-f' 'A-F')"
+  [ "$u" = "$EXPECTED_UUID" ] || return 21
+  if is_mounted; then
+    s="$(base_source)"
+    [ "$s" = "$(readlink -f "$DEV")" ] || return 22
+  fi
+  return 0
+}
+is_ro(){
+  o="$(findmnt -n -o OPTIONS "$MOUNT" 2>/dev/null | head -1)"
+  case ",$o," in *,ro,*) return 0;; *) return 1;; esac
+}
+is_rw(){
+  o="$(findmnt -n -o OPTIONS "$MOUNT" 2>/dev/null | head -1)"
+  case ",$o," in *,rw,*) return 0;; *) return 1;; esac
+}
+
+# Legacy paths remain visible but their writes land on R36STATE, not FAT.
+bind_specs(){
+  printf '%s|%s\n' "$BINDROOT/cache" "$MOUNT/R36OS-Cache"
+  printf '%s|%s\n' "$BINDROOT/logs" "$MOUNT/R36OS-Logs"
+  printf '%s|%s\n' "$BINDROOT/kernel-lab" "$MOUNT/R36OS-KernelLab"
+  printf '%s|%s\n' "$BINDROOT/update" "$MOUNT/update"
+}
+unbind_compat(){
+  # No nested targets are used, but reverse order keeps this safe if that changes.
+  bind_specs | tac | while IFS='|' read -r src dst; do
+    [ -n "$dst" ] || continue
+    if mountpoint -q "$dst" 2>/dev/null; then
+      umount "$dst" >/dev/null 2>&1 || return 1
+    fi
+  done
+}
+setup_compat(){
+  mountpoint -q "$STATE" 2>/dev/null || return 1
+  mkdir -p "$BINDROOT" || return 1
+  : > /run/r36os-r36update-binds.conf 2>/dev/null || true
+  bind_specs | while IFS='|' read -r src dst; do
+    [ -n "$src" ] && [ -n "$dst" ] || continue
+    mkdir -p "$src" || exit 11
+    if [ ! -d "$dst" ]; then
+      echo "target=$dst status=SKIPPED reason=missing-fat-directory" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+      continue
+    fi
+    if mountpoint -q "$dst" 2>/dev/null; then
+      echo "target=$dst status=PASS reason=already-mounted" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+      continue
+    fi
+    mount --bind "$src" "$dst" >/dev/null 2>&1 || exit 12
+    echo "target=$dst source=$src status=PASS" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+  done
+  return $?
+}
+remount_ro(){
+  is_mounted || return 1
+  sync
+  mount -o remount,ro "$MOUNT" >/dev/null 2>&1 || return 1
+  is_ro
+}
+remount_rw(){
+  is_mounted || return 1
+  sync
+  mount -o remount,rw "$MOUNT" >/dev/null 2>&1 || return 1
+  is_rw
+}
+mount_fresh(){
+  mode="$1"
+  is_mounted && return 2
+  mkdir -p "$MOUNT" || return 3
+  mount -t vfat -o "$mode,$VFAT_OPTS" "$DEV" "$MOUNT" >/dev/null 2>&1 || return 4
+  verify_identity || return 5
+  [ "$mode" = ro ] && is_ro
+  [ "$mode" = rw ] && is_rw
+}
+leave_unmounted(){
+  unbind_compat || return 1
+  if is_mounted; then
+    sync
+    umount "$MOUNT" >/dev/null 2>&1 || return 2
+  fi
+  ! is_mounted
+}
+
+verify_identity || fail $? identity-mismatch
+
+case "$CMD" in
+  normal|finish-ro)
+    if ! is_mounted; then
+      mount_fresh ro || fail 30 mount-readonly-failed ro
+    elif ! is_ro; then
+      unbind_compat >/dev/null 2>&1 || true
+      remount_ro || fail 31 remount-readonly-failed ro
+    fi
+    setup_compat || fail 32 compat-bind-failed ro
+    write_status PASS normal-readonly ro
+    echo 'status=PASS mode=ro'
+    ;;
+  prepare-write)
+    is_mounted || fail 33 r36update-not-mounted unknown
+    unbind_compat || fail 34 compat-unmount-failed unknown
+    remount_rw || fail 35 remount-rw-failed rw
+    write_status PASS controlled-write-window rw
+    echo 'status=PASS mode=rw'
+    ;;
+  mount-rw)
+    unbind_compat >/dev/null 2>&1 || true
+    if is_mounted; then
+      remount_rw || fail 36 remount-rw-failed rw
+    else
+      mount_fresh rw || fail 37 mount-rw-failed rw
+    fi
+    write_status PASS controlled-write-window rw
+    echo 'status=PASS mode=rw'
+    ;;
+  mount-ro)
+    unbind_compat >/dev/null 2>&1 || true
+    if is_mounted; then
+      remount_ro || fail 38 remount-ro-failed ro
+    else
+      mount_fresh ro || fail 39 mount-ro-failed ro
+    fi
+    write_status PASS raw-readonly ro
+    echo 'status=PASS mode=ro'
+    ;;
+  leave-unmounted)
+    leave_unmounted || fail 40 normal-unmount-failed unmounted
+    write_status PASS unmounted-for-boot-handoff unmounted
+    echo 'status=PASS mode=unmounted'
+    ;;
+  unbind)
+    unbind_compat || fail 41 compat-unmount-failed unknown
+    write_status PASS compatibility-binds-removed "$(is_ro && echo ro || echo mounted)"
+    echo 'status=PASS'
+    ;;
+  status)
+    if is_mounted; then
+      mode=unknown; is_ro && mode=ro; is_rw && mode=rw
+    else
+      mode=unmounted
+    fi
+    write_status PASS status "$mode"
+    cat "$STATUS" 2>/dev/null
+    [ -r /run/r36os-r36update-binds.conf ] && cat /run/r36os-r36update-binds.conf
+    ;;
+  *)
+    echo 'usage: r36os-r36update-policy normal|prepare-write|mount-rw|mount-ro|finish-ro|leave-unmounted|unbind|status' >&2
+    exit 2
+    ;;
+esac
