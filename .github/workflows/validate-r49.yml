@@ -57,7 +57,7 @@ jobs:
           for p in r49-release/r36os-*; do bash -n "$p"; done
           python3 -m py_compile r49-release/transform_prepare.py r49-release/transform_slot.py
           bash -n r49-release/build_release.sh
-          grep -Fq 'Options=ro,' r49-release/90-r36os-readonly.conf
+          grep -Fxq 'Options=ro' r49-release/90-r36os-readonly.conf
           grep -Fq 'ExecStartPre=/usr/local/bin/r36os-r36update-policy normal' r49-release/95-r36update-policy.conf
           ! grep -Eq '^[[:space:]]*(prepare-write|mount-rw)\)' r49-release/r36os-r36update-policy
           grep -Fq 'marker-open' r49-release/r36os-r36update-maint
