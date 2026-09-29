@@ -81,7 +81,7 @@ cat >"$ROOT/opt/r36os/features/alpha5r49" <<'EOF_FEATURE'
 R36OS Alpha 5R49
 - R36UPDATE is boot-handoff storage, not general writable storage.
 - /dev/mmcblk0p3 mounts read-only in normal userspace.
-- Legacy R36OS-Cache, R36OS-Logs, R36OS-KernelLab and update paths bind to R36STATE when their FAT directories exist.
+- Legacy R36OS-Cache, R36OS-Logs, R36OS-KernelLab and update paths attempt best-effort R36STATE bind overlays when their FAT directories exist; unsupported overlays never make FAT writable or block boot.
 - The R43-R48 automatic first-boot full-partition backup/repair path is retired.
 - Boot Next Once owns the controlled maintenance transaction:
   verify authoritative /opt K1 -> unmount FAT -> fsck read-only -> repair if needed -> verify clean -> private guarded RW mount -> reuse/restage exact K1 -> return read-only -> install/verify hook -> private guarded marker window -> clean final unmount.
@@ -142,7 +142,7 @@ candidate_id=$CID
 kernel_release=$KREL
 k1_binary_change=no
 r36update_normal_mode=read-only
-r36update_general_writes=redirect-to-r36state
+r36update_compat_writes=best-effort-r36state-bind-or-safe-ro-failure
 full_partition_tar_backup=retired
 k1_maintenance=unmounted-fsck-private-rw-stage-private-rw-marker
 final_arm_state=r36update-unmounted
@@ -231,7 +231,7 @@ r47_source_sha256=$EXPECTED_R47
 r43_source_sha256=$EXPECTED_R43
 r39_source_sha256=$EXPECTED_R39
 r36update_normal_readonly=yes
-general_writes_redirected_to_r36state=yes
+compat_writes_best_effort_r36state_or_safe_ro_failure=yes
 full_partition_tar_backup=retired
 long_stage_private_guarded_mount=yes
 marker_write_private_guarded_mount=yes
