@@ -155,8 +155,83 @@ jobs:
           test "$RC" -eq 2
 
           echo 'TEST clean-maintenance-stage'
-          run_maint prepare-stage
-          grep -q '^status=PASS_RO_STAGED$' "$W/maint.conf"
+          set +e
+          run_maint prepare-stage >"$W/prepare-stage.out" 2>&1
+          MRC=$?
+          set -e
+          if [ "$MRC" -ne 0 ]; then
+            echo "prepare_stage_rc=$MRC"
+            cat "$W/prepare-stage.out" || true
+            cat "$W/maint.conf" || true
+            cat "$W/policy.conf" || true
+            find "$STATE/logs/r36update-maint" -type f -maxdepth 1 -print -exec sh -c 'echo "--- $1 ---"; cat "$1"' _ {} \; 2>/dev/null || true
+            findmnt "$PUB" "$PRIVATE" "$STATE" 2>/dev/null || true
+            exit "$MRC"
+          fi
+          grep -q '^status=PASS_RO_STAGED
+          test -s "$PUB/R36OS-KernelNext/K1/K1.conf"
+          assert_ro
+          ! mountpoint -q "$PRIVATE"
+
+          echo 'TEST public-direct-arm-rejected'
+          set +e
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PUB/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PUB" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" arm-once > "$W/ro-arm.out" 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 67
+          grep -q 'controlled-write-window-required' "$W/ro-arm.out"
+
+          echo 'TEST private-marker-window'
+          run_maint marker-open
+          test "$(readlink -f "$(findmnt -n -o SOURCE "$PRIVATE" | head -1)")" = "$(readlink -f "$LOOP")"
+          POPT="$(findmnt -n -o OPTIONS "$PRIVATE" | head -1)"
+          case ",$POPT," in *,rw,*) ;; *) exit 201;; esac
+          GSRC="$(findmnt -n -o SOURCE "$PUB" | head -1)"
+          echo "$GSRC" | grep -q 'r36os-r36update-guard'
+          GOPT="$(findmnt -n -o OPTIONS "$PUB" | head -1)"
+          case ",$GOPT," in *,ro,*) ;; *) exit 202;; esac
+
+          echo 'TEST private-arm-disarm'
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PRIVATE/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PRIVATE" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" arm-once > "$W/private-arm.out"
+          grep -q '^status=PASS' "$W/private-arm.out"
+          test -s "$PRIVATE/R36OS-KernelNext/boot-next.$CID.once"
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PRIVATE/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PRIVATE" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" disarm >/dev/null
+          test ! -e "$PRIVATE/R36OS-KernelNext/boot-next.$CID.once"
+          run_maint marker-abort-ro >/dev/null
+          assert_ro
+
+          echo 'TEST busy-private-unmount-fails-closed'
+          run_maint marker-open >/dev/null
+          sudo bash -c "cd '$PRIVATE'; exec sleep 30" &
+          HOLDER=$!
+          sleep 1
+          set +e
+          run_maint marker-close-unmounted > "$W/busy.out" 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 97
+          sudo kill "$HOLDER" 2>/dev/null || true
+          wait "$HOLDER" 2>/dev/null || true
+          HOLDER=""
+          run_maint marker-abort-ro >/dev/null
+          assert_ro
+
+          echo 'TEST successful-final-close'
+          run_maint marker-open >/dev/null
+          run_maint marker-close-unmounted >/dev/null
+          ! mountpoint -q "$PUB"
+          ! mountpoint -q "$PRIVATE"
+
+          echo 'R49_INTEGRATION_TEST=PASS' | tee r49-integration.log
+
+      - name: Upload integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R49-integration-evidence
+          path: r49-integration.log
+          if-no-files-found: error
+          retention-days: 30
+ "$W/maint.conf"
           test -s "$PUB/R36OS-KernelNext/K1/K1.conf"
           assert_ro
           ! mountpoint -q "$PRIVATE"
