@@ -1,0 +1,41 @@
+#!/bin/bash
+# R36OS transactional updater v3 boot-health watchdog.
+# R46: allow slow SD/K1 verification boots enough time to reach first frame.
+set +e
+STATE=/r36state
+PEND="$STATE/update/pending.conf"
+[ -f "$PEND" ] || exit 0
+TARGET="$(awk -F= '$1=="version"{print $2}' "$PEND")"
+LOG="$STATE/logs/update-health-$(date +%Y%m%d-%H%M%S 2>/dev/null || echo boot).log"
+mkdir -p "$STATE/logs"
+{
+ echo "R36OS updater v3 boot-health check"
+ echo "target=$TARGET"
+ echo "first_frame_timeout_seconds=120"
+ cat "$PEND"
+} >"$LOG"
+for i in $(seq 1 240); do
+  if [ -f /run/r36os-first-frame-ok ]; then
+    UI="$(tr -d '\r\n' </run/r36os-ui-version 2>/dev/null)"
+    REL="$(/usr/local/bin/r36os-version version 2>/dev/null)"
+    echo "heartbeat=present ui=$UI release=$REL iteration=$i" >>"$LOG"
+    if [ "$UI" = "$TARGET" ] && [ "$REL" = "$TARGET" ]; then
+      /usr/local/bin/r36os-core-integrity update-health >>"$LOG" 2>&1 || true
+      if ! grep -q '^status=PASS$' /run/r36os-core-integrity.conf 2>/dev/null; then echo 'FAIL core integrity' >>"$LOG"; break; fi
+      echo "PASS exact version, first frame and core integrity at ${i}x0.5s" >>"$LOG"
+      REGROOT="$STATE/logs/update-regression"; /usr/local/bin/r36os-regression-selftest boot "$REGROOT" >>"$LOG" 2>&1
+      LATEST="$(cat /run/r36os-regression-selftest.latest 2>/dev/null)"; CF="$(awk -F= '$1=="critical_failures"{print $2}' "$LATEST/regression.conf" 2>/dev/null)"
+      case "$CF" in ''|*[!0-9]*) CF=1;; esac
+      if [ "$CF" -eq 0 ]; then echo 'PASS boot regression gate' >>"$LOG"; /usr/local/bin/r36os-update-mark-good >>"$LOG" 2>&1; exit 0; fi
+      echo "FAIL boot regression critical_failures=$CF" >>"$LOG"; break
+    fi
+    echo "FAIL heartbeat version mismatch" >>"$LOG"
+    break
+  fi
+  sleep 0.5
+done
+echo "FAIL update did not become coherent and healthy within 120 seconds; restoring previous core" >>"$LOG"
+/usr/local/bin/r36os-update-rollback >>"$LOG" 2>&1
+sync
+/sbin/reboot
+exit 1
