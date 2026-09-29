@@ -211,3 +211,5 @@ jobs:
           gh release upload "$TAG" /tmp/PUBLISH_EVIDENCE.txt --repo "$REPO"
           git push origin "$CHANNEL_COMMIT:refs/heads/backup/r49-postpublish-verified-2026-09-29"
           echo R49_PUBLISH=PASS
+
+# Retry marker: prior publish passed all lineage/package gates but GitHub release creation returned transient HTTP 403.
