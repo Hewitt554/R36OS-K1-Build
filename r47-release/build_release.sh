@@ -130,9 +130,9 @@ paths=[
 '/usr/local/bin/r36os-update-rollback',
 '/usr/local/libexec/r36os/fsck.fat-static',
 '/usr/local/libexec/r36os/fsck.fat-static.sha256',
-'/etc/systemd/system-generators/r36os-firstboot-update-repair-generator',
-'/lib/systemd/system-generators/r36os-firstboot-update-repair-generator',
-'/etc/systemd/system/r36os-firstboot-update-repair.service',
+'/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt',
+'/usr/local/libexec/r36os/fsck-selftest.img.gz',
+'/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256',
 ]
 for p in paths:
     fp=root/p.lstrip('/')
@@ -163,15 +163,15 @@ cat >"$WORK/expected-files.txt" <<'EOF_FILES'
 etc/r36os-core-manifest.sha256
 etc/r36os-release
 etc/r36os/r36update-repair-once.conf
-etc/systemd/system-generators/r36os-firstboot-update-repair-generator
-etc/systemd/system/r36os-firstboot-update-repair.service
-lib/systemd/system-generators/r36os-firstboot-update-repair-generator
 opt/r36os/features/alpha5r47
 usr/local/bin/r36os-firstboot-update-repair
 usr/local/bin/r36os-kernel-next-prepare
 usr/local/bin/r36os-kernel-slot
 usr/local/bin/r36os-r36update-repair
 usr/local/bin/r36os-update-rollback
+usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt
+usr/local/libexec/r36os/fsck-selftest.img.gz
+usr/local/libexec/r36os/fsck-selftest.img.gz.sha256
 usr/local/libexec/r36os/fsck.fat-static
 usr/local/libexec/r36os/fsck.fat-static.sha256
 EOF_FILES
@@ -200,6 +200,9 @@ grep -Fq 'umount "$UPDATE_MOUNT"' "$ROOT/usr/local/bin/r36os-update-rollback"
 cmp "$R43ROOT/usr/local/bin/r36os-r36update-repair" "$ROOT/usr/local/bin/r36os-r36update-repair"
 cmp "$R43ROOT/usr/local/libexec/r36os/fsck.fat-static" "$ROOT/usr/local/libexec/r36os/fsck.fat-static"
 cmp "$R43ROOT/usr/local/libexec/r36os/fsck.fat-static.sha256" "$ROOT/usr/local/libexec/r36os/fsck.fat-static.sha256"
+cmp "$R43ROOT/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt" "$ROOT/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt"
+cmp "$R43ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz"
+cmp "$R43ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256"
 
 (cd "$WORK/update"; tar --sort=name --mtime='UTC 2026-09-29 00:00:00' --owner=0 --group=0 --numeric-owner -cf - manifest.conf checksums.sha256 payload | gzip -1 -n >"$OUT/$NAME")
 SHA="$(sha256sum "$OUT/$NAME" | awk '{print $1}')"
