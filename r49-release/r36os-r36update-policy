@@ -109,8 +109,11 @@ mount_fresh(){
   mkdir -p "$MOUNT" || return 3
   mount -t vfat -o "$mode" "$DEV" "$MOUNT" >/dev/null 2>&1 || return 4
   verify_identity || return 5
-  [ "$mode" = ro ] && is_ro
-  [ "$mode" = rw ] && is_rw
+  case "$mode" in
+    ro) is_ro ;;
+    rw) is_rw ;;
+    *) return 6 ;;
+  esac
 }
 leave_unmounted(){
   unbind_compat || return 1
