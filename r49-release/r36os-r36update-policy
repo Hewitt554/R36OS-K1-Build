@@ -80,7 +80,7 @@ setup_compat(){
       echo "target=$dst status=PASS reason=already-mounted" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
       continue
     fi
-    errfile="/run/r36os-r36update-bind.$.err"
+    errfile="/run/r36os-r36update-bind.err"
     if mount --bind "$src" "$dst" >"$errfile" 2>&1; then
       echo "target=$dst source=$src status=PASS" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
     else
