@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 R52="$1"; R38="$2"; OUT="$3"
 REPO='Hewitt554/R36OS-K1-Build'
 TAG='alpha5r54'
-NAME='00-R36OS-Alpha5R54-K1SystemdHandoffHeader-FromR52.r36upd'
+NAME='00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd'
 EXPECTED_R52='0ef468b19eddc77a3d8ccb8016238082c4fea23ef0d884135a7f48bd26baf0cb'
 EXPECTED_R38='68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0'
 EXPECTED_IMAGE='a7a388d5ca21b276bddcc0e3892b0c965b73d92f2c0238cb9c25a210dba7c97e'
@@ -17,7 +17,7 @@ STATE_UUID='a25488c6-742d-4555-82d1-e28ffc848af3'
 WORK="${RUNNER_TEMP:-/tmp}/r36os-r54-release"
 
 rm -rf "$WORK" "$OUT"
-mkdir -p "$WORK/r52" "$WORK/r38" "$WORK/full-k1"    "$WORK/update/payload/root/usr/local/bin"   "$WORK/update/payload/root/opt/r36os/features"   "$WORK/update/payload/root/opt/r36os/kernel-next/K1"   "$WORK/update/payload/root/opt/r36os/kernel-next"   "$WORK/update/payload/root/opt" "$OUT"
+mkdir -p "$WORK/r52" "$WORK/r38" "$WORK/full-k1"    "$WORK/update/payload/root/etc"   "$WORK/update/payload/root/usr/local/bin"   "$WORK/update/payload/root/opt/r36os/features"   "$WORK/update/payload/root/opt/r36os/kernel-next/K1"   "$WORK/update/payload/root/opt/r36os/kernel-next"   "$WORK/update/payload/root/opt" "$OUT"
 
 check(){ local f="$1" want="$2"; local got; got="$(sha256sum "$f"|awk '{print $1}')"; [ "$got" = "$want" ] || { echo "sha mismatch: $f want=$want got=$got" >&2; exit 10; }; }
 check "$R52" "$EXPECTED_R52"
