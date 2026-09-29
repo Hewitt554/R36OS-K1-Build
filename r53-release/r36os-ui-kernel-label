@@ -3,7 +3,7 @@ set -e
 REL=/etc/r36os-release
 OUT=/run/r36os-ui-release
 . "$REL"
-K="$(uname -r 2>/dev/null || echo unknown)"
+K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null || echo unknown)}"
 case "$K" in
   6.12.94-r36os-k1) TRACK=K1;;
   4.4.189) TRACK=LEGACY;;
