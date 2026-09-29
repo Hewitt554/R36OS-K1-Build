@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+REL=/etc/r36os-release
+OUT=/run/r36os-ui-release
+. "$REL"
+K="$(uname -r 2>/dev/null || echo unknown)"
+case "$K" in
+  6.12.94-r36os-k1) TRACK=K1;;
+  4.4.189) TRACK=LEGACY;;
+  *) TRACK=KERNEL?;;
+esac
+umask 022
+{
+  printf 'R36OS_NAME="%s"\n' "$R36OS_NAME"
+  printf 'R36OS_VERSION="%s %s"\n' "$R36OS_VERSION" "$TRACK"
+  printf 'R36OS_PACKAGE_VERSION="%s"\n' "$R36OS_PACKAGE_VERSION"
+  printf 'R36OS_HARDWARE="%s"\n' "${R36OS_HARDWARE:-R36XX-RK3326}"
+  printf 'R36OS_CHANNEL="%s"\n' "${R36OS_CHANNEL:-system-core}"
+  printf 'R36OS_BUILD_DATE="%s"\n' "${R36OS_BUILD_DATE:-unknown}"
+  printf 'R36OS_COMPATIBILITY="%s"\n' "${R36OS_COMPATIBILITY:-}"
+  printf 'R36OS_NOTES="%s"\n' "${R36OS_NOTES:-}"
+} >"$OUT.tmp"
+mv -f "$OUT.tmp" "$OUT"
+chmod 0644 "$OUT"
