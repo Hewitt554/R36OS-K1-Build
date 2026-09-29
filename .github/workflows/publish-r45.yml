@@ -1,0 +1,191 @@
+name: Publish R36OS Alpha 5R45 exact validated artifact
+
+on:
+  push:
+    branches:
+      - work/r45-k1-handoff-diagnostics-2026-09-29
+    paths:
+      - '.github/workflows/publish-r45.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      VALIDATION_RUN: '36543027281'
+      VALIDATION_ARTIFACT_ID: '11021550462'
+      VALIDATED_SOURCE_SHA: 5527754b5d58ff8d9f12483ab46d82694041929a
+      PREPUBLISH_MAIN_SHA: 42418c11e1adc8ea093ce4a39a4a7e3ff1645976
+      TAG: alpha5r45
+      NAME: 00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd
+      EXPECTED_SHA: d4edc705ad1db1ba1e9a61d69b40c85ab9024d45291f7722fa799cae5e0ab139
+      EXPECTED_SIZE: '19685'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove validation run and download exact candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_JSON="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN")"
+          test "$(printf '%s' "$RUN_JSON" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN_JSON" | jq -r .head_sha)" = "$VALIDATED_SOURCE_SHA"
+
+          ART_JSON="$(gh api "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID")"
+          test "$(printf '%s' "$ART_JSON" | jq -r .name)" = R36OS-Alpha5R45-audited-validation-candidate
+          test "$(printf '%s' "$ART_JSON" | jq -r .expired)" = false
+
+          gh api -H 'Accept: application/vnd.github+json'             "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID/zip" > candidate.zip
+          rm -rf candidate
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          AUDIT="$(find candidate -type f -name R45_AUDIT.md -print)"
+          test "$(printf '%s\n' "$PKG" | grep -c .)" -eq 1
+          test "$(printf '%s\n' "$SHA_FILE" | grep -c .)" -eq 1
+          test "$(printf '%s\n' "$LATEST" | grep -c .)" -eq 1
+          test "$(printf '%s\n' "$REPORT" | grep -c .)" -eq 1
+          test "$(printf '%s\n' "$AUDIT" | grep -c .)" -eq 1
+          {
+            echo "PKG=$PKG"
+            echo "SHA_FILE=$SHA_FILE"
+            echo "LATEST=$LATEST"
+            echo "REPORT=$REPORT"
+            echo "AUDIT=$AUDIT"
+          } >> "$GITHUB_ENV"
+
+      - name: Audit exact downloaded R45 candidate
+        run: |
+          set -euo pipefail
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
+
+          test "$(awk -F= '$1=="version"{print $2}' "$LATEST")" = 0.5.45.0
+          test "$(awk -F= '$1=="base_version"{print $2}' "$LATEST")" = 0.5.44.0
+          test "$(awk -F= '$1=="filename"{print $2}' "$LATEST")" = "$NAME"
+          test "$(awk -F= '$1=="size_bytes"{print $2}' "$LATEST")" = "$EXPECTED_SIZE"
+          test "$(awk -F= '$1=="sha256"{print $2}' "$LATEST")" = "$EXPECTED_SHA"
+
+          grep -Fxq 'base_version=0.5.44.0' "$REPORT"
+          grep -Fxq 'version=0.5.45.0' "$REPORT"
+          grep -Fxq 'requires_reboot=false' "$REPORT"
+          grep -Fxq 'k1_binary_change=no' "$REPORT"
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$PKG" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="requires_reboot"{print $2}' package-audit/manifest.conf)" = false
+          test ! -e package-audit/payload/root/r36state
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          echo R45_PREPUBLISH_AUDIT=PASS
+
+      - name: Create prerelease and upload exact validated assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "tag $TAG already exists; refusing duplicate publication" >&2
+            exit 30
+          fi
+
+          cat > /tmp/release-notes.txt <<'EOF'
+          R36OS Alpha 5R45
+
+          Passive K1 boot-handoff diagnostics support update for Alpha 5R44.
+
+          - Records whether the one-shot request is pending, consumed, absent, or anomalous.
+          - Records request/consumed hashes and candidate identity.
+          - Records current boot hook/hash identity and K1 preflight status.
+          - Records relevant kernel cmdline, pstore count and health-service state.
+          - Refreshes this evidence before every GitHub diagnostic capture.
+          - Does not arm, disarm, consume or clear K1 boot markers.
+          - Does not change K1 Image, DTB, uInitrd, modules, or boot-hook logic.
+          - No reboot is required by this package.
+          EOF
+
+          gh release create "$TAG"             --repo "$REPO"             --target "$VALIDATED_SOURCE_SHA"             --title 'R36OS Alpha 5R45 — passive K1 handoff diagnostics'             --notes-file /tmp/release-notes.txt             --prerelease
+
+          gh release upload "$TAG" "$PKG" "$SHA_FILE" "$REPORT" "$AUDIT" --repo "$REPO"
+
+      - name: Verify published asset before exposing update channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          PUB_SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$PUB_SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" > /tmp/published.r36upd
+          test "$(stat -c %s /tmp/published.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/published.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R45_PUBLISHED_ASSET_VERIFY=PASS
+
+      - name: Advance public update channel from exact R44 state
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          CURRENT="$(git rev-parse origin/main)"
+          test "$CURRENT" = "$PREPUBLISH_MAIN_SHA" || {
+            echo "main moved: expected $PREPUBLISH_MAIN_SHA got $CURRENT" >&2
+            exit 40
+          }
+
+          git checkout -B publish-r45-main origin/main
+          mkdir -p r36os-release-channel
+          cp "$LATEST" r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R45 update channel'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Verify channel and preserve publish evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" > /tmp/live-latest.conf
+          cmp /tmp/live-latest.conf "$LATEST"
+
+          cat > /tmp/PUBLISH_EVIDENCE.txt <<EOF
+          R36OS Alpha 5R45 publish evidence
+          validation_run=$VALIDATION_RUN
+          validation_artifact_id=$VALIDATION_ARTIFACT_ID
+          validated_source_sha=$VALIDATED_SOURCE_SHA
+          prepublish_main_sha=$PREPUBLISH_MAIN_SHA
+          channel_commit=$CHANNEL_COMMIT
+          tag=$TAG
+          package=$NAME
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA
+          exact_validated_artifact=yes
+          rebuilt_at_publish=no
+          requires_reboot=false
+          EOF
+
+          gh release upload "$TAG" /tmp/PUBLISH_EVIDENCE.txt --repo "$REPO"
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r45-postpublish-verified-2026-09-29"
+          echo R45_PUBLISH=PASS
