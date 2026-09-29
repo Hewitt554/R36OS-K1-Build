@@ -1,0 +1,189 @@
+name: Validate R36OS Alpha 5R46
+
+on:
+  push:
+    branches:
+      - work/r46-k1-handoff-probe-2026-09-29
+    paths:
+      - 'r46-release/**'
+      - 'R46_AUDIT.md'
+      - '.github/workflows/validate-r46.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R44 and R38
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r44 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' --dir inputs
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir inputs
+          echo '2a6b872c3e7b81a88272c03f8c1484d9d4ae582dfe9172796ebff4e8e396a4fa  inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' | sha256sum -c -
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+
+      - name: Audit R46 source
+        run: |
+          set -euo pipefail
+          bash -n r46-release/r36os-health-watchdog
+          bash -n r46-release/build_release.sh
+          grep -q 'seq 1 240' r46-release/r36os-health-watchdog
+          grep -q 'first_frame_timeout_seconds=120' r46-release/r36os-health-watchdog
+          ! grep -q 'seq 1 50' r46-release/r36os-health-watchdog
+          echo R46_SOURCE_AUDIT=PASS
+
+      - name: Build R46 twice
+        run: |
+          set -euo pipefail
+          chmod +x r46-release/build_release.sh
+          R44="$PWD/inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd"
+          R38="$PWD/inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd"
+          ./r46-release/build_release.sh "$R44" "$R38" "$PWD/out-a" | tee r46-build-a.log
+          ./r46-release/build_release.sh "$R44" "$R38" "$PWD/out-b" | tee r46-build-b.log
+
+      - name: Audit deterministic package and scope
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd
+          B=out-b/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf audit
+          mkdir audit
+          tar -xzf "$A" -C audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.46.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.44.0
+          test "$(awk -F= '$1=="requires_reboot"{print $2}' audit/manifest.conf)" = true
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="update_health_timeout_seconds"{print $2}' audit/manifest.conf)" = 120
+
+          cat > /tmp/expected-files.txt <<'EOF'
+          etc/r36os-core-manifest.sha256
+          etc/r36os-release
+          opt/r36os/features/alpha5r46
+          opt/r36os/kernel-next/hook.conf
+          opt/r36os/kernel-next/hooked-boot.ini
+          usr/local/bin/r36os-health-watchdog
+          usr/local/bin/r36os-k1-install-hook
+          usr/local/bin/r36os-kernel-next-prepare
+          usr/local/bin/r36os-kernel-slot
+          EOF
+          (cd audit/payload/root && find . -type f -printf '%P\n' | LC_ALL=C sort) > /tmp/actual-files.txt
+          cmp /tmp/expected-files.txt /tmp/actual-files.txt
+
+          test ! -e audit/payload/root/r36state
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+
+          grep -q 'candidate_verify_mode=quick-identity-no-payload-hash' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'full_payload_verification=required-on-arm-once' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'seq 1 240' audit/payload/root/usr/local/bin/r36os-health-watchdog
+          grep -q 'r36os.k1_probe=' audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          grep -q 'candidate_visible_request_missing' audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          grep -q 'r36update_unreadable' audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+
+          M=audit/payload/root/etc/r36os-core-manifest.sha256
+          for p in             /usr/local/bin/r36os-health-watchdog             /usr/local/bin/r36os-kernel-next-prepare             /usr/local/bin/r36os-kernel-slot             /usr/local/bin/r36os-k1-install-hook             /opt/r36os/kernel-next/hook.conf             /opt/r36os/kernel-next/hooked-boot.ini; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "audit/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R46_PACKAGE_AUDIT=PASS
+
+      - name: Prove quick status does not invoke full K1 preflight
+        run: |
+          set -euo pipefail
+          W=/tmp/r46-slot
+          rm -rf "$W"
+          mkdir -p "$W/next/K1"
+          CID=e551eb6598d6da7a8e8320e9
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt MANIFEST.sha256; do echo x >"$W/next/K1/$f"; done
+          cat >"$W/next/K1/K1.conf" <<EOF
+          hardware=R36XX-RK3326
+          panel=PANEL4_NV3051D_640X480
+          root_uuid=e139ce78-9841-40fe-8823-96a304a09859
+          boot_mode=R36OS_K1_BOOT_ONCE
+          candidate_id=$CID
+          EOF
+          cp audit/payload/root/opt/r36os/kernel-next/hook.conf "$W/next/hook.conf"
+          cp audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini "$W/boot.ini"
+          cat >"$W/version" <<'EOF'
+          #!/bin/sh
+          [ "$1" = version ] && { echo 0.5.46.0; exit 0; }
+          exit 1
+          EOF
+          cat >"$W/preflight" <<'EOF'
+          #!/bin/sh
+          echo called >>/tmp/r46-preflight-called
+          exit 99
+          EOF
+          chmod +x "$W/version" "$W/preflight" audit/payload/root/usr/local/bin/r36os-kernel-slot
+          rm -f /tmp/r46-preflight-called
+          env R36OS_KERNEL_NEXT_ROOT="$W/next" R36OS_LEGACY_BOOT="$W/boot.ini" R36OS_K1_HOOK_META="$W/next/hook.conf" R36OS_VERSION_HELPER="$W/version" R36OS_K1_PREFLIGHT="$W/preflight"             audit/payload/root/usr/local/bin/r36os-kernel-slot status >"$W/status"
+          grep -qx 'candidate_verify_mode=quick-identity-no-payload-hash' "$W/status"
+          grep -qx 'candidate_verify_code=0' "$W/status"
+          grep -qx 'hook_verify_code=0' "$W/status"
+          test ! -e /tmp/r46-preflight-called
+
+          set +e
+          env R36OS_KERNEL_NEXT_ROOT="$W/next" R36OS_LEGACY_BOOT="$W/boot.ini" R36OS_K1_HOOK_META="$W/next/hook.conf" R36OS_VERSION_HELPER="$W/version" R36OS_K1_PREFLIGHT="$W/preflight"             audit/payload/root/usr/local/bin/r36os-kernel-slot arm-once >"$W/arm"
+          RC=$?
+          set -e
+          test "$RC" -eq 99
+          test -s /tmp/r46-preflight-called
+          echo R46_QUICK_STATUS_FULL_ARM_VERIFY=PASS
+
+      - name: Prove migration from exact previous hook preserves frozen legacy recovery
+        run: |
+          set -euo pipefail
+          rm -rf r38tmp /tmp/r46-hook-migrate
+          mkdir r38tmp /tmp/r46-hook-migrate/recovery
+          tar -xzf inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C r38tmp
+          OLD=r38tmp/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          test "$(sha256sum "$OLD" | awk '{print $1}')" = c5fddc8c36ece7ddc3b542a7baa96167a08587062327aa45bf8c2c39400587b1
+
+          python3 - "$OLD" /tmp/r46-hook-migrate/recovery/boot.ini.legacy.b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e <<'PY'
+          from pathlib import Path
+          import hashlib,sys
+          t=Path(sys.argv[1]).read_text()
+          a=t.index('# R36OS-K1-BOOT-ONCE-HOOK\n')
+          b=t.index('# R36OS-K1-BOOT-ONCE-HOOK-END\n',a)+len('# R36OS-K1-BOOT-ONCE-HOOK-END\n')
+          while b<len(t) and t[b]=='\n': b+=1
+          legacy=t[:a]+t[b:]
+          assert hashlib.sha256(legacy.encode()).hexdigest()=='b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e'
+          Path(sys.argv[2]).write_text(legacy)
+          PY
+
+          cp "$OLD" /tmp/r46-hook-migrate/boot.ini
+          env R36OS_LEGACY_BOOT=/tmp/r46-hook-migrate/boot.ini R36OS_KERNEL_RECOVERY_DIR=/tmp/r46-hook-migrate/recovery             audit/payload/root/usr/local/bin/r36os-k1-install-hook             audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini             audit/payload/root/opt/r36os/kernel-next/hook.conf > /tmp/r46-hook-migrate/result
+          grep -q '^status=PASS ' /tmp/r46-hook-migrate/result
+          test "$(sha256sum /tmp/r46-hook-migrate/boot.ini | awk '{print $1}')" = "$(awk -F= '$1=="hooked_boot_sha256"{print $2}' audit/payload/root/opt/r36os/kernel-next/hook.conf)"
+          test "$(sha256sum /tmp/r46-hook-migrate/recovery/boot.ini.legacy.b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e | awk '{print $1}')" = b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e
+          echo R46_HOOK_MIGRATION=PASS
+
+      - name: Upload exact validated R46 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R46-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd
+            out-a/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r46-build-a.log
+            r46-build-b.log
+            R46_AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
