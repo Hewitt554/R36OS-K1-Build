@@ -18,12 +18,12 @@ jobs:
     timeout-minutes: 30
     env:
       REPO: Hewitt554/R36OS-K1-Build
-      BUILD_RUN: '36587764876'
-      BUILD_ARTIFACT: '11041834344'
-      BUILD_HEAD_SHA: '9a456ce0ae0b304ad1e70438dd820c8a91e6995a'
+      BUILD_RUN: '36588333751'
+      BUILD_ARTIFACT: '11042816064'
+      BUILD_HEAD_SHA: '2a092353bb5790bd3c896e4a3e5c6d2a2dffd483'
       PACKAGE: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
-      PACKAGE_SHA: f7b17b2b7734d3fc86a3788789cc4ae0433dac99db8d5621ec4af211c2dde137
-      PACKAGE_SIZE: '409027'
+      PACKAGE_SHA: b2314023e4bbd0027584e05f7c472534768da1e49438622f54bdeb17d4653965
+      PACKAGE_SIZE: '409051'
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +78,7 @@ jobs:
           CID=e551eb6598d6da7a8e8320e9
 
           mkdir -p "$PUB" "$STATE" "$SRC/K1"
+          sudo mount -t tmpfs -o size=32m tmpfs "$STATE"
           sudo rm -rf "$PRIVATE" "$GUARD" 2>/dev/null || true
           sudo mkdir -p /usr/local/libexec/r36os
           sudo cp "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz" /usr/local/libexec/r36os/
@@ -111,6 +112,7 @@ jobs:
             [ -n "$HOLDER" ] && sudo kill "$HOLDER" 2>/dev/null || true
             sudo umount "$PRIVATE" 2>/dev/null || true
             sudo umount "$PUB" 2>/dev/null || true
+            sudo umount "$STATE" 2>/dev/null || true
             sudo losetup -d "$LOOP" 2>/dev/null || true
             sudo rm -rf "$PRIVATE" "$GUARD" 2>/dev/null || true
           }
