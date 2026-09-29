@@ -1,0 +1,208 @@
+name: Validate R36OS Alpha 5R53
+
+on:
+  push:
+    branches:
+      - work/r53-k1-systemd-handoff-ui-header-2026-09-29
+    paths:
+      - 'r53-release/**'
+      - '.github/workflows/validate-r53.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld binutils-aarch64-linux-gnu file
+
+      - name: Download exact published R52 and R38
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R52-VisibleK1BootTrace-FromR51.r36upd' --dir inputs
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir inputs
+          echo '0ef468b19eddc77a3d8ccb8016238082c4fea23ef0d884135a7f48bd26baf0cb  inputs/00-R36OS-Alpha5R52-VisibleK1BootTrace-FromR51.r36upd' | sha256sum -c -
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          bash -n r53-release/build_release.sh
+          bash -n r53-release/r36os-ui-kernel-label
+          bash -n r53-release/r36os-version
+          python3 -m py_compile r53-release/*.py
+          grep -Fq '/newroot/opt/r36i' r53-release/patch_uinitrd.py
+          grep -Fq '/lib/systemd/systemd' r53-release/r36i.c
+          grep -Fq '/usr/lib/systemd/systemd' r53-release/r36i.c
+          grep -Fq 'BindReadOnlyPaths=/run/r36os-ui-release:/etc/r36os-release' r53-release/99-ui-kernel-label.conf
+          grep -Fq 'R36OS_VERSION="${R36OS_VERSION% LEGACY}"' r53-release/r36os-version
+          echo R53_SOURCE_AUDIT=PASS
+
+      - name: Build R53 twice
+        run: |
+          set -euo pipefail
+          chmod +x r53-release/build_release.sh
+          R52="$PWD/inputs/00-R36OS-Alpha5R52-VisibleK1BootTrace-FromR51.r36upd"
+          R38="$PWD/inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd"
+          ./r53-release/build_release.sh "$R52" "$R38" "$PWD/out-a" | tee r53-build-a.log
+          ./r53-release/build_release.sh "$R52" "$R38" "$PWD/out-b" | tee r53-build-b.log
+
+      - name: Audit deterministic R53 package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R53-K1SystemdHandoffHeader-FromR52.r36upd
+          B=out-b/00-R36OS-Alpha5R53-K1SystemdHandoffHeader-FromR52.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf pkg r38
+          mkdir pkg r38
+          tar -xzf "$A" -C pkg
+          tar -xzf inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C r38
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.53.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.52.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_dtb_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_modules_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_uinitrd_change"{print $2}' pkg/manifest.conf)" = yes
+          CID="$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)"
+          test "$CID" != e551eb6598d6da7a8e8320e9
+          echo "$CID" | grep -Eq '^[0-9a-f]{24}$'
+          echo "R53_CANDIDATE_ID=$CID" >>"$GITHUB_ENV"
+
+          test -f pkg/payload/root/opt/r36i
+          file pkg/payload/root/opt/r36i | grep -q 'ARM aarch64'
+          readelf -h pkg/payload/root/opt/r36i | grep -q 'AArch64'
+          ! readelf -d pkg/payload/root/opt/r36i 2>/dev/null | grep -q NEEDED
+          for p in /lib/systemd/systemd /usr/lib/systemd/systemd /bin/systemd /usr/bin/systemd /usr/sbin/init /bin/init; do
+            strings pkg/payload/root/opt/r36i | grep -Fxq "$p"
+          done
+
+          test ! -e pkg/payload/root/r36state
+          ! find pkg/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/Image
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/rk3326-r36s-k1.dtb
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/modules.tar.xz
+          test -e pkg/payload/root/opt/r36os/kernel-next/K1/uInitrd
+
+          HOOK=pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          META=pkg/payload/root/opt/r36os/kernel-next/hook.conf
+          grep -Fq "boot-next.$CID.once" "$HOOK"
+          grep -Fq "r36os.kernel_candidate=$CID" "$HOOK"
+          grep -Fq '[5/5] Starting Linux 6.12.94-r36os-k1' "$HOOK"
+          grep -Fxq 'format=R36OS_K1_BOOT_HOOK_V6' "$META"
+          grep -Fxq "candidate_id=$CID" "$META"
+          if grep 'fatwrite mmc 1:3' "$HOOK" | sed -n 's/.*"\([^"]*\)".*/\1/p' | grep -q '/'; then
+            echo subdirectory-fatwrite-found >&2
+            exit 30
+          fi
+          echo R53_PACKAGE_AUDIT=PASS
+
+      - name: Validate patched uInitrd internals and full merged K1 candidate
+        run: |
+          set -euo pipefail
+          OLDK1=r38/payload/root/opt/r36os/kernel-next/K1
+          NEWK1=/tmp/r53-k1
+          cp -a "$OLDK1" "$NEWK1"
+          for f in uInitrd K1.conf BUILD_INFO.txt MANIFEST.sha256; do
+            cp "pkg/payload/root/opt/r36os/kernel-next/K1/$f" "$NEWK1/$f"
+          done
+
+          test "$(sha256sum "$NEWK1/Image"|awk '{print $1}')" = a7a388d5ca21b276bddcc0e3892b0c965b73d92f2c0238cb9c25a210dba7c97e
+          test "$(sha256sum "$NEWK1/rk3326-r36s-k1.dtb"|awk '{print $1}')" = e2145905b1beb8d0f5b9dee6c5a21d31c29474be8762c893e81506fc40e627f4
+          cmp "$OLDK1/modules.tar.xz" "$NEWK1/modules.tar.xz"
+          test "$(sha256sum "$NEWK1/uInitrd"|awk '{print $1}')" != 6d44f435bd88b54e91af569fd6445db460b9ab80313062b8136796f27b888f6e
+          (cd "$NEWK1" && sha256sum -c MANIFEST.sha256 >/dev/null)
+          r38/payload/root/usr/local/bin/r36os-k1-preflight "$NEWK1" >/dev/null
+
+          python3 - "$NEWK1/uInitrd" <<'PY'
+          import gzip,struct,sys,zlib
+          b=open(sys.argv[1],'rb').read()
+          assert struct.unpack('>I',b[:4])[0]==0x27051956
+          n=struct.unpack('>I',b[12:16])[0]
+          payload=b[64:64+n]
+          assert (zlib.crc32(payload)&0xffffffff)==struct.unpack('>I',b[24:28])[0]
+          h=bytearray(b[:64]); want=struct.unpack('>I',h[4:8])[0]; h[4:8]=b'\0'*4
+          assert (zlib.crc32(h)&0xffffffff)==want
+          c=gzip.decompress(payload)
+          assert b'/newroot/sbin/init\0' not in c
+          assert b'/newroot/opt/r36i\0' in c
+          assert b'\0/sbin/init\0mount proc failed' not in c
+          assert b'\0/opt/r36i\0\0mount proc failed' in c
+          print('R53_UINITRD_INTERNALS=PASS')
+          PY
+          echo R53_MERGED_K1_PREFLIGHT=PASS
+
+      - name: Validate UI header LEGACY and K1 views
+        run: |
+          set -euo pipefail
+          REL=pkg/payload/root/etc/r36os-release
+          LABEL=pkg/payload/root/usr/local/bin/r36os-ui-kernel-label
+          VER=pkg/payload/root/usr/local/bin/r36os-version
+          chmod +x "$LABEL" "$VER"
+
+          R36OS_RELEASE_FILE="$REL" R36OS_UI_RELEASE_OUT=/tmp/ui-release R36OS_UNAME_R=4.4.189 "$LABEL"
+          grep -Fxq 'R36OS_VERSION="Alpha 5R53 LEGACY"' /tmp/ui-release
+          R36OS_RELEASE_FILE=/tmp/ui-release "$VER" tag | grep -Fxq Alpha5R53
+          R36OS_RELEASE_FILE=/tmp/ui-release "$VER" version | grep -Fxq 0.5.53.0
+
+          R36OS_RELEASE_FILE="$REL" R36OS_UI_RELEASE_OUT=/tmp/ui-release R36OS_UNAME_R=6.12.94-r36os-k1 "$LABEL"
+          grep -Fxq 'R36OS_VERSION="Alpha 5R53 K1"' /tmp/ui-release
+          R36OS_RELEASE_FILE=/tmp/ui-release "$VER" tag | grep -Fxq Alpha5R53
+          R36OS_RELEASE_FILE=/tmp/ui-release "$VER" version | grep -Fxq 0.5.53.0
+
+          grep -Fq 'BindReadOnlyPaths=/run/r36os-ui-release:/etc/r36os-release' pkg/payload/root/etc/systemd/system/r36os.service.d/99-ui-kernel-label.conf
+          echo R53_UI_HEADER_TEST=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint \
+            /usr/local/bin/r36os-k1-install-hook \
+            /usr/local/bin/r36os-ui-kernel-label \
+            /usr/local/bin/r36os-version \
+            /etc/systemd/system/r36os-ui-kernel-label.service \
+            /etc/systemd/system/r36os.service.d/99-ui-kernel-label.conf \
+            /opt/r36i \
+            /opt/r36os/kernel-next/hooked-boot.ini \
+            /opt/r36os/kernel-next/hook.conf \
+            /opt/r36os/kernel-next/K1/MANIFEST.sha256; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R53_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R53 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R53-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R53-K1SystemdHandoffHeader-FromR52.r36upd
+            out-a/00-R36OS-Alpha5R53-K1SystemdHandoffHeader-FromR52.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r53-build-a.log
+            r53-build-b.log
+          if-no-files-found: error
+          retention-days: 30
