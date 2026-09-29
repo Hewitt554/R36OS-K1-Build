@@ -1,0 +1,31 @@
+#!/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+set -u
+REL=/etc/r36os-release
+[ -r "$REL" ] || { echo "r36os-version: release metadata missing" >&2; exit 70; }
+. "$REL" || { echo "r36os-version: cannot read $REL" >&2; exit 71; }
+: "${R36OS_NAME:?r36os-version: R36OS_NAME missing}"
+: "${R36OS_VERSION:?r36os-version: R36OS_VERSION missing}"
+: "${R36OS_PACKAGE_VERSION:?r36os-version: R36OS_PACKAGE_VERSION missing}"
+case "$R36OS_VERSION" in
+  *" LEGACY") R36OS_VERSION="${R36OS_VERSION% LEGACY}";;
+  *" K1") R36OS_VERSION="${R36OS_VERSION% K1}";;
+  *" KERNEL?") R36OS_VERSION="${R36OS_VERSION% KERNEL?}";;
+esac
+[ "$R36OS_NAME" = R36OS ] || { echo "r36os-version: unexpected product name: $R36OS_NAME" >&2; exit 72; }
+case "$R36OS_VERSION" in "Alpha 5R"[0-9]*) ;; *) echo "r36os-version: invalid release name: $R36OS_VERSION" >&2; exit 73;; esac
+rev="${R36OS_VERSION#Alpha 5R}"
+case "$rev" in ''|*[!0-9]*) echo "r36os-version: invalid revision: $rev" >&2; exit 74;; esac
+expected="0.5.${rev}.0"
+[ "$R36OS_PACKAGE_VERSION" = "$expected" ] || { echo "r36os-version: inconsistent release metadata: name=$R36OS_VERSION version=$R36OS_PACKAGE_VERSION expected=$expected" >&2; exit 75; }
+tag="Alpha5R${rev}"
+case "${1:-all}" in
+ version) printf '%s\n' "$R36OS_PACKAGE_VERSION";;
+ name) printf '%s\n' "$R36OS_VERSION";;
+ tag) printf '%s\n' "$tag";;
+ rev) printf '%s\n' "$rev";;
+ session-prefix) printf 'alpha5r%s\n' "$rev";;
+ all) printf 'name=%s\ntag=%s\nversion=%s\nrevision=%s\nsource=%s\n' "$R36OS_VERSION" "$tag" "$R36OS_PACKAGE_VERSION" "$rev" "$REL";;
+ *) echo 'usage: r36os-version [all|version|name|tag|rev|session-prefix]' >&2; exit 64;;
+esac
