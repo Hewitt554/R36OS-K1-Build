@@ -1,0 +1,50 @@
+#!/bin/bash
+set +e
+MOUNT="${R36OS_UPDATE_MOUNT:-/r36update}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+OUT="${R36OS_K1_ATTEMPT_STATUS:-/run/r36os-k1-attempt.status}"
+CMDLINE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
+K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null)}"
+mkdir -p /run 2>/dev/null || true
+probe="$(tr ' ' '\n' <"$CMDLINE" 2>/dev/null | awk -F= '$1=="r36os.k1_probe"{print $2;exit}')"
+[ -n "$probe" ] || probe=none
+deepest=none
+seen=no
+{
+  echo 'format=R36OS_K1_ATTEMPT_STATUS_V1'
+  echo "running_kernel=$K"
+  echo "cmdline_probe=$probe"
+  for spec in K1CON.OK:guard_verified K1IMG.OK:image_loaded K1INI.OK:initrd_loaded K1DTB.OK:dtb_loaded K1BOT.OK:booti_invoked K1RET.OK:booti_returned; do
+    f="${spec%%:*}"; st="${spec#*:}"
+    if [ -s "$MOUNT/$f" ]; then
+      echo "breadcrumb_$f=yes"
+      deepest="$st"; seen=yes
+    else
+      echo "breadcrumb_$f=no"
+    fi
+  done
+  echo "deepest_uboot_stage=$deepest"
+  echo "consumed_marker=$([ -s "$MOUNT/R36K1.CNS" ] && echo yes || echo no)"
+  if [ "$K" = 6.12.94-r36os-k1 ]; then
+    echo 'interpretation=k1-running'
+  elif [ "$deepest" = booti_invoked ] && [ ! -s "$MOUNT/K1RET.OK" ]; then
+    echo 'interpretation=booti-invoked-no-return-marker'
+  elif [ "$deepest" = booti_returned ]; then
+    echo 'interpretation=booti-returned-to-uboot'
+  elif [ "$deepest" != none ]; then
+    echo "interpretation=uboot-reached-$deepest"
+  else
+    echo 'interpretation=no-persistent-uboot-breadcrumb'
+  fi
+  echo "time=$(date -Is 2>/dev/null || date)"
+} >"$OUT" 2>/dev/null || exit 0
+
+if [ "$seen" = yes ] || [ "$probe" != none ]; then
+  D="$STATE/logs/k1-attempts"
+  if mkdir -p "$D" 2>/dev/null; then
+    cp -f "$OUT" "$D/latest.conf" 2>/dev/null || true
+    ts="$(date +%Y%m%d-%H%M%S 2>/dev/null)"
+    echo "$ts" | grep -Eq '^[0-9]{8}-[0-9]{6}$' && cp -f "$OUT" "$D/attempt-$ts.conf" 2>/dev/null || true
+  fi
+fi
+exit 0
