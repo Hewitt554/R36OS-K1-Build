@@ -5,7 +5,7 @@ on:
     branches:
       - work/r51-persistent-k1-breadcrumbs-2026-09-29
     paths:
-      - '.github/workflows/publish-r51-carrier.yml'
+      - '.github/workflows/publish-r50-carrier.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,7 +23,7 @@ jobs:
       VALIDATED_HEAD_SHA: 2839f122fda8261c0ec34014b77b21abc5204ffb
       PREPUBLISH_MAIN_SHA: 7a01ee6d8311fcaadcbdff661e054284b29d9945
       CARRIER_TAG: alpha5r48
-      NAME: 00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR51.r36upd
+      NAME: 00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR50.r36upd
       EXPECTED_SHA: 11e1bdfd6378f96607dbc608412c17fefd729ceef71cb1ed633073b99cfc4f82
       EXPECTED_SIZE: '20995'
 
