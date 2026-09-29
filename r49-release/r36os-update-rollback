@@ -1,0 +1,80 @@
+#!/bin/bash
+# R36OS transactional updater v3 rollback.
+# R49: isolate/unmount R36UPDATE BEFORE restoring/removing R49 files.
+# Never write rollback status to FAT; never use forced/lazy unmount.
+set -u
+STATE=/r36state
+ROLL="$STATE/rollback/previous-core"
+UPDATE_MOUNT="${R36OS_R36UPDATE_MOUNT:-/r36update}"
+POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"
+[ -d "$ROLL" ] || exit 20
+LOG="$STATE/logs/update-rollback-$(date +%Y%m%d-%H%M%S 2>/dev/null || echo rollback).log"
+mkdir -p "$STATE/logs" "$STATE/update"
+exec >>"$LOG" 2>&1
+
+if [ -x /usr/local/bin/r36os-boot-branding ]; then
+  /usr/local/bin/r36os-boot-branding restore-initramfs >>"$LOG" 2>&1 || true
+fi
+
+# Do this while the R49 policy helper still exists. The rollback file list may
+# remove it a few lines later.
+R36UPDATE_UNMOUNT=not-mounted
+if mountpoint -q "$UPDATE_MOUNT" 2>/dev/null; then
+  echo "R49 rollback: isolating R36UPDATE before core restore"
+  sync
+  if [ -x "$POLICY" ] && "$POLICY" leave-unmounted >>"$LOG" 2>&1; then
+    R36UPDATE_UNMOUNT=pass
+    echo "R49 rollback: policy clean unmount PASS"
+  else
+    R36UPDATE_UNMOUNT=failed
+    echo "R49 rollback: policy unmount failed; trying one normal base unmount"
+    umount "$UPDATE_MOUNT" >>"$LOG" 2>&1 && R36UPDATE_UNMOUNT=pass
+    if [ "$R36UPDATE_UNMOUNT" != pass ]; then
+      echo "R49 rollback: R36UPDATE unmount failed; remounting read-only if possible"
+      mount -o remount,ro "$UPDATE_MOUNT" >>"$LOG" 2>&1 || true
+      sync
+      {
+        echo "time=$(date -Is 2>/dev/null || date)"
+        echo "mount=$UPDATE_MOUNT"
+        echo "normal_unmount=failed"
+        echo "forced_or_lazy_unmount=not_used"
+        echo "log=$LOG"
+      } >"$STATE/update/rollback-r36update-unmount-failure.conf"
+    fi
+  fi
+fi
+
+echo "Restoring previous known-good R36OS core"
+P="$STATE/update/pending.conf"
+VER="$(awk -F= '$1=="version"{print $2}' "$P" 2>/dev/null)"
+ORIGIN="$(awk -F= '$1=="origin"{sub(/^origin=/,"");print}' "$P" 2>/dev/null)"
+if [ -f "$ROLL/new-files.list" ]; then
+  while IFS= read -r p; do [ -n "$p" ] && rm -rf "$p"; done <"$ROLL/new-files.list"
+fi
+[ -d "$ROLL/files" ] && cp -a "$ROLL/files/." /
+[ -f "$ROLL/r36os-release.before" ] && cp -a "$ROLL/r36os-release.before" /etc/r36os-release
+systemctl daemon-reload 2>/dev/null || true
+rm -f "$STATE/update/pending.conf" "$STATE/update/applied.conf"
+printf 'rollback_time=%s\ntarget=%s\nlog=%s\nr36update_unmount=%s\n' "$(date -Is 2>/dev/null || date)" "$VER" "$LOG" "$R36UPDATE_UNMOUNT" >"$STATE/update/last-rollback.txt"
+{
+  echo "R36OS update failed"
+  echo "Stage: Boot health check"
+  echo "Error: New version did not pass exact-version + first-frame health"
+  echo "Target version: $VER"
+  echo "Previous version: restored"
+  echo "R36UPDATE clean unmount: $R36UPDATE_UNMOUNT"
+  echo "Full log: $LOG"
+} >"$STATE/update/last-error-display.txt"
+
+if [ -n "$ORIGIN" ]; then
+  if [ -f "$ORIGIN.staged" ]; then mv -f "$ORIGIN.staged" "$ORIGIN.rolled-back" 2>/dev/null || true
+  elif [ -f "$ORIGIN" ]; then mv -f "$ORIGIN" "$ORIGIN.rolled-back" 2>/dev/null || true
+  fi
+fi
+
+if mountpoint -q /roms2 2>/dev/null; then
+  mkdir -p /roms2/r36os/logs
+  cp -a "$LOG" /roms2/r36os/logs/ 2>/dev/null || true
+fi
+sync
+exit 0
