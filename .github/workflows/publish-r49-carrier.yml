@@ -84,7 +84,9 @@ jobs:
           if gh api "repos/$REPO/releases/tags/$CARRIER_TAG" | jq -e --arg n "$NAME" '.assets[] | select(.name==$n)' >/dev/null; then
             echo "carrier already has R49 asset; verifying existing asset instead of clobbering"
           else
-            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" "$REPORT" --repo "$REPO"
+            cp "$REPORT" /tmp/R49_RELEASE_REPORT.txt
+            cp "$INTLOG" /tmp/R49_INTEGRATION_LOG.txt
+            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" /tmp/R49_RELEASE_REPORT.txt /tmp/R49_INTEGRATION_LOG.txt --repo "$REPO"
           fi
 
       - name: Verify carrier asset bytes
