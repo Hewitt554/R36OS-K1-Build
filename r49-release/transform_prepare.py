@@ -13,7 +13,7 @@ s=s.replace('0.5.48.0','0.5.49.0',1)
 anchor='SLOT="${R36OS_KERNEL_SLOT_HELPER:-/usr/local/bin/r36os-kernel-slot}"\n'
 if s.count(anchor)!=1:
     raise SystemExit('prepare helper variable anchor mismatch')
-s=s.replace(anchor, anchor + 'POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"\nMAINT="${R36OS_R36UPDATE_MAINT:-/usr/local/bin/r36os-r36update-maint}"\n',1)
+s=s.replace(anchor, anchor + 'POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"\nMAINT="${R36OS_R36UPDATE_MAINT:-/usr/local/bin/r36os-r36update-maint}"\nPRIVATE="${R36OS_R36UPDATE_PRIVATE_RW:-/run/r36os-r36update-rw}"\n',1)
 
 old_fail='''fail(){
   progress FAIL 100 "K1 preparation failed" "$2 (code $1)"
@@ -21,6 +21,7 @@ old_fail='''fail(){
 '''
 new_fail='''fail(){
   # A failed K1 preparation must never leave the FAT handoff partition writable.
+  if [ -x "${MAINT:-}" ]; then "$MAINT" marker-abort-ro >/dev/null 2>&1 || true; fi
   if [ -x "${POLICY:-}" ]; then "$POLICY" finish-ro >/dev/null 2>&1 || true; fi
   progress FAIL 100 "K1 preparation failed" "$2 (code $1)"
   printf 'status=FAIL\\ncode=%s\\ndetail=%s\\n' "$1" "$2" >"$RESULT" 2>/dev/null
@@ -86,28 +87,30 @@ printf 'status=PASS\\ncode=0\\ndetail=armed-once\\ncandidate_id=%s\\n' "$CID" >"
 echo "status=PASS candidate_id=$CID result=ARMED_ONCE"
 exit 0
 '''
-new_tail='''progress RUNNING 94 "Opening marker write window" "R36UPDATE writable only long enough to arm this candidate"
-"$POLICY" prepare-write >/run/r36os-r36update-arm-window.result 2>&1 || fail 51 arm-write-window
-progress RUNNING 96 "Arming next boot only" "Writing candidate-bound one-shot request"
-if ! "$SLOT" arm-once >/run/r36os-k1-arm.result 2>&1; then
-  "$SLOT" disarm >/run/r36os-k1-arm-cleanup.result 2>&1 || true
-  "$POLICY" finish-ro >/dev/null 2>&1 || true
+new_tail='''progress RUNNING 94 "Opening private marker window" "Normal processes remain blocked from the real FAT filesystem"
+"$MAINT" marker-open >/run/r36os-r36update-marker-open.result 2>&1 || fail 51 marker-window-open
+PNEXT="$PRIVATE/R36OS-KernelNext"
+
+progress RUNNING 96 "Arming next boot only" "Writing candidate-bound one-shot request on the private FAT mount"
+if ! R36OS_KERNEL_NEXT_ROOT="$PNEXT" R36OS_UPDATE_MOUNT="$PRIVATE" "$SLOT" arm-once >/run/r36os-k1-arm.result 2>&1; then
+  R36OS_KERNEL_NEXT_ROOT="$PNEXT" R36OS_UPDATE_MOUNT="$PRIVATE" "$SLOT" disarm >/run/r36os-k1-arm-cleanup.result 2>&1 || true
+  "$MAINT" marker-abort-ro >/dev/null 2>&1 || true
   fail 52 arm-once
 fi
 sync
 
-progress RUNNING 98 "Closing boot handoff" "Cleanly unmounting R36UPDATE before restart"
-if ! "$POLICY" leave-unmounted >/run/r36os-r36update-final-unmount.result 2>&1; then
-  "$POLICY" prepare-write >/dev/null 2>&1 || true
-  "$SLOT" disarm >/run/r36os-k1-final-unmount-cleanup.result 2>&1 || true
-  "$POLICY" finish-ro >/dev/null 2>&1 || true
+progress RUNNING 98 "Closing boot handoff" "Unmounting the private FAT window and leaving R36UPDATE closed for restart"
+if ! "$MAINT" marker-close-unmounted >/run/r36os-r36update-final-unmount.result 2>&1; then
+  R36OS_KERNEL_NEXT_ROOT="$PNEXT" R36OS_UPDATE_MOUNT="$PRIVATE" "$SLOT" disarm >/run/r36os-k1-final-unmount-cleanup.result 2>&1 || true
+  "$MAINT" marker-abort-ro >/dev/null 2>&1 || true
   fail 53 final-clean-unmount
 fi
 mountpoint -q "$UPDATE_MOUNT" 2>/dev/null && fail 54 final-r36update-still-mounted
+mountpoint -q "$PRIVATE" 2>/dev/null && fail 55 final-private-still-mounted
 
 progress PASS 100 "K1 Boot Next Once armed" "R36UPDATE closed cleanly; restart to test once"
-printf 'status=PASS\\ncode=0\\ndetail=armed-once-r36update-unmounted\\ncandidate_id=%s\\n' "$CID" >"$RESULT"
-echo "status=PASS candidate_id=$CID result=ARMED_ONCE_R36UPDATE_UNMOUNTED"
+printf 'status=PASS\\ncode=0\\ndetail=armed-once-private-window-r36update-unmounted\\ncandidate_id=%s\\n' "$CID" >"$RESULT"
+echo "status=PASS candidate_id=$CID result=ARMED_ONCE_PRIVATE_WINDOW_R36UPDATE_UNMOUNTED"
 exit 0
 '''
 if s.count(old_tail)!=1:
