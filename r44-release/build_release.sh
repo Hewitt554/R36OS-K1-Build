@@ -30,7 +30,7 @@ done
 
 # Guard the exact physical failure lineage before replacing it.
 test "$(grep -c '0.5.43.0' "$BASE/usr/local/bin/r36os-kernel-next-prepare")" -eq 1
-test "$(grep -Ec '^[[:space:]]*cp[[:space:]]+-a[[:space:]]+"\$SRC/\." "$TMP/"' "$BASE/usr/local/bin/r36os-kernel-next-prepare")" -eq 1
+test "$(grep -Fc '  cp -a "$SRC/." "$TMP/" || { rm -rf "$TMP"; fail 33 stage-copy; }' "$BASE/usr/local/bin/r36os-kernel-next-prepare")" -eq 1
 bash -n "$HERE/r36os-kernel-next-prepare"
 test "$(grep -c '0.5.44.0' "$HERE/r36os-kernel-next-prepare")" -eq 1
 ! grep -Eq '^[[:space:]]*cp[[:space:]]+-a([[:space:]]|$)' "$HERE/r36os-kernel-next-prepare"
