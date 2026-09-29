@@ -129,23 +129,6 @@ case "$CMD" in
     write_status PASS normal-readonly ro
     echo 'status=PASS mode=ro'
     ;;
-  prepare-write)
-    is_mounted || fail 33 r36update-not-mounted unknown
-    unbind_compat || fail 34 compat-unmount-failed unknown
-    remount_rw || fail 35 remount-rw-failed rw
-    write_status PASS controlled-write-window rw
-    echo 'status=PASS mode=rw'
-    ;;
-  mount-rw)
-    unbind_compat >/dev/null 2>&1 || true
-    if is_mounted; then
-      remount_rw || fail 36 remount-rw-failed rw
-    else
-      mount_fresh rw || fail 37 mount-rw-failed rw
-    fi
-    write_status PASS controlled-write-window rw
-    echo 'status=PASS mode=rw'
-    ;;
   mount-ro)
     unbind_compat >/dev/null 2>&1 || true
     if is_mounted; then
@@ -177,7 +160,7 @@ case "$CMD" in
     [ -r /run/r36os-r36update-binds.conf ] && cat /run/r36os-r36update-binds.conf
     ;;
   *)
-    echo 'usage: r36os-r36update-policy normal|prepare-write|mount-rw|mount-ro|finish-ro|leave-unmounted|unbind|status' >&2
+    echo 'usage: r36os-r36update-policy normal|mount-ro|finish-ro|leave-unmounted|unbind|status' >&2
     exit 2
     ;;
 esac
