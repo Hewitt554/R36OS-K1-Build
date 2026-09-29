@@ -1,0 +1,159 @@
+name: Validate R36OS Alpha 5R51
+
+on:
+  push:
+    branches:
+      - work/r51-persistent-k1-breadcrumbs-2026-09-29
+    paths:
+      - 'r51-release/**'
+      - '.github/workflows/validate-r51.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R50 input
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R50-RootConsumedKernelStatus-FromR49.r36upd' --dir inputs
+          echo '5a41efe1b5019bfb2c8b9166bffd48c663997121e90a8a58f59b1e901f7072f0  inputs/00-R36OS-Alpha5R50-RootConsumedKernelStatus-FromR49.r36upd' | sha256sum -c -
+
+      - name: Audit R51 source
+        run: |
+          set -euo pipefail
+          for f in r51-release/r36os-k1-attempt-capture r51-release/r36os-running-kernel-status r51-release/build_release.sh; do bash -n "$f"; done
+          python3 -m py_compile r51-release/*.py
+          for f in K1CON.OK K1IMG.OK K1INI.OK K1DTB.OK K1BOT.OK K1RET.OK; do grep -Fq "$f" r51-release/generate_hook.py; done
+          grep -Fq 'ExecStartPost=/usr/local/bin/r36os-k1-attempt-capture' r51-release/98-k1-diagnostics.conf
+          grep -Fq 'ExecStartPost=/usr/local/bin/r36os-running-kernel-status' r51-release/98-k1-diagnostics.conf
+          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r51-release; then exit 20; fi
+          echo R51_SOURCE_AUDIT=PASS
+
+      - name: Build R51 twice
+        run: |
+          set -euo pipefail
+          chmod +x r51-release/build_release.sh
+          R50="$PWD/inputs/00-R36OS-Alpha5R50-RootConsumedKernelStatus-FromR49.r36upd"
+          ./r51-release/build_release.sh "$R50" "$PWD/out-a" | tee r51-build-a.log
+          ./r51-release/build_release.sh "$R50" "$PWD/out-b" | tee r51-build-b.log
+
+      - name: Audit deterministic package and breadcrumbs
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR50.r36upd
+          B=out-b/00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR50.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.51.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.50.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="initramfs_binary_change"{print $2}' pkg/manifest.conf)" = no
+
+          test ! -e pkg/payload/root/r36state
+          ! find pkg/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find pkg/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find pkg/payload/root -type l | grep -q .
+
+          HOOK=pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          META=pkg/payload/root/opt/r36os/kernel-next/hook.conf
+          for f in K1CON.OK K1IMG.OK K1INI.OK K1DTB.OK K1BOT.OK K1RET.OK; do
+            grep -Fq "\"$f\"" "$HOOK"
+          done
+          grep -Fxq 'breadcrumbs=K1CON.OK,K1IMG.OK,K1INI.OK,K1DTB.OK,K1BOT.OK,K1RET.OK' "$META"
+          grep -Fxq 'breadcrumbs_mode=root-8.3-best-effort' "$META"
+          # Every U-Boot write target must still be a root-level filename.
+          if grep 'fatwrite mmc 1:3' "$HOOK" | sed -n 's/.*"\\([^"]*\\)".*/\\1/p' | grep -q '/'; then
+            echo subdirectory-fatwrite-found >&2
+            exit 30
+          fi
+          echo R51_PACKAGE_AUDIT=PASS
+
+      - name: Test recovery breadcrumb capture
+        run: |
+          set -euo pipefail
+          CAP=pkg/payload/root/usr/local/bin/r36os-k1-attempt-capture
+          RUN=pkg/payload/root/usr/local/bin/r36os-running-kernel-status
+          chmod +x "$CAP" "$RUN"
+          rm -rf /tmp/r51-mnt /tmp/r51-state
+          mkdir -p /tmp/r51-mnt /tmp/r51-state
+          : >/tmp/r51-mnt/K1CON.OK
+          : >/tmp/r51-mnt/K1IMG.OK
+          : >/tmp/r51-mnt/K1INI.OK
+          : >/tmp/r51-mnt/K1DTB.OK
+          : >/tmp/r51-mnt/K1BOT.OK
+          printf 'x' >/tmp/r51-mnt/K1CON.OK
+          printf 'x' >/tmp/r51-mnt/K1IMG.OK
+          printf 'x' >/tmp/r51-mnt/K1INI.OK
+          printf 'x' >/tmp/r51-mnt/K1DTB.OK
+          printf 'x' >/tmp/r51-mnt/K1BOT.OK
+          echo 'root=x' >/tmp/r51-cmdline
+          R36OS_UPDATE_MOUNT=/tmp/r51-mnt R36OS_STATE_ROOT=/tmp/r51-state R36OS_K1_ATTEMPT_STATUS=/tmp/r51-attempt R36OS_CMDLINE_FILE=/tmp/r51-cmdline R36OS_UNAME_R=4.4.189 "$CAP"
+          grep -Fxq 'deepest_uboot_stage=booti_invoked' /tmp/r51-attempt
+          grep -Fxq 'interpretation=booti-invoked-no-return-marker' /tmp/r51-attempt
+          grep -Fxq 'breadcrumb_K1RET.OK=no' /tmp/r51-attempt
+          test -s /tmp/r51-state/logs/k1-attempts/latest.conf
+
+          R36OS_KERNEL_STATUS_OUT=/tmp/r51-kernel R36OS_K1_ATTEMPT_STATUS=/tmp/r51-attempt R36OS_CMDLINE_FILE=/tmp/r51-cmdline R36OS_UNAME_R=4.4.189 "$RUN"
+          grep -Fxq 'baseline_status=4.4.189 Legacy' /tmp/r51-kernel
+          grep -Fxq 'last_k1_stage=booti_invoked' /tmp/r51-kernel
+          echo R51_RECOVERY_CAPTURE_TEST=PASS
+
+      - name: Test kernel-slot breadcrumb reporting and fresh-arm cleanup source
+        run: |
+          set -euo pipefail
+          SLOT=pkg/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -Fq 'breadcrumb_deepest=' "$SLOT"
+          for f in K1CON.OK K1IMG.OK K1INI.OK K1DTB.OK K1BOT.OK K1RET.OK; do
+            grep -Fq "\"$UPDATE_MOUNT/$f\"" "$SLOT"
+          done
+          echo R51_SLOT_BREADCRUMB_TEST=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint \
+            /usr/local/bin/r36os-k1-install-hook \
+            /usr/local/bin/r36os-k1-attempt-capture \
+            /usr/local/bin/r36os-running-kernel-status \
+            /etc/systemd/system/r36os.service.d/98-k1-diagnostics.conf \
+            /opt/r36os/kernel-next/hooked-boot.ini \
+            /opt/r36os/kernel-next/hook.conf; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R51_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R51 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R51-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR50.r36upd
+            out-a/00-R36OS-Alpha5R51-PersistentK1Breadcrumbs-FromR50.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r51-build-a.log
+            r51-build-b.log
+          if-no-files-found: error
+          retention-days: 30
