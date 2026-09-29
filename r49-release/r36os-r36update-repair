@@ -1,0 +1,29 @@
+#!/bin/bash
+# R36OS Alpha 5R49 compatibility front-end.
+# Direct automatic FAT repair is retired; K1 maintenance owns the write-capable path.
+set +e
+CMD="${1:-status}"
+MAINT="${R36OS_R36UPDATE_MAINT:-/usr/local/bin/r36os-r36update-maint}"
+RESULT=/run/r36os-r36update-repair.result
+PROGRESS=/run/r36os-r36update-repair.progress
+
+case "$CMD" in
+  status)
+    if [ -x "$MAINT" ]; then
+      "$MAINT" status
+      exit $?
+    fi
+    printf 'status=FAIL\ncode=70\ndetail=r49-maintenance-helper-missing\n' >"$RESULT" 2>/dev/null || true
+    exit 70
+    ;;
+  repair)
+    printf 'FAIL|100|Legacy repair retired|Use Boot Next Once controlled maintenance\n' >"$PROGRESS" 2>/dev/null || true
+    printf 'status=RETIRED\ncode=71\ndetail=legacy-full-fat-repair-retired-use-controlled-k1-maintenance\n' >"$RESULT" 2>/dev/null || true
+    echo 'status=RETIRED code=71 detail=legacy-full-fat-repair-retired-use-controlled-k1-maintenance'
+    exit 71
+    ;;
+  *)
+    echo 'usage: r36os-r36update-repair status|repair' >&2
+    exit 2
+    ;;
+esac
