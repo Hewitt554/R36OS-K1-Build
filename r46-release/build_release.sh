@@ -173,37 +173,37 @@ hook=f'''# R36OS-K1-BOOT-ONCE-HOOK
 # R46 probe: encode exactly how far U-Boot gets into the one-shot handoff.
 # Every failure still falls through to the untouched legacy load path below.
 setenv r36os_k1_probe "hook_seen"
-if load mmc 1:3 ${loadaddr} "{req}"
+if load mmc 1:3 ${{loadaddr}} "{req}"
 then
     setenv r36os_k1_probe "request_visible"
-    setenv r36os_req_size ${filesize}
-    if load mmc 1:3 ${loadaddr} "{cons}"
+    setenv r36os_req_size ${{filesize}}
+    if load mmc 1:3 ${{loadaddr}} "{cons}"
     then
         setenv r36os_k1_probe "already_consumed"
         echo "R36OS K1 attempt already consumed - booting legacy kernel"
     else
-        if fatwrite mmc 1:3 ${loadaddr} "{cons}" ${r36os_req_size}
+        if fatwrite mmc 1:3 ${{loadaddr}} "{cons}" ${{r36os_req_size}}
         then
             setenv r36os_k1_probe "consumed_written"
-            if load mmc 1:3 ${loadaddr} "{cons}"
+            if load mmc 1:3 ${{loadaddr}} "{cons}"
             then
                 setenv r36os_k1_probe "consumed_readback"
-                if test ${filesize} = ${r36os_req_size}
+                if test ${{filesize}} = ${{r36os_req_size}}
                 then
                     setenv r36os_k1_probe "guard_verified"
-                    if load mmc 1:3 ${loadaddr} "R36OS-KernelNext/K1/Image"
+                    if load mmc 1:3 ${{loadaddr}} "R36OS-KernelNext/K1/Image"
                     then
                         setenv r36os_k1_probe "image_loaded"
-                        if load mmc 1:3 ${initrd_loadaddr} "R36OS-KernelNext/K1/uInitrd"
+                        if load mmc 1:3 ${{initrd_loadaddr}} "R36OS-KernelNext/K1/uInitrd"
                         then
                             setenv r36os_k1_probe "initrd_loaded"
-                            if load mmc 1:3 ${dtb_loadaddr} "R36OS-KernelNext/K1/rk3326-r36s-k1.dtb"
+                            if load mmc 1:3 ${{dtb_loadaddr}} "R36OS-KernelNext/K1/rk3326-r36s-k1.dtb"
                             then
                                 setenv r36os_k1_probe "payloads_loaded"
-                                setenv r36os_legacy_bootargs "${bootargs}"
-                                setenv bootargs "${bootargs} r36os.kernel_slot=next r36os.kernel_attempt=K1 r36os.kernel_candidate={CID} r36os.k1_probe=${r36os_k1_probe}"
-                                booti ${loadaddr} ${initrd_loadaddr} ${dtb_loadaddr}
-                                setenv bootargs "${r36os_legacy_bootargs}"
+                                setenv r36os_legacy_bootargs "${{bootargs}}"
+                                setenv bootargs "${{bootargs}} r36os.kernel_slot=next r36os.kernel_attempt=K1 r36os.kernel_candidate={CID} r36os.k1_probe=${{r36os_k1_probe}}"
+                                booti ${{loadaddr}} ${{initrd_loadaddr}} ${{dtb_loadaddr}}
+                                setenv bootargs "${{r36os_legacy_bootargs}}"
                                 setenv r36os_k1_probe "booti_return"
                             else
                                 setenv r36os_k1_probe "dtb_load_failed"
@@ -225,14 +225,14 @@ then
         fi
     fi
 else
-    if load mmc 1:3 ${loadaddr} "R36OS-KernelNext/K1/K1.conf"
+    if load mmc 1:3 ${{loadaddr}} "R36OS-KernelNext/K1/K1.conf"
     then
         setenv r36os_k1_probe "candidate_visible_request_missing"
     else
         setenv r36os_k1_probe "r36update_unreadable"
     fi
 fi
-setenv bootargs "${bootargs} r36os.k1_probe=${r36os_k1_probe}"
+setenv bootargs "${{bootargs}} r36os.k1_probe=${{r36os_k1_probe}}"
 # R36OS-K1-BOOT-ONCE-HOOK-END
 
 '''
