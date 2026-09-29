@@ -1,0 +1,59 @@
+name: Inspect published K1 uInitrd handoff
+
+on:
+  push:
+    branches:
+      - work/r52-visible-k1-boot-trace-2026-09-29
+    paths:
+      - '.github/workflows/inspect-k1-uinitrd.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact R38 K1 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/r38
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir /tmp/r38
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+          mkdir -p /tmp/pkg
+          tar -xzf /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C /tmp/pkg
+          find /tmp/pkg -type f -name uInitrd -print -exec file {} \;
+
+      - name: Extract uInitrd
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq u-boot-tools cpio >/dev/null
+          U=/tmp/pkg/payload/root/opt/r36os/kernel-next/K1/uInitrd
+          mkdir -p /tmp/ird /tmp/extract
+          dumpimage -l "$U" || true
+          if dumpimage -T ramdisk -p 0 -o /tmp/ird/payload "$U" 2>/dev/null; then
+            :
+          else
+            cp "$U" /tmp/ird/payload
+          fi
+          file /tmp/ird/payload
+          cd /tmp/extract
+          if gzip -t /tmp/ird/payload 2>/dev/null; then
+            gzip -dc /tmp/ird/payload | cpio -idm --no-absolute-filenames
+          elif xz -t /tmp/ird/payload 2>/dev/null; then
+            xz -dc /tmp/ird/payload | cpio -idm --no-absolute-filenames
+          else
+            cpio -idm --no-absolute-filenames </tmp/ird/payload
+          fi
+          echo '=== INIT FILES ==='
+          find . -maxdepth 3 -type f -o -type l | sort | head -200
+          echo '=== /init ==='
+          sed -n '1,320p' ./init
+          echo '=== HANDOFF MATCHES ==='
+          grep -R -n -E 'sbin/init|switch_root|pivot_root|modules-bound|root-mounted|state-mounted|exec-systemd|Power-cycle' . || true
