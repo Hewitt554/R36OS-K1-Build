@@ -1,0 +1,115 @@
+#!/bin/bash
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+MARKER=/etc/r36os/r36update-repair-once.conf
+LOGDIR=/r36state/logs/r36update-repair
+RESULT="$LOGDIR/FIRSTBOOT-UPDATE-REPAIR.conf"
+STALE="$LOGDIR/STALE-K1-DISARM.conf"
+PENDING=/r36state/update/pending.conf
+SLOT=/usr/local/bin/r36os-kernel-slot
+
+kmsg(){ [ -w /dev/kmsg ] && printf '<6>R36OS_R48 %s\n' "$*" >/dev/kmsg 2>/dev/null || true; }
+fail_firstboot(){
+  code="$1"; detail="$2"
+  printf 'status=FAIL\ncode=%s\ndetail=%s\ntime=%s\n' "$code" "$detail" "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  kmsg "FIRSTBOOT_FAIL code=$code detail=$detail"
+  mv -f "$MARKER" "$MARKER.failed" 2>/dev/null || rm -f "$MARKER"
+  exit "$code"
+}
+
+mkdir -p "$LOGDIR" 2>/dev/null || true
+cp -f /run/r36os-firstboot-update-repair-generator.status "$LOGDIR/GENERATOR.conf" 2>/dev/null || true
+
+find /usr/local/bin -maxdepth 1 -type f -name 'r36os-r*-github-snapshot' -delete 2>/dev/null || true
+find /usr/local/bin -maxdepth 1 -type f -name 'r36os-r*-firstboot-repair' -delete 2>/dev/null || true
+find /usr/lib/systemd/system-generators -maxdepth 1 -type f -name 'r36os-r*-repair-generator' -delete 2>/dev/null || true
+find /etc/systemd/system -maxdepth 1 -type f -name 'r36os-r*-firstboot-repair.service' -delete 2>/dev/null || true
+find /etc/r36os -maxdepth 1 -type f -name 'r*-r36update-repair-once' -delete 2>/dev/null || true
+
+mkdir -p /r36state/config 2>/dev/null || true
+if [ ! -s /r36state/config/github-diagnostics.conf ]; then
+  cat > /r36state/config/github-diagnostics.conf <<'EOF_CFG'
+format=R36OS_GITHUB_DIAGNOSTICS_V1
+mode=automatic
+repo=Hewitt554/R36OS-Device-Logs
+branch=main
+EOF_CFG
+  chmod 0600 /r36state/config/github-diagnostics.conf 2>/dev/null || true
+fi
+
+[ -f "$MARKER" ] || exit 0
+
+expected="$(awk -F= '$1=="release"{print $2;exit}' "$MARKER" 2>/dev/null)"
+[ "$expected" = 0.5.48.0 ] || fail_firstboot 30 marker-release-mismatch
+
+# Never overlap the filesystem repair with the transactional activation boot.
+# Leave the marker intact; after R48 is marked good, the user's ordinary restart
+# runs the repair on a clean, non-pending boot.
+if [ -s "$PENDING" ]; then
+  pstage="$(awk -F= '$1=="stage"{print $2;exit}' "$PENDING" 2>/dev/null)"
+  pver="$(awk -F= '$1=="version"{print $2;exit}' "$PENDING" 2>/dev/null)"
+  printf 'status=DEFERRED\ndetail=transaction-pending\npending_stage=%s\npending_version=%s\ntime=%s\n' "$pstage" "$pver" "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  kmsg "FIRSTBOOT_DEFERRED pending_stage=$pstage pending_version=$pver"
+  exit 0
+fi
+
+warn="$(dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -E 'Volume was not properly unmounted|dirty bit|filesystem has been set read-only' | tail -1)"
+if [ -z "$warn" ]; then
+  printf 'status=SKIPPED\ndetail=no-mmcblk0p3-dirty-warning\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  kmsg "FIRSTBOOT_SKIP no-dirty-warning"
+  rm -f "$MARKER"
+  exit 0
+fi
+
+[ "$(uname -r 2>/dev/null)" = 4.4.189 ] || fail_firstboot 31 unexpected-running-kernel-before-repair
+[ -x "$SLOT" ] || fail_firstboot 32 kernel-slot-helper-missing
+
+"$SLOT" status >"$LOGDIR/stale-k1-status-before.txt" 2>&1
+s_rc=$?
+[ "$s_rc" -eq 0 ] || fail_firstboot 33 kernel-slot-status-failed
+armed="$(awk -F= '$1=="armed"{print $2;exit}' "$LOGDIR/stale-k1-status-before.txt")"
+consumed="$(awk -F= '$1=="consumed"{print $2;exit}' "$LOGDIR/stale-k1-status-before.txt")"
+cv="$(awk -F= '$1=="candidate_verify_code"{print $2;exit}' "$LOGDIR/stale-k1-status-before.txt")"
+hv="$(awk -F= '$1=="hook_verify_code"{print $2;exit}' "$LOGDIR/stale-k1-status-before.txt")"
+
+case "$armed:$consumed" in
+  yes:no)
+    [ "$cv" = 0 ] && [ "$hv" = 0 ] || fail_firstboot 34 stale-marker-precheck-failed
+    kmsg "STALE_K1_DISARM_START armed=yes consumed=no"
+    "$SLOT" disarm >"$LOGDIR/stale-k1-disarm-console.txt" 2>&1
+    d_rc=$?
+    [ "$d_rc" -eq 0 ] || fail_firstboot 35 stale-marker-disarm-failed
+    "$SLOT" status >"$LOGDIR/stale-k1-status-after.txt" 2>&1
+    a2="$(awk -F= '$1=="armed"{print $2;exit}' "$LOGDIR/stale-k1-status-after.txt")"
+    c2="$(awk -F= '$1=="consumed"{print $2;exit}' "$LOGDIR/stale-k1-status-after.txt")"
+    [ "$a2" = no ] && [ "$c2" = no ] || fail_firstboot 36 stale-marker-still-present
+    printf 'status=PASS\ndetail=stale-armed-unconsumed-marker-cleared\nbefore_armed=%s\nbefore_consumed=%s\nafter_armed=%s\nafter_consumed=%s\ntime=%s\n' "$armed" "$consumed" "$a2" "$c2" "$(date -Is 2>/dev/null || date)" >"$STALE"
+    kmsg "STALE_K1_DISARM_PASS"
+    ;;
+  no:no)
+    printf 'status=SKIPPED\ndetail=no-k1-one-shot-marker\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$STALE"
+    kmsg "STALE_K1_DISARM_SKIP no-marker"
+    ;;
+  *)
+    printf 'status=FAIL\ndetail=unexpected-marker-state\narmed=%s\nconsumed=%s\ntime=%s\n' "$armed" "$consumed" "$(date -Is 2>/dev/null || date)" >"$STALE"
+    fail_firstboot 37 unexpected-k1-marker-state
+    ;;
+esac
+
+kmsg "FAT_REPAIR_START"
+/usr/local/bin/r36os-r36update-repair repair >"$LOGDIR/firstboot-console.txt" 2>&1
+rc=$?
+
+if [ "$rc" -eq 0 ] && grep -q '^status=PASS_REBOOT_REQUIRED$' /run/r36os-r36update-repair.result 2>/dev/null; then
+  printf 'status=PASS_REBOOT_REQUIRED\ndetail=repair-verified\ntime=%s\n' "$(date -Is 2>/dev/null || date)" >"$RESULT"
+  kmsg "FAT_REPAIR_PASS reboot-required"
+  rm -f "$MARKER"
+  sync
+  systemctl --no-block reboot
+  exit 0
+fi
+
+kmsg "FAT_REPAIR_FAIL rc=$rc"
+fail_firstboot "$rc" repair-helper-failed
