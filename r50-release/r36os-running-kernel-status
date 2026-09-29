@@ -1,6 +1,6 @@
 #!/bin/bash
 set +e
-OUT=/run/r36os-kernel-lab.status
+OUT="${R36OS_KERNEL_STATUS_OUT:-/run/r36os-kernel-lab.status}"
 K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null)}"
 CMDLINE_FILE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
 case "$K" in
