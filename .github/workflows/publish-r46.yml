@@ -55,7 +55,7 @@ jobs:
           REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
           AUDIT="$(find candidate -type f -name R46_AUDIT.md -print)"
           for v in PKG SHA_FILE LATEST REPORT AUDIT; do
-            p="$(eval "printf '%s' \"$$v\"")"
+            p="${!v}"
             test -n "$p" && test -f "$p"
             echo "$v=$p" >> "$GITHUB_ENV"
           done
