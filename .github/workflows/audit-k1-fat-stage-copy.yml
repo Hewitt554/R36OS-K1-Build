@@ -1,0 +1,96 @@
+name: Audit K1 FAT staging copy
+
+on:
+  push:
+    branches:
+      - work/r43-clean-rebuild-2026-09-28
+    paths:
+      - '.github/workflows/audit-k1-fat-stage-copy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FAT tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y dosfstools >/dev/null
+
+      - name: Download exact published R38 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p input pkg
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build             --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir input
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  input/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+          tar -xzf input/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C pkg
+          SRC=pkg/payload/root/opt/r36os/kernel-next/K1
+          test -d "$SRC"
+          find "$SRC" -printf '%y %s %P\n' | sort > candidate-tree.txt
+          du -sk "$SRC" | tee candidate-size.txt
+          if find "$SRC" \( -type l -o -type b -o -type c -o -type p -o -type s \) -print -quit | grep -q .; then
+            echo 'non-regular candidate entry found' >&2
+            find "$SRC" -printf '%y %P\n' >&2
+            exit 20
+          fi
+
+      - name: Reproduce current cp -a on vfat and test FAT-safe copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$PWD/pkg/payload/root/opt/r36os/kernel-next/K1"
+          truncate -s 768M /tmp/r36update.img
+          mkfs.fat -F 32 -n R36UPDATE /tmp/r36update.img >/dev/null
+          mkdir -p /tmp/r36update
+          LOOP="$(sudo losetup --find --show /tmp/r36update.img)"
+          cleanup(){ sudo umount /tmp/r36update 2>/dev/null || true; sudo losetup -d "$LOOP" 2>/dev/null || true; }
+          trap cleanup EXIT
+          sudo mount -t vfat -o rw,fmask=0022,dmask=0022,iocharset=utf8,shortname=mixed "$LOOP" /tmp/r36update
+          sudo mkdir -p /tmp/r36update/R36OS-KernelNext
+
+          set +e
+          sudo mkdir -p /tmp/r36update/R36OS-KernelNext/.archive-test
+          sudo cp -a "$SRC/." /tmp/r36update/R36OS-KernelNext/.archive-test/ >/tmp/cp-a.out 2>&1
+          RC_A=$?
+          set -e
+          printf 'cp_a_rc=%s\n' "$RC_A" | tee copy-results.txt
+          cat /tmp/cp-a.out | tee cp-a-output.txt
+
+          sudo rm -rf /tmp/r36update/R36OS-KernelNext/.archive-test
+          sudo mkdir -p /tmp/r36update/R36OS-KernelNext/.fat-safe-test
+          set +e
+          sudo cp -R --no-preserve=ownership,mode,xattr,context "$SRC/." /tmp/r36update/R36OS-KernelNext/.fat-safe-test/ >/tmp/cp-safe.out 2>&1
+          RC_SAFE=$?
+          set -e
+          printf 'cp_safe_rc=%s\n' "$RC_SAFE" | tee -a copy-results.txt
+          cat /tmp/cp-safe.out | tee cp-safe-output.txt
+          test "$RC_SAFE" -eq 0
+
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            test -f "/tmp/r36update/R36OS-KernelNext/.fat-safe-test/$rel"
+            test "$(sha256sum "$SRC/$rel" | awk '{print $1}')" = "$(sha256sum "/tmp/r36update/R36OS-KernelNext/.fat-safe-test/$rel" | awk '{print $1}')"
+          done < <(cd "$SRC" && find . -type f -printf '%P\n' | LC_ALL=C sort)
+          echo FAT_SAFE_COPY_HASH_VERIFY=PASS | tee -a copy-results.txt
+
+      - name: Upload audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: K1-FAT-stage-copy-audit
+          path: |
+            candidate-tree.txt
+            candidate-size.txt
+            copy-results.txt
+            cp-a-output.txt
+            cp-safe-output.txt
+          if-no-files-found: error
+          retention-days: 14
