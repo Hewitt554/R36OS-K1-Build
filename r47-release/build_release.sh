@@ -49,10 +49,11 @@ python3 - "$R46ROOT/usr/local/bin/r36os-kernel-slot" "$ROOT/usr/local/bin/r36os-
 from pathlib import Path
 import sys
 s=Path(sys.argv[1]).read_text()
-for a,b in [('0.5.46.0','0.5.47.0'),('Alpha 5R46','Alpha 5R47'),('r46-runtime-lock','r47-runtime-lock')]:
-    if s.count(a) != 1:
-        raise SystemExit(f'unexpected R46 slot identity count for {a}: {s.count(a)}')
-    s=s.replace(a,b,1)
+checks=[('0.5.46.0','0.5.47.0',2),('Alpha 5R46','Alpha 5R47',1),('r46-runtime-lock','r47-runtime-lock',1)]
+for a,b,count in checks:
+    if s.count(a) != count:
+        raise SystemExit(f'unexpected R46 slot identity count for {a}: {s.count(a)} expected {count}')
+    s=s.replace(a,b)
 Path(sys.argv[2]).write_text(s)
 PY
 
