@@ -18,12 +18,12 @@ jobs:
     timeout-minutes: 30
     env:
       REPO: Hewitt554/R36OS-K1-Build
-      BUILD_RUN: '36588689258'
-      BUILD_ARTIFACT: '11042354083'
-      BUILD_HEAD_SHA: 'd08eaff86669fce2ff3254427b4d7a6a7fa16ba6'
+      BUILD_RUN: '36589431245'
+      BUILD_ARTIFACT: '11042498900'
+      BUILD_HEAD_SHA: '728ac700a85d3cb2b7874e69de0c444423f07b76'
       PACKAGE: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
-      PACKAGE_SHA: 115ddc8b7c95459b4beb3f24332e5db9d85eeb1018bf602c807dcefef00c8090
-      PACKAGE_SIZE: '409039'
+      PACKAGE_SHA: 9eaf2701ec0694133a913df9097267571d2afd62c3c99ee3c3ab45f022b34898
+      PACKAGE_SIZE: '408858'
 
     steps:
       - uses: actions/checkout@v4
