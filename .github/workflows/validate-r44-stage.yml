@@ -95,7 +95,7 @@ jobs:
 
           # Exact R43 failure reproduction.
           truncate -s 768M "$WORK/old.img"
-          mkfs.fat -F 32 -n R36UPDATE "$WORK/old.img" >/dev/null
+          mkfs.fat -F 32 -n R36UPDATE -i C49E0225 "$WORK/old.img" >/dev/null
           mkdir -p "$WORK/oldmnt"
           OLDLOOP="$(sudo losetup --find --show "$WORK/old.img")"
           sudo mount -t vfat -o rw,fmask=0022,dmask=0022,iocharset=utf8,shortname=mixed "$OLDLOOP" "$WORK/oldmnt"
