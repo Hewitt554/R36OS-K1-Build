@@ -1,0 +1,18 @@
+#!/bin/bash
+# R36OS Alpha 5R49 migration shim.
+# The R43-R48 automatic boot-time FAT repair architecture is retired.
+set +e
+MARKER=/etc/r36os/r36update-repair-once.conf
+STATE=/r36state/logs/r36update-maint
+mkdir -p "$STATE" 2>/dev/null || true
+if [ -f "$MARKER" ]; then
+  {
+    echo 'format=R36OS_R49_LEGACY_REPAIR_RETIRE_V1'
+    echo 'status=RETIRED'
+    echo "old_marker=$(tr '\n' ';' <"$MARKER" 2>/dev/null)"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$STATE/legacy-firstboot-repair-retired.conf" 2>/dev/null || true
+  mv -f "$MARKER" "$MARKER.retired-r49" 2>/dev/null || rm -f "$MARKER"
+fi
+printf 'status=SKIPPED\ndetail=legacy-boot-time-repair-retired-r49\n' >/run/r36os-firstboot-update-repair.result 2>/dev/null || true
+exit 0
