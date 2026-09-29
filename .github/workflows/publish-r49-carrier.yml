@@ -1,0 +1,138 @@
+
+name: Publish R36OS Alpha 5R49 via existing release carrier
+
+on:
+  push:
+    branches:
+      - work/r49-r36update-isolation-maintenance-2026-09-29
+    paths:
+      - '.github/workflows/publish-r49-carrier.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  carrier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      BUILD_RUN: '36590082822'
+      BUILD_ARTIFACT_ID: '11042748622'
+      BUILD_HEAD_SHA: 7c20666c6553dc1b0b18720808084462ce2aab67
+      INTEGRATION_RUN: '36590657141'
+      INTEGRATION_ARTIFACT_ID: '11044100507'
+      INTEGRATION_HEAD_SHA: c1dc9ef288085965368737aca01c2daea444ec22
+      PREPUBLISH_MAIN_SHA: a77af6b895da58172e40c9e6207775b559aab033
+      CARRIER_TAG: alpha5r48
+      NAME: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+      EXPECTED_SHA: 6a65fe9a952140ee0f380e9ef053d1ea7b658976ead496eda7bd30f9a83502cb
+      EXPECTED_SIZE: '408869'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove exact tested lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BR="$(gh api "repos/$REPO/actions/runs/$BUILD_RUN")"
+          test "$(printf '%s' "$BR" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$BR" | jq -r .head_sha)" = "$BUILD_HEAD_SHA"
+          IR="$(gh api "repos/$REPO/actions/runs/$INTEGRATION_RUN")"
+          test "$(printf '%s' "$IR" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$IR" | jq -r .head_sha)" = "$INTEGRATION_HEAD_SHA"
+
+      - name: Download exact build artifact and integration evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$BUILD_ARTIFACT_ID/zip" > candidate.zip
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$INTEGRATION_ARTIFACT_ID/zip" > integration.zip
+          mkdir integration
+          unzip -q integration.zip -d integration
+
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          INTLOG="$(find integration -type f -name r49-integration.log -print)"
+          for v in PKG SHA_FILE LATEST REPORT INTLOG; do
+            p="${!v}"
+            test -n "$p" && test -f "$p"
+            echo "$v=$p" >> "$GITHUB_ENV"
+          done
+
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq 'R49_INTEGRATION_TEST=PASS' "$INTLOG"
+          grep -Fxq 'version=0.5.49.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.48.0' "$REPORT"
+
+      - name: Upload exact R49 package to existing alpha5r48 carrier release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$CARRIER_TAG" --repo "$REPO" >/dev/null
+          if gh api "repos/$REPO/releases/tags/$CARRIER_TAG" | jq -e --arg n "$NAME" '.assets[] | select(.name==$n)' >/dev/null; then
+            echo "carrier already has R49 asset; verifying existing asset instead of clobbering"
+          else
+            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" "$REPORT" --repo "$REPO"
+          fi
+
+      - name: Verify carrier asset bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$CARRIER_TAG")"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/carrier.r36upd
+          test "$(sha256sum /tmp/carrier.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R49_CARRIER_ASSET_VERIFY=PASS
+
+      - name: Advance live update channel to exact carrier asset
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
+          git checkout -B publish-r49-carrier-main origin/main
+          mkdir -p r36os-release-channel
+          cp "$LATEST" /tmp/r49-latest.conf
+          sed -i 's#/releases/download/alpha5r49/#/releases/download/alpha5r48/#' /tmp/r49-latest.conf
+          grep -Fxq 'version=0.5.49.0' /tmp/r49-latest.conf
+          grep -Fxq 'base_version=0.5.48.0' /tmp/r49-latest.conf
+          grep -Fxq "sha256=$EXPECTED_SHA" /tmp/r49-latest.conf
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" /tmp/r49-latest.conf
+          grep -Fxq "url=https://github.com/$REPO/releases/download/$CARRIER_TAG/$NAME" /tmp/r49-latest.conf
+          cp /tmp/r49-latest.conf r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R49 update channel via verified carrier asset'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Verify live channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live.conf
+          cmp /tmp/live.conf /tmp/r49-latest.conf
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r49-postpublish-carrier-verified-2026-09-29"
+          echo R49_CARRIER_PUBLISH=PASS
