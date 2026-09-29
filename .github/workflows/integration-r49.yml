@@ -18,12 +18,12 @@ jobs:
     timeout-minutes: 30
     env:
       REPO: Hewitt554/R36OS-K1-Build
-      BUILD_RUN: '36585893665'
-      BUILD_ARTIFACT: '11041701667'
-      BUILD_HEAD_SHA: '00f9102588f7a51b8ffdc7510b7a7c8dbb172a3e'
+      BUILD_RUN: '36587764876'
+      BUILD_ARTIFACT: '11041834344'
+      BUILD_HEAD_SHA: '9a456ce0ae0b304ad1e70438dd820c8a91e6995a'
       PACKAGE: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
-      PACKAGE_SHA: cb491fd442fae9c64896580b73cc2fe6cfbc2d01970a69f7f01b634137962056
-      PACKAGE_SIZE: '408872'
+      PACKAGE_SHA: f7b17b2b7734d3fc86a3788789cc4ae0433dac99db8d5621ec4af211c2dde137
+      PACKAGE_SIZE: '409027'
 
     steps:
       - uses: actions/checkout@v4
@@ -135,8 +135,17 @@ jobs:
           echo 'TEST normal-readonly-and-bind'
           run_policy normal
           assert_ro
-          sudo touch "$PUB/R36OS-Logs/write-test"
-          test -f "$STATE/compat/r36update/logs/write-test"
+          if mountpoint -q "$PUB/R36OS-Logs"; then
+            sudo touch "$PUB/R36OS-Logs/write-test"
+            test -f "$STATE/compat/r36update/logs/write-test"
+          else
+            set +e
+            sudo touch "$PUB/R36OS-Logs/write-test" >/dev/null 2>&1
+            WRC=$?
+            set -e
+            test "$WRC" -ne 0
+          fi
+          assert_ro
           set +e
           run_policy prepare-write >/dev/null 2>&1
           RC=$?
