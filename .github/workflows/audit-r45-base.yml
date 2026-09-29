@@ -1,0 +1,50 @@
+name: Audit R45 updater and current manifest
+
+on:
+  push:
+    branches:
+      - work/r45-k1-handoff-diagnostics-2026-09-29
+    paths:
+      - '.github/workflows/audit-r45-base.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact R37 updater bootstrap and R44 package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs r37 r44 out
+          gh release download alpha5r37 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R37-GitHubUpdater-FromR36.r36upd' --dir inputs
+          gh release download alpha5r44 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' --dir inputs
+          echo '594cb6eb0e433e08fabcbc20e00395795607f962e7cb768d81dad336d723bc48  inputs/00-R36OS-Alpha5R37-GitHubUpdater-FromR36.r36upd' | sha256sum -c -
+          echo '2a6b872c3e7b81a88272c03f8c1484d9d4ae582dfe9172796ebff4e8e396a4fa  inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' | sha256sum -c -
+          tar -xzf inputs/00-R36OS-Alpha5R37-GitHubUpdater-FromR36.r36upd -C r37
+          tar -xzf inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd -C r44
+          (cd r37 && sha256sum -c checksums.sha256 >/dev/null)
+          (cd r44 && sha256sum -c checksums.sha256 >/dev/null)
+
+          {
+            echo '===== R37 FILES ====='
+            find r37/payload/root -type f -printf '%P\n' | sort
+            echo '===== REBOOT REFERENCES ====='
+            grep -R -n -E 'requires_reboot|reboot|systemctl reboot|shutdown -r|manifest.conf' r37/payload/root 2>/dev/null || true
+            echo '===== R44 CORE MANIFEST SELECTED ====='
+            grep -E '/usr/local/bin/r36os-(github-diagnostics|diagnostic-snapshot|kernel-next-prepare|kernel-slot)$' r44/payload/root/etc/r36os-core-manifest.sha256 || true
+            echo '===== R44 MANIFEST ====='
+            cat r44/manifest.conf
+          } > out/audit.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: R45-base-audit
+          path: out/audit.txt
+          retention-days: 7
