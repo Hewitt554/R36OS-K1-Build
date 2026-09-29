@@ -24,7 +24,7 @@ LOGROOT="$STATE/logs/r36update-maint"
 RECOVERY="$STATE/recovery/r36update-maint"
 PRIVATE="/run/r36os-r36update-rw"
 GUARD="/run/r36os-r36update-guard"
-VFAT_OPTS='relatime,fmask=0022,dmask=0022,codepage=936,iocharset=utf8,shortname=mixed,errors=remount-ro'
+VFAT_OPTS=''
 PRIVATE_MOUNTED=0
 GUARD_MOUNTED=0
 
@@ -129,7 +129,7 @@ install_guard(){
   return 0
 }
 mount_private_rw(){
-  mount -t vfat -o "rw,$VFAT_OPTS" "$DEV" "$PRIVATE" >/dev/null 2>&1 || return 1
+  mount -t vfat -o rw "$DEV" "$PRIVATE" >/dev/null 2>&1 || return 1
   PRIVATE_MOUNTED=1
   src="$(findmnt -n -o SOURCE "$PRIVATE" 2>/dev/null | head -1 | xargs -r readlink -f)"
   [ "$src" = "$(readlink -f "$DEV")" ] || return 2
