@@ -2,7 +2,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 set -u
-REL=/etc/r36os-release
+REL="${R36OS_RELEASE_FILE:-/etc/r36os-release}"
 [ -r "$REL" ] || { echo "r36os-version: release metadata missing" >&2; exit 70; }
 . "$REL" || { echo "r36os-version: cannot read $REL" >&2; exit 71; }
 : "${R36OS_NAME:?r36os-version: R36OS_NAME missing}"
