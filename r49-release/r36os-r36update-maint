@@ -1,0 +1,268 @@
+#!/bin/bash
+# R36OS Alpha 5R49 controlled R36UPDATE maintenance/staging transaction.
+# No full FAT tar backup: K1 staging is reconstructible from verified /opt source.
+set +e
+CMD="${1:-status}"
+MOUNT="${R36OS_UPDATE_MOUNT:-/r36update}"
+DEV="${R36OS_UPDATE_DEV:-/dev/mmcblk0p3}"
+EXPECTED_UUID="${R36OS_EXPECTED_UPDATE_UUID:-C49E-0225}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+PKGROOT="${R36OS_K1_PACKAGED_ROOT:-/opt/r36os/kernel-next}"
+SRC="$PKGROOT/K1"
+NEXT="$MOUNT/R36OS-KernelNext"
+DST="$NEXT/K1"
+META_SRC="$PKGROOT/hook.conf"
+META="$NEXT/hook.conf"
+POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"
+PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
+VERSION_HELPER="${R36OS_VERSION_HELPER:-/usr/local/bin/r36os-version}"
+CHECKER="${R36OS_FSCK_FAT:-/usr/local/libexec/r36os/fsck.fat-static}"
+CHECKER_SHA="$CHECKER.sha256"
+FIXTURE="/usr/local/libexec/r36os/fsck-selftest.img.gz"
+FIXTURE_SHA="$FIXTURE.sha256"
+RESULT="${R36OS_R36UPDATE_MAINT_RESULT:-/run/r36os-r36update-maint.result}"
+PROGRESS="${R36OS_K1_PROGRESS_FILE:-/run/r36os-k1-prepare.progress}"
+LOGROOT="$STATE/logs/r36update-maint"
+RECOVERY="$STATE/recovery/r36update-maint"
+RW_OPEN=0
+
+progress(){ printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >"$PROGRESS" 2>/dev/null || true; }
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+mounted(){ mountpoint -q "$MOUNT" 2>/dev/null; }
+fat_warning(){ dmesg 2>/dev/null | grep -F 'FAT-fs (mmcblk0p3):' | grep -Ei '(Volume was not properly unmounted|dirty bit|filesystem has been set read-only)' | tail -1; }
+verify_hash_file(){
+  f="$1"; sf="$2"
+  [ -s "$f" ] && [ -s "$sf" ] || return 1
+  (cd "$(dirname "$f")" && sha256sum -c "$(basename "$sf")" >/dev/null 2>&1)
+}
+candidate_regular_tree(){
+  root="$1"; [ -d "$root" ] || return 1
+  [ -z "$(find "$root" \( -type l -o -type b -o -type c -o -type p -o -type s \) -print -quit 2>/dev/null)" ]
+}
+candidate_tree_digest(){
+  root="$1"
+  (
+    cd "$root" || exit 1
+    find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort | while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      printf '%s  %s\n' "$(sha256sum "$rel" | awk '{print $1}')" "$rel"
+    done
+  ) | sha256sum | awk '{print $1}'
+}
+safe_finish(){
+  if [ "$RW_OPEN" = 1 ]; then
+    "$POLICY" finish-ro >/dev/null 2>&1 || "$POLICY" leave-unmounted >/dev/null 2>&1 || true
+    RW_OPEN=0
+  elif ! mounted; then
+    "$POLICY" mount-ro >/dev/null 2>&1 || true
+    "$POLICY" normal >/dev/null 2>&1 || true
+  fi
+}
+fail(){
+  code="$1"; detail="$2"
+  safe_finish
+  progress FAIL 100 "R36UPDATE maintenance failed" "$detail (code $code)"
+  {
+    echo 'status=FAIL'
+    echo "code=$code"
+    echo "detail=$detail"
+    echo "time=$(date -Is 2>/dev/null || date)"
+  } >"$RESULT" 2>/dev/null || true
+  [ -n "${LOG:-}" ] && printf 'FINAL status=FAIL code=%s detail=%s\n' "$code" "$detail" >>"$LOG" 2>/dev/null || true
+  echo "status=FAIL code=$code detail=$detail"
+  exit "$code"
+}
+selftest_checker(){
+  verify_hash_file "$CHECKER" "$CHECKER_SHA" || return 90
+  verify_hash_file "$FIXTURE" "$FIXTURE_SHA" || return 91
+  command -v gzip >/dev/null 2>&1 || return 92
+  fixture="/run/r36os-r49-fsck-selftest.img"
+  rm -f "$fixture" 2>/dev/null || true
+  gzip -dc "$FIXTURE" >"$fixture" 2>/dev/null || { rm -f "$fixture"; return 93; }
+  "$CHECKER" -n "$fixture" >/run/r36os-r49-fsck-selftest.out 2>&1
+  rc=$?
+  rm -f "$fixture" 2>/dev/null || true
+  return "$rc"
+}
+snapshot_small(){
+  out="$1"
+  mkdir -p "$out" || return 1
+  {
+    echo 'format=R36OS_R49_R36UPDATE_RECOVERY_EVIDENCE_V1'
+    echo "time=$(date -Is 2>/dev/null || date)"
+    echo "device=$DEV"
+    echo "uuid=$(blkid -s UUID -o value "$DEV" 2>/dev/null)"
+    echo "source_candidate_id=$CID"
+    echo "source_manifest_sha256=$SRC_MANIFEST_SHA"
+    echo "source_tree_digest=$SRC_TREE_DIGEST"
+    echo "fat_warning=$(fat_warning)"
+    echo "mounts_begin"
+    findmnt "$MOUNT" 2>/dev/null || true
+    echo "mounts_end"
+  } >"$out/summary.conf" || return 1
+  cp -f "$SRC/K1.conf" "$out/source-K1.conf" 2>/dev/null || true
+  cp -f "$SRC/MANIFEST.sha256" "$out/source-MANIFEST.sha256" 2>/dev/null || true
+  cp -f "$META_SRC" "$out/source-hook.conf" 2>/dev/null || true
+  if mounted; then
+    cp -f "$NEXT/K1/K1.conf" "$out/staged-K1.conf" 2>/dev/null || true
+    cp -f "$NEXT/K1/MANIFEST.sha256" "$out/staged-MANIFEST.sha256" 2>/dev/null || true
+    cp -f "$META" "$out/staged-hook.conf" 2>/dev/null || true
+    find "$MOUNT" -maxdepth 3 -type f -printf '%s|%p\n' 2>/dev/null | LC_ALL=C sort >"$out/fat-file-index.txt" || true
+  fi
+}
+status(){
+  "$POLICY" status 2>/dev/null || true
+  echo "fat_warning=$(fat_warning)"
+  echo "source_present=$([ -d "$SRC" ] && echo yes || echo no)"
+  if [ -s "$SRC/K1.conf" ]; then
+    echo "source_candidate_id=$(val "$SRC/K1.conf" candidate_id)"
+    echo "source_manifest_sha256=$(sha "$SRC/MANIFEST.sha256")"
+  fi
+}
+
+prepare_stage(){
+  rm -f "$RESULT" 2>/dev/null || true
+  [ "$(id -u)" = 0 ] || fail 40 not-root
+  [ "$("$VERSION_HELPER" version 2>/dev/null)" = 0.5.49.0 ] || fail 41 wrong-release
+  mountpoint -q "$STATE" 2>/dev/null || fail 42 r36state-not-mounted
+  [ -x "$POLICY" ] || fail 43 isolation-policy-missing
+  [ -x "$PREFLIGHT" ] || fail 44 k1-preflight-missing
+  [ -x "$CHECKER" ] || fail 45 fat-checker-missing
+  uuid="$(blkid -s UUID -o value "$DEV" 2>/dev/null | tr 'a-f' 'A-F')"
+  [ "$uuid" = "$EXPECTED_UUID" ] || fail 46 r36update-uuid
+
+  progress RUNNING 5 "Maintenance preflight" "Verifying authoritative K1 source"
+  "$PREFLIGHT" "$SRC" >/dev/null 2>&1 || fail 47 authoritative-k1-preflight
+  candidate_regular_tree "$SRC" || fail 48 authoritative-k1-nonregular
+  CID="$(val "$SRC/K1.conf" candidate_id)"; echo "$CID" | grep -Eq '^[0-9a-f]{24}$' || fail 49 candidate-id
+  SRC_MANIFEST_SHA="$(sha "$SRC/MANIFEST.sha256")"; [ -n "$SRC_MANIFEST_SHA" ] || fail 50 source-manifest-sha
+  SRC_TREE_DIGEST="$(candidate_tree_digest "$SRC")"; [ -n "$SRC_TREE_DIGEST" ] || fail 51 source-tree-digest
+  [ -s "$META_SRC" ] && [ "$(val "$META_SRC" candidate_id)" = "$CID" ] || fail 52 packaged-hook-meta
+
+  progress RUNNING 12 "Testing FAT checker" "Validating the packaged checker against a known FAT fixture"
+  selftest_checker; SELFTEST_RC=$?
+  [ "$SELFTEST_RC" -eq 0 ] || fail 53 "fat-checker-selftest-$SELFTEST_RC"
+
+  "$POLICY" normal >/dev/null 2>&1 || fail 54 policy-readonly
+  REQ="$NEXT/boot-next.$CID.once"
+  CONSUMED="$NEXT/boot-next.$CID.consumed"
+  GREQ="$NEXT/boot-next.once"
+  GCON="$NEXT/boot-next.consumed"
+  [ ! -s "$CONSUMED" ] && [ ! -s "$GCON" ] || fail 55 consumed-marker-present
+  STALE_REQUEST=no
+  { [ -s "$REQ" ] || [ -s "$GREQ" ]; } && STALE_REQUEST=yes
+
+  stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null)"; echo "$stamp" | grep -Eq '^[0-9]{8}-[0-9]{6}$' || stamp="unknown-$$"
+  EVDIR="$RECOVERY/$stamp"; mkdir -p "$LOGROOT" "$RECOVERY" || fail 56 recovery-dir
+  snapshot_small "$EVDIR" || fail 57 recovery-evidence
+  LOG="$LOGROOT/maintenance-$stamp.log"
+  {
+    echo 'format=R36OS_R49_R36UPDATE_MAINT_V1'
+    echo "time=$(date -Is 2>/dev/null || date)"
+    echo "candidate_id=$CID"
+    echo "source_manifest_sha256=$SRC_MANIFEST_SHA"
+    echo "source_tree_digest=$SRC_TREE_DIGEST"
+    echo "stale_request=$STALE_REQUEST"
+    echo "checker=$CHECKER"
+    echo "checker_sha256=$(sha "$CHECKER")"
+  } >"$LOG"
+
+  progress RUNNING 20 "Isolating R36UPDATE" "Removing compatibility bind mounts and unmounting FAT"
+  "$POLICY" leave-unmounted >>"$LOG" 2>&1 || fail 58 r36update-unmount
+  mounted && fail 59 r36update-still-mounted
+
+  progress RUNNING 30 "Checking FAT" "Running read-only filesystem check while R36UPDATE is unmounted"
+  "$CHECKER" -n "$DEV" >>"$LOG" 2>&1
+  PRECHECK_RC=$?
+  case "$PRECHECK_RC" in 0|1) ;; *) fail 60 "fat-precheck-rc-$PRECHECK_RC";; esac
+
+  REPAIR_RC=not-needed
+  if [ "$PRECHECK_RC" -eq 1 ]; then
+    progress RUNNING 42 "Repairing FAT" "Applying the qualified automatic FAT repair"
+    "$CHECKER" -a "$DEV" >>"$LOG" 2>&1
+    REPAIR_RC=$?
+    case "$REPAIR_RC" in 0|1) ;; *) fail 61 "fat-repair-rc-$REPAIR_RC";; esac
+  fi
+
+  progress RUNNING 52 "Verifying FAT" "Rechecking filesystem read-only after repair"
+  "$CHECKER" -n "$DEV" >>"$LOG" 2>&1
+  VERIFY_RC=$?
+  [ "$VERIFY_RC" -eq 0 ] || fail 62 "fat-final-verify-rc-$VERIFY_RC"
+
+  progress RUNNING 60 "Opening controlled write window" "Mounting R36UPDATE read/write only for K1 staging"
+  "$POLICY" mount-rw >>"$LOG" 2>&1 || fail 63 controlled-rw-mount
+  RW_OPEN=1
+
+  # Explicit user action supersedes a stale request-only marker for this same candidate.
+  rm -f "$REQ" "$REQ.tmp" "$GREQ" "$NEXT/boot-next.once.tmp" 2>>"$LOG" || fail 64 stale-request-clear
+  sync
+  [ ! -e "$REQ" ] && [ ! -e "$GREQ" ] || fail 65 stale-request-readback
+
+  progress RUNNING 68 "Verifying staged K1" "Reusing the staged candidate only if it exactly matches /opt"
+  mkdir -p "$NEXT" || fail 66 next-root-create
+  REUSE=no
+  if [ -d "$DST" ]; then
+    "$PREFLIGHT" "$DST" >/dev/null 2>&1
+    prc=$?
+    if [ "$prc" -eq 0 ] && [ "$(sha "$DST/MANIFEST.sha256")" = "$SRC_MANIFEST_SHA" ]; then
+      dtd="$(candidate_tree_digest "$DST")"
+      [ "$dtd" = "$SRC_TREE_DIGEST" ] && REUSE=yes
+    fi
+  fi
+
+  if [ "$REUSE" != yes ]; then
+    progress RUNNING 72 "Restaging K1" "Rebuilding the FAT staging copy from the authoritative /opt candidate"
+    rm -rf "$DST" "$NEXT"/.K1.r49-stage.* 2>>"$LOG" || fail 67 old-stage-remove
+    SRC_KB="$(du -sk "$SRC" 2>/dev/null | awk '{print $1}')"
+    AVAIL_KB="$(df -Pk "$MOUNT" 2>/dev/null | awk 'NR>1{v=$4} END{print v}')"
+    echo "$SRC_KB:$AVAIL_KB" | grep -Eq '^[0-9]+:[0-9]+$' || fail 68 stage-space-measure
+    NEED_KB=$((SRC_KB + 65536)); [ "$AVAIL_KB" -ge "$NEED_KB" ] || fail 69 stage-space
+    TMP="$NEXT/.K1.r49-stage.$CID.$$"
+    mkdir -p "$TMP" || fail 70 stage-dir
+    cp -R "$SRC/." "$TMP/" >>"$LOG" 2>&1 || { rm -rf "$TMP"; fail 71 stage-copy; }
+    sync
+    candidate_regular_tree "$TMP" || { rm -rf "$TMP"; fail 72 stage-nonregular; }
+    "$PREFLIGHT" "$TMP" >/dev/null 2>&1 || { rm -rf "$TMP"; fail 73 stage-preflight; }
+    [ "$(sha "$TMP/MANIFEST.sha256")" = "$SRC_MANIFEST_SHA" ] || { rm -rf "$TMP"; fail 74 stage-manifest; }
+    [ "$(candidate_tree_digest "$TMP")" = "$SRC_TREE_DIGEST" ] || { rm -rf "$TMP"; fail 75 stage-tree-digest; }
+    mv "$TMP" "$DST" || { rm -rf "$TMP"; fail 76 stage-activate; }
+    sync
+  fi
+
+  "$PREFLIGHT" "$DST" >/dev/null 2>&1 || fail 77 final-staged-preflight
+  [ "$(sha "$DST/MANIFEST.sha256")" = "$SRC_MANIFEST_SHA" ] || fail 78 final-staged-manifest
+  [ "$(candidate_tree_digest "$DST")" = "$SRC_TREE_DIGEST" ] || fail 79 final-staged-tree
+
+  cp -f "$META_SRC" "$META.tmp" >>"$LOG" 2>&1 || fail 80 hook-meta-copy
+  sync
+  mv -f "$META.tmp" "$META" || fail 81 hook-meta-activate
+  [ "$(sha "$META")" = "$(sha "$META_SRC")" ] || fail 82 hook-meta-readback
+
+  {
+    echo "precheck_rc=$PRECHECK_RC"
+    echo "repair_rc=$REPAIR_RC"
+    echo "verify_rc=$VERIFY_RC"
+    echo "staged_reused=$REUSE"
+    echo "controlled_rw_open=yes"
+  } >>"$LOG"
+  progress RUNNING 84 "R36UPDATE ready" "Filesystem clean and exact K1 staging verified"
+  {
+    echo 'status=PASS_RW_STAGED'
+    echo 'code=0'
+    echo "candidate_id=$CID"
+    echo "precheck_rc=$PRECHECK_RC"
+    echo "repair_rc=$REPAIR_RC"
+    echo "verify_rc=$VERIFY_RC"
+    echo "staged_reused=$REUSE"
+    echo "log=$LOG"
+  } >"$RESULT"
+  echo "status=PASS_RW_STAGED candidate_id=$CID precheck_rc=$PRECHECK_RC repair_rc=$REPAIR_RC verify_rc=$VERIFY_RC staged_reused=$REUSE"
+  exit 0
+}
+
+case "$CMD" in
+  status) status;;
+  prepare-stage) prepare_stage;;
+  *) echo 'usage: r36os-r36update-maint status|prepare-stage' >&2; exit 2;;
+esac
