@@ -1,0 +1,56 @@
+name: Audit updater runtime from published packages
+
+on:
+  push:
+    branches:
+      - work/r45-k1-handoff-diagnostics-2026-09-29
+    paths:
+      - '.github/workflows/audit-updater-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download published packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs r38 r39 r43 r44 r45 out
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir inputs
+          gh release download alpha5r39 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' --dir inputs
+          gh release download alpha5r43 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' --dir inputs
+          gh release download alpha5r44 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' --dir inputs
+          gh release download alpha5r45 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd' --dir inputs
+
+          tar -xzf inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C r38
+          tar -xzf inputs/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd -C r39
+          tar -xzf inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd -C r43
+          tar -xzf inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd -C r44
+          tar -xzf inputs/00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd -C r45
+
+          {
+            for d in r38 r39 r43 r44 r45; do
+              echo "===== $d MANIFEST ====="
+              cat "$d/manifest.conf"
+              echo "===== $d PAYLOAD FILES ====="
+              find "$d/payload/root" -type f -printf '%P\n' | sort
+              echo
+            done
+
+            echo "===== UPDATER-LIKE FILES ACROSS PAYLOADS ====="
+            find r38 r39 r43 r44 r45 -type f | grep -E -i 'update|r36upd|transaction|rollback|install' || true
+
+            echo "===== UPDATER/TRANSACTION CONTENT HITS ====="
+            grep -R -n -E -i 'requires_reboot|R36UPD2|rollback|transaction|base_version|checksums\.sha256|r36os-core-manifest|install.*update|apply.*update|backup.*payload' r38 r39 r43 r44 r45 2>/dev/null || true
+          } > out/audit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-runtime-audit
+          path: out/audit.txt
+          retention-days: 7
