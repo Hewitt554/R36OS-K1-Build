@@ -18,7 +18,7 @@ KREL='6.12.94-r36os-k1'
 WORK="${RUNNER_TEMP:-/tmp}/r36os-r47-release"
 
 rm -rf "$WORK" "$OUT"
-mkdir -p   "$WORK/r46" "$WORK/r43"   "$WORK/update/payload/root/etc/r36os"   "$WORK/update/payload/root/etc/systemd/system"   "$WORK/update/payload/root/etc/systemd/system-generators"   "$WORK/update/payload/root/lib/systemd/system-generators"   "$WORK/update/payload/root/usr/local/bin"   "$WORK/update/payload/root/usr/local/libexec/r36os"   "$WORK/update/payload/root/opt/r36os/features"   "$OUT"
+mkdir -p "$WORK/r46" "$WORK/r43" "$WORK/update/payload/root/etc/r36os" "$WORK/update/payload/root/usr/local/bin" "$WORK/update/payload/root/usr/local/libexec/r36os" "$WORK/update/payload/root/opt/r36os/features" "$OUT"
 
 test "$(sha256sum "$R46" | awk '{print $1}')" = "$EXPECTED_R46" || { echo r46-sha-mismatch >&2; exit 10; }
 test "$(sha256sum "$R43" | awk '{print $1}')" = "$EXPECTED_R43" || { echo r43-sha-mismatch >&2; exit 11; }
@@ -57,8 +57,8 @@ for a,b,count in checks:
 Path(sys.argv[2]).write_text(s)
 PY
 
-# Reuse the exact physically proven R43 repair engine and checker.
-for p in   usr/local/bin/r36os-r36update-repair   usr/local/libexec/r36os/fsck.fat-static   usr/local/libexec/r36os/fsck.fat-static.sha256   etc/systemd/system-generators/r36os-firstboot-update-repair-generator   lib/systemd/system-generators/r36os-firstboot-update-repair-generator   etc/systemd/system/r36os-firstboot-update-repair.service; do
+# Reuse the exact physically proven final R43 repair engine, checker and self-test fixture.
+for p in usr/local/bin/r36os-r36update-repair usr/local/libexec/r36os/fsck.fat-static usr/local/libexec/r36os/fsck.fat-static.sha256 usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt usr/local/libexec/r36os/fsck-selftest.img.gz usr/local/libexec/r36os/fsck-selftest.img.gz.sha256; do
   test -e "$R43ROOT/$p" || { echo "missing R43 repair payload: $p" >&2; exit 12; }
   mkdir -p "$ROOT/$(dirname "$p")"
   cp -a "$R43ROOT/$p" "$ROOT/$p"
@@ -78,8 +78,8 @@ PY
 # Install the audited R47 rollback helper.
 cp "$HERE/r36os-update-rollback" "$ROOT/usr/local/bin/r36os-update-rollback"
 
-chmod 0755   "$ROOT/usr/local/bin/r36os-kernel-next-prepare"   "$ROOT/usr/local/bin/r36os-kernel-slot"   "$ROOT/usr/local/bin/r36os-r36update-repair"   "$ROOT/usr/local/bin/r36os-firstboot-update-repair"   "$ROOT/usr/local/bin/r36os-update-rollback"   "$ROOT/usr/local/libexec/r36os/fsck.fat-static"   "$ROOT/etc/systemd/system-generators/r36os-firstboot-update-repair-generator"   "$ROOT/lib/systemd/system-generators/r36os-firstboot-update-repair-generator"
-chmod 0644   "$ROOT/usr/local/libexec/r36os/fsck.fat-static.sha256"   "$ROOT/etc/systemd/system/r36os-firstboot-update-repair.service"
+chmod 0755 "$ROOT/usr/local/bin/r36os-kernel-next-prepare" "$ROOT/usr/local/bin/r36os-kernel-slot" "$ROOT/usr/local/bin/r36os-r36update-repair" "$ROOT/usr/local/bin/r36os-firstboot-update-repair" "$ROOT/usr/local/bin/r36os-update-rollback" "$ROOT/usr/local/libexec/r36os/fsck.fat-static"
+chmod 0644 "$ROOT/usr/local/libexec/r36os/fsck.fat-static.sha256" "$ROOT/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256"
 
 cat >"$ROOT/etc/r36os/r36update-repair-once.conf" <<'EOF_MARK'
 format=R36OS_R36UPDATE_REPAIR_ONCE_V1
@@ -203,6 +203,7 @@ cmp "$R43ROOT/usr/local/libexec/r36os/fsck.fat-static.sha256" "$ROOT/usr/local/l
 cmp "$R43ROOT/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt" "$ROOT/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt"
 cmp "$R43ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz"
 cmp "$R43ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256" "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256"
+(cd "$ROOT/usr/local/libexec/r36os" && sha256sum -c fsck.fat-static.sha256 >/dev/null && sha256sum -c fsck-selftest.img.gz.sha256 >/dev/null)
 
 (cd "$WORK/update"; tar --sort=name --mtime='UTC 2026-09-29 00:00:00' --owner=0 --group=0 --numeric-owner -cf - manifest.conf checksums.sha256 payload | gzip -1 -n >"$OUT/$NAME")
 SHA="$(sha256sum "$OUT/$NAME" | awk '{print $1}')"
