@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           A=out-a/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd
-          B=out-b/00-R36OS-Alpha5R54-K1SystemdHandoffHeader-FromR52.r36upd
+          B=out-b/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd
           cmp "$A" "$B"
           diff -u out-a/latest.conf out-b/latest.conf
           diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
