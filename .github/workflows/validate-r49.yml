@@ -1,0 +1,131 @@
+name: Validate R36OS Alpha 5R49 Build
+
+on:
+  push:
+    branches:
+      - work/r49-r36update-isolation-maintenance-2026-09-29
+    paths:
+      - 'r49-release/**'
+      - 'R49_ARCHITECTURE.md'
+      - '.github/workflows/validate-r49.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd' --dir inputs
+          gh release download alpha5r47 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd' --dir inputs
+          gh release download alpha5r43 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' --dir inputs
+          gh release download alpha5r39 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' --dir inputs
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir inputs
+          echo '37ba7053807b1c331176b74963640f4ee6b982c19d533e7febebb29d16d17a98  inputs/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd' | sha256sum -c -
+          echo '0f012501b0f8bebb0bd377f62dde554901f1584ab85c49e77cfad5e73b750808  inputs/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd' | sha256sum -c -
+          echo 'cd4e66c08de18c0dbdd4ec3ff3babd5efcf6cc876113f1bd0f57aa1fc3ee421a  inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' | sha256sum -c -
+          echo '406aa63aedf893b39fdff16f6131f605d99883aa759286228c1cf607dce74ebd  inputs/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd' | sha256sum -c -
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+
+      - name: Prove R38 authoritative K1 source
+        run: |
+          set -euo pipefail
+          R38=inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+          tar -tzf "$R38" > /tmp/r38-tree.txt
+          for p in             payload/root/opt/r36os/kernel-next/K1/Image             payload/root/opt/r36os/kernel-next/K1/uInitrd             payload/root/opt/r36os/kernel-next/K1/rk3326-r36s-k1.dtb             payload/root/opt/r36os/kernel-next/K1/modules.tar.xz             payload/root/opt/r36os/kernel-next/K1/K1.conf             payload/root/opt/r36os/kernel-next/K1/BUILD_INFO.txt             payload/root/opt/r36os/kernel-next/K1/MANIFEST.sha256             payload/root/opt/r36os/kernel-next/hook.conf             payload/root/opt/r36os/kernel-next/hooked-boot.ini; do
+            grep -Fxq "$p" /tmp/r38-tree.txt
+          done
+          mkdir -p r38-proof
+          tar -xzf "$R38" -C r38-proof             payload/root/opt/r36os/kernel-next/K1/K1.conf             payload/root/opt/r36os/kernel-next/K1/MANIFEST.sha256
+          grep -qx 'candidate_id=e551eb6598d6da7a8e8320e9' r38-proof/payload/root/opt/r36os/kernel-next/K1/K1.conf
+          grep -qx 'kernel_release=6.12.94-r36os-k1' r38-proof/payload/root/opt/r36os/kernel-next/K1/K1.conf
+          echo R49_AUTHORITATIVE_K1_PROVEN=PASS
+
+      - name: Audit R49 source
+        run: |
+          set -euo pipefail
+          for p in r49-release/r36os-*; do bash -n "$p"; done
+          python3 -m py_compile r49-release/transform_prepare.py r49-release/transform_slot.py
+          bash -n r49-release/build_release.sh
+          grep -Fq 'Options=ro,' r49-release/90-r36os-readonly.conf
+          grep -Fq 'ExecStartPre=/usr/local/bin/r36os-r36update-policy normal' r49-release/95-r36update-policy.conf
+          ! grep -Eq '^[[:space:]]*(prepare-write|mount-rw)\)' r49-release/r36os-r36update-policy
+          grep -Fq 'marker-open' r49-release/r36os-r36update-maint
+          grep -Fq 'marker-close-unmounted' r49-release/r36os-r36update-maint
+          grep -Fq 'full_partition_tar_backup=no' r49-release/r36os-r36update-maint
+          ! grep -Eq 'umount[[:space:]]+(-f|-l|--force|--lazy)' r49-release/r36os-update-rollback
+          ! grep -Eq 'reboot[[:space:]]+-f|poweroff[[:space:]]+-f' r49-release/r36os-update-rollback
+          echo R49_SOURCE_AUDIT=PASS
+
+      - name: Build R49 twice
+        run: |
+          set -euo pipefail
+          chmod +x r49-release/build_release.sh
+          R48="$PWD/inputs/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd"
+          R47="$PWD/inputs/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd"
+          R43="$PWD/inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd"
+          R39="$PWD/inputs/00-R36OS-Alpha5R39-K1FATRemoteDiagnostics-FromR38.r36upd"
+          ./r49-release/build_release.sh "$R48" "$R47" "$R43" "$R39" "$PWD/out-a" | tee r49-build-a.log
+          ./r49-release/build_release.sh "$R48" "$R47" "$R43" "$R39" "$PWD/out-b" | tee r49-build-b.log
+
+      - name: Audit deterministic R49 package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+          B=out-b/00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf audit r43-audit
+          mkdir audit r43-audit
+          tar -xzf "$A" -C audit
+          tar -xzf inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd -C r43-audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.49.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.48.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="r36update_normal_mode"{print $2}' audit/manifest.conf)" = read-only
+          test "$(awk -F= '$1=="full_partition_tar_backup"{print $2}' audit/manifest.conf)" = retired
+          test "$(awk -F= '$1=="final_arm_state"{print $2}' audit/manifest.conf)" = r36update-unmounted
+          test ! -e audit/payload/root/r36state
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find audit/payload/root -type l | grep -q .
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' audit/payload/root || true)"
+          test -z "$HITS"
+          for p in fsck.fat-static fsck.fat-static.sha256 fsck-fat-BUILD_INFO.txt fsck-selftest.img.gz fsck-selftest.img.gz.sha256; do
+            cmp "r43-audit/payload/root/usr/local/libexec/r36os/$p" "audit/payload/root/usr/local/libexec/r36os/$p"
+          done
+          (cd audit/payload/root/usr/local/libexec/r36os && sha256sum -c fsck.fat-static.sha256 >/dev/null && sha256sum -c fsck-selftest.img.gz.sha256 >/dev/null)
+          grep -q '0.5.49.0' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.49.0' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'Alpha 5R49' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'r49-runtime-lock' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -Fq 'marker-open' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -Fq 'ARMED_ONCE_PRIVATE_WINDOW_R36UPDATE_UNMOUNTED' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          echo R49_PACKAGE_AUDIT=PASS
+
+      - name: Upload build-gated candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R49-build-gated-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+            out-a/00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r49-build-a.log
+            r49-build-b.log
+            R49_ARCHITECTURE.md
+          if-no-files-found: error
+          retention-days: 30
