@@ -312,8 +312,47 @@ prepare_stage(){
   exit 0
 }
 
+
+open_marker_window(){
+  [ "$(id -u)" = 0 ] || { echo 'status=FAIL code=90 detail=not-root'; return 90; }
+  [ -b "$DEV" ] || { echo 'status=FAIL code=91 detail=device-missing'; return 91; }
+  uuid="$(blkid -s UUID -o value "$DEV" 2>/dev/null | tr 'a-f' 'A-F')"
+  [ "$uuid" = "$EXPECTED_UUID" ] || { echo 'status=FAIL code=92 detail=uuid-mismatch'; return 92; }
+  "$POLICY" normal >/dev/null 2>&1 || { echo 'status=FAIL code=93 detail=policy-normal'; return 93; }
+  "$POLICY" leave-unmounted >/dev/null 2>&1 || { echo 'status=FAIL code=94 detail=public-unmount'; return 94; }
+  install_guard >/dev/null 2>&1 || { cleanup_private; "$POLICY" normal >/dev/null 2>&1 || true; echo 'status=FAIL code=95 detail=guard-mount'; return 95; }
+  mount_private_rw >/dev/null 2>&1 || { cleanup_private; "$POLICY" normal >/dev/null 2>&1 || true; echo 'status=FAIL code=96 detail=private-rw-mount'; return 96; }
+  echo "status=PASS private_mount=$PRIVATE next_root=$PRIVATE/R36OS-KernelNext"
+  return 0
+}
+close_marker_window_unmounted(){
+  sync
+  if mountpoint -q "$PRIVATE" 2>/dev/null; then
+    umount "$PRIVATE" >/dev/null 2>&1 || { echo 'status=FAIL code=97 detail=private-unmount'; return 97; }
+  fi
+  src="$(findmnt -n -o SOURCE "$MOUNT" 2>/dev/null | head -1)"
+  case "$src" in
+    "$GUARD"|*r36os-r36update-guard*)
+      umount "$MOUNT" >/dev/null 2>&1 || { echo 'status=FAIL code=98 detail=guard-unmount'; return 98; }
+      ;;
+  esac
+  mountpoint -q "$MOUNT" 2>/dev/null && { echo 'status=FAIL code=99 detail=public-still-mounted'; return 99; }
+  mountpoint -q "$PRIVATE" 2>/dev/null && { echo 'status=FAIL code=100 detail=private-still-mounted'; return 100; }
+  echo 'status=PASS mode=unmounted'
+  return 0
+}
+abort_marker_window_ro(){
+  cleanup_private
+  "$POLICY" normal >/dev/null 2>&1 || { echo 'status=FAIL code=101 detail=restore-readonly'; return 101; }
+  echo 'status=PASS mode=ro'
+  return 0
+}
+
 case "$CMD" in
   status) status;;
   prepare-stage) prepare_stage;;
-  *) echo 'usage: r36os-r36update-maint status|prepare-stage' >&2; exit 2;;
+  marker-open) open_marker_window;;
+  marker-close-unmounted) close_marker_window_unmounted;;
+  marker-abort-ro) abort_marker_window_ro;;
+  *) echo 'usage: r36os-r36update-maint status|prepare-stage|marker-open|marker-close-unmounted|marker-abort-ro' >&2; exit 2;;
 esac
