@@ -1,0 +1,213 @@
+name: Publish R36OS Alpha 5R49 exact validated artifact
+
+on:
+  push:
+    branches:
+      - work/r49-r36update-isolation-maintenance-2026-09-29
+    paths:
+      - '.github/workflows/publish-r49.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      BUILD_RUN: '36590082822'
+      BUILD_ARTIFACT_ID: '11042748622'
+      BUILD_HEAD_SHA: 7c20666c6553dc1b0b18720808084462ce2aab67
+      INTEGRATION_RUN: '36590657141'
+      INTEGRATION_ARTIFACT_ID: '11044100507'
+      INTEGRATION_HEAD_SHA: c1dc9ef288085965368737aca01c2daea444ec22
+      PREPUBLISH_MAIN_SHA: a77af6b895da58172e40c9e6207775b559aab033
+      TAG: alpha5r49
+      NAME: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+      EXPECTED_SHA: 6a65fe9a952140ee0f380e9ef053d1ea7b658976ead496eda7bd30f9a83502cb
+      EXPECTED_SIZE: '408869'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove build and integration lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BR="$(gh api "repos/$REPO/actions/runs/$BUILD_RUN")"
+          test "$(printf '%s' "$BR" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$BR" | jq -r .head_sha)" = "$BUILD_HEAD_SHA"
+          BA="$(gh api "repos/$REPO/actions/artifacts/$BUILD_ARTIFACT_ID")"
+          test "$(printf '%s' "$BA" | jq -r .name)" = R36OS-Alpha5R49-build-gated-candidate
+          test "$(printf '%s' "$BA" | jq -r .expired)" = false
+
+          IR="$(gh api "repos/$REPO/actions/runs/$INTEGRATION_RUN")"
+          test "$(printf '%s' "$IR" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$IR" | jq -r .head_sha)" = "$INTEGRATION_HEAD_SHA"
+          IA="$(gh api "repos/$REPO/actions/artifacts/$INTEGRATION_ARTIFACT_ID")"
+          test "$(printf '%s' "$IA" | jq -r .name)" = R36OS-Alpha5R49-integration-evidence
+          test "$(printf '%s' "$IA" | jq -r .expired)" = false
+
+      - name: Download exact tested artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$BUILD_ARTIFACT_ID/zip" > candidate.zip
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$INTEGRATION_ARTIFACT_ID/zip" > integration.zip
+          mkdir integration
+          unzip -q integration.zip -d integration
+
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          ARCH="$(find candidate -type f -name R49_ARCHITECTURE.md -print)"
+          INTLOG="$(find integration -type f -name r49-integration.log -print)"
+          for v in PKG SHA_FILE LATEST REPORT ARCH INTLOG; do
+            p="${!v}"
+            test -n "$p" && test -f "$p"
+            echo "$v=$p" >> "$GITHUB_ENV"
+          done
+          grep -Fxq 'R49_INTEGRATION_TEST=PASS' "$INTLOG"
+
+      - name: Audit exact R49 package before publication
+        run: |
+          set -euo pipefail
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
+
+          test "$(awk -F= '$1=="version"{print $2}' "$LATEST")" = 0.5.49.0
+          test "$(awk -F= '$1=="base_version"{print $2}' "$LATEST")" = 0.5.48.0
+          test "$(awk -F= '$1=="filename"{print $2}' "$LATEST")" = "$NAME"
+          test "$(awk -F= '$1=="size_bytes"{print $2}' "$LATEST")" = "$EXPECTED_SIZE"
+          test "$(awk -F= '$1=="sha256"{print $2}' "$LATEST")" = "$EXPECTED_SHA"
+
+          grep -Fxq 'version=0.5.49.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.48.0' "$REPORT"
+          grep -Fxq 'k1_binary_change=no' "$REPORT"
+          grep -Fxq 'r36update_normal_readonly=yes' "$REPORT"
+          grep -Fxq 'full_partition_tar_backup=retired' "$REPORT"
+          grep -Fxq 'long_stage_private_guarded_mount=yes' "$REPORT"
+          grep -Fxq 'marker_write_private_guarded_mount=yes' "$REPORT"
+          grep -Fxq 'final_arm_r36update_unmounted=yes' "$REPORT"
+
+          rm -rf audit
+          mkdir audit
+          tar -xzf "$PKG" -C audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.49.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.48.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="r36update_normal_mode"{print $2}' audit/manifest.conf)" = read-only
+          test "$(awk -F= '$1=="full_partition_tar_backup"{print $2}' audit/manifest.conf)" = retired
+          test "$(awk -F= '$1=="final_arm_state"{print $2}' audit/manifest.conf)" = r36update-unmounted
+          test ! -e audit/payload/root/r36state
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find audit/payload/root -type l | grep -q .
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' audit/payload/root || true)"
+          test -z "$HITS"
+          grep -Fxq 'Options=ro' audit/payload/root/etc/systemd/system/r36update.mount.d/90-r36os-readonly.conf
+          ! grep -Eq '^[[:space:]]*(prepare-write|mount-rw)\)' audit/payload/root/usr/local/bin/r36os-r36update-policy
+          grep -Fq 'ARMED_ONCE_PRIVATE_WINDOW_R36UPDATE_UNMOUNTED' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          echo R49_PREPUBLISH_AUDIT=PASS
+
+      - name: Create prerelease and upload exact tested assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$TAG already exists" >&2
+            exit 30
+          fi
+          cat >/tmp/notes.txt <<'EOF'
+          R36OS Alpha 5R49
+
+          R36UPDATE isolation and K1 maintenance redesign from Alpha 5R48.
+
+          - R36UPDATE is read-only boot-handoff storage during normal userspace.
+          - The failed full-partition tar-backup repair architecture is retired.
+          - Boot Next Once performs filesystem check/repair while FAT is unmounted.
+          - K1 staging and one-shot marker writes use a private guarded FAT write window, never public /r36update.
+          - Authoritative K1 remains under /opt/r36os/kernel-next/K1; FAT staging is reconstructible.
+          - Successful arming leaves R36UPDATE cleanly unmounted for reboot.
+          - Transaction rollback isolates/unmounts R36UPDATE before restoring the previous core.
+          - K1 Image, DTB, uInitrd and modules are unchanged.
+          - Legacy Linux 4.4 remains the fallback.
+          - The top-left flashing blue cursor remains a separate visual issue.
+          EOF
+          gh release create "$TAG"             --repo "$REPO"             --target "$BUILD_HEAD_SHA"             --title 'R36OS Alpha 5R49 — R36UPDATE isolation + K1 maintenance redesign'             --notes-file /tmp/notes.txt             --prerelease
+          gh release upload "$TAG" "$PKG" "$SHA_FILE" "$REPORT" "$ARCH" "$INTLOG" --repo "$REPO"
+
+      - name: Verify published package before channel advance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          test "$(printf '%s' "$REL" | jq -r .prerelease)" = true
+          test "$(printf '%s' "$REL" | jq -r .target_commitish)" = "$BUILD_HEAD_SHA"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/published.r36upd
+          test "$(stat -c %s /tmp/published.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/published.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R49_PUBLISHED_ASSET_VERIFY=PASS
+
+      - name: Advance live channel from R48 to R49
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
+          git checkout -B publish-r49-main origin/main
+          cp "$LATEST" r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R49 update channel'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Preserve publication evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live-latest.conf
+          cmp /tmp/live-latest.conf "$LATEST"
+          cat >/tmp/PUBLISH_EVIDENCE.txt <<EOF
+          R36OS Alpha 5R49 publish evidence
+          build_run=$BUILD_RUN
+          build_artifact_id=$BUILD_ARTIFACT_ID
+          build_head_sha=$BUILD_HEAD_SHA
+          integration_run=$INTEGRATION_RUN
+          integration_artifact_id=$INTEGRATION_ARTIFACT_ID
+          integration_head_sha=$INTEGRATION_HEAD_SHA
+          prepublish_main_sha=$PREPUBLISH_MAIN_SHA
+          channel_commit=$CHANNEL_COMMIT
+          tag=$TAG
+          package=$NAME
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA
+          exact_build_artifact=yes
+          integration_gate=PASS
+          rebuilt_at_publish=no
+          EOF
+          gh release upload "$TAG" /tmp/PUBLISH_EVIDENCE.txt --repo "$REPO"
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r49-postpublish-verified-2026-09-29"
+          echo R49_PUBLISH=PASS
