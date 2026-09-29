@@ -149,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf r38tmp /tmp/r46-hook-migrate
-          mkdir r38tmp /tmp/r46-hook-migrate/recovery
+          mkdir -p r38tmp /tmp/r46-hook-migrate/recovery
           tar -xzf inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C r38tmp
           OLD=r38tmp/payload/root/opt/r36os/kernel-next/hooked-boot.ini
           test "$(sha256sum "$OLD" | awk '{print $1}')" = c5fddc8c36ece7ddc3b542a7baa96167a08587062327aa45bf8c2c39400587b1
