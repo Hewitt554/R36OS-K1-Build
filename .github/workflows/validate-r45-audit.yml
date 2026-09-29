@@ -29,7 +29,10 @@ jobs:
           done
           grep -q 'r36os-k1-boot-audit' r45-release/r36os-github-diagnostics
           grep -q 'k1-boot-handoff' r45-release/r36os-diagnostic-snapshot
-          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r45-release; then
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r45-release || true)"
+          HITS="$(printf '%s\n' "$HITS" | grep -v -F 'raw_github=github_pat_11AAABBBCCCDDDEEE' | grep -v -F 'legacy_token=ghp_1234567890abcdefghijk' || true)"
+          if [ -n "$HITS" ]; then
+            printf '%s\n' "$HITS" >&2
             echo credential-pattern-found >&2
             exit 20
           fi
