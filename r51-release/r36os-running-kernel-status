@@ -1,0 +1,26 @@
+#!/bin/bash
+set +e
+OUT="${R36OS_KERNEL_STATUS_OUT:-/run/r36os-kernel-lab.status}"
+K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null)}"
+CMDLINE_FILE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
+ATTEMPT="${R36OS_K1_ATTEMPT_STATUS:-/run/r36os-k1-attempt.status}"
+case "$K" in
+  6.12.94-r36os-k1) DISPLAY="$K K1"; TRACK=K1;;
+  4.4.189) DISPLAY="$K Legacy"; TRACK=Legacy;;
+  *) DISPLAY="${K:-Unknown}"; TRACK=Unknown;;
+esac
+PROBE="$(tr ' ' '\n' <"$CMDLINE_FILE" 2>/dev/null | awk -F= '$1=="r36os.k1_probe"{print $2;exit}')"
+[ -n "$PROBE" ] || PROBE=none
+LAST="$(awk -F= '$1=="deepest_uboot_stage"{print $2;exit}' "$ATTEMPT" 2>/dev/null)"
+[ -n "$LAST" ] || LAST=none
+{
+  echo 'kernel_track=R36OS Running Kernel'
+  echo "active_kernel=$K"
+  echo "active_kernel_track=$TRACK"
+  echo "baseline_status=$DISPLAY"
+  echo "last_k1_probe=$PROBE"
+  echo "last_k1_stage=$LAST"
+  echo "active_release=$(/usr/local/bin/r36os-version tag 2>/dev/null || echo UNKNOWN)"
+  echo 'kernel_status_source=live-uname-post-ui-start'
+} >"$OUT"
+chmod 0644 "$OUT" 2>/dev/null || true
