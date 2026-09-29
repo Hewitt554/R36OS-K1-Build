@@ -80,8 +80,14 @@ setup_compat(){
       echo "target=$dst status=PASS reason=already-mounted" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
       continue
     fi
-    mount --bind "$src" "$dst" >/dev/null 2>&1 || exit 12
-    echo "target=$dst source=$src status=PASS" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+    errfile="/run/r36os-r36update-bind.$.err"
+    if mount --bind "$src" "$dst" >"$errfile" 2>&1; then
+      echo "target=$dst source=$src status=PASS" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+    else
+      err="$(tr '\n' ' ' <"$errfile" 2>/dev/null | head -c 300)"
+      echo "target=$dst source=$src status=SKIPPED reason=bind-failed error=$err" >>/run/r36os-r36update-binds.conf 2>/dev/null || true
+    fi
+    rm -f "$errfile" 2>/dev/null || true
   done
   return $?
 }
