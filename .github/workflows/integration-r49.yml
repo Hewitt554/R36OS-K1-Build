@@ -5,7 +5,6 @@ on:
     branches:
       - work/r49-r36update-isolation-maintenance-2026-09-29
     paths:
-      - 'r49-release/test_r36update_integration.sh'
       - '.github/workflows/integration-r49.yml'
   workflow_dispatch:
 
@@ -55,13 +54,152 @@ jobs:
           test "$(sha256sum "$PKG" | awk '{print $1}')" = "$PACKAGE_SHA"
           echo "PKG=$PKG" >> "$GITHUB_ENV"
 
-      - name: Run loopback FAT isolation and failure-mode tests
+      - name: Run loopback FAT isolation tests
         run: |
           set -euo pipefail
-          chmod +x r49-release/test_r36update_integration.sh
-          bash -n r49-release/test_r36update_integration.sh
-          ./r49-release/test_r36update_integration.sh "$PKG" "$RUNNER_TEMP/r49-integration" | tee r49-integration.log
-          grep -Fxq 'R49_INTEGRATION_TEST=PASS' r49-integration.log
+          W="$RUNNER_TEMP/r49-int"
+          rm -rf "$W"
+          mkdir -p "$W/audit"
+          tar -xzf "$PKG" -C "$W/audit"
+          ROOT="$W/audit/payload/root"
+          POLICY="$ROOT/usr/local/bin/r36os-r36update-policy"
+          MAINT="$ROOT/usr/local/bin/r36os-r36update-maint"
+          SLOT="$ROOT/usr/local/bin/r36os-kernel-slot"
+          PUB="$W/r36update"
+          STATE="$W/state"
+          SRC="$W/pkg"
+          BOOT="$W/boot.ini"
+          PREFLIGHT="$W/preflight"
+          VERSION="$W/version"
+          CHECKER="$W/fake-fsck"
+          IMG="$W/fat.img"
+          PRIVATE=/run/r36os-r36update-rw
+          GUARD=/run/r36os-r36update-guard
+          CID=e551eb6598d6da7a8e8320e9
+
+          mkdir -p "$PUB" "$STATE" "$SRC/K1"
+          sudo rm -rf "$PRIVATE" "$GUARD" 2>/dev/null || true
+          sudo mkdir -p /usr/local/libexec/r36os
+          sudo cp "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz" /usr/local/libexec/r36os/
+          sudo cp "$ROOT/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256" /usr/local/libexec/r36os/
+
+          printf '# R36OS-K1-BOOT-ONCE-HOOK\n# candidate_id=%s\n' "$CID" > "$BOOT"
+          BOOTSHA="$(sha256sum "$BOOT" | awk '{print $1}')"
+          for x in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do echo "$x-test" > "$SRC/K1/$x"; done
+          cat > "$SRC/K1/K1.conf" <<EOF
+          hardware=R36XX-RK3326
+          panel=PANEL4_NV3051D_640X480
+          root_uuid=e139ce78-9841-40fe-8823-96a304a09859
+          state_uuid=a25488c6-742d-4555-82d1-e28ffc848af3
+          boot_mode=R36OS_K1_BOOT_ONCE
+          modules_storage=R36STATE_BIND
+          kernel_release=6.12.94-r36os-k1
+          candidate_id=$CID
+          EOF
+          (cd "$SRC/K1" && sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt > MANIFEST.sha256)
+          printf 'candidate_id=%s\nhooked_boot_sha256=%s\n' "$CID" "$BOOTSHA" > "$SRC/hook.conf"
+          printf '#!/bin/sh\nexit 0\n' > "$PREFLIGHT"
+          printf '#!/bin/sh\n[ "$1" = version ] && echo 0.5.49.0\n' > "$VERSION"
+          printf '#!/bin/sh\nexit 0\n' > "$CHECKER"
+          chmod +x "$PREFLIGHT" "$VERSION" "$CHECKER"
+          (cd "$W" && sha256sum fake-fsck > fake-fsck.sha256)
+
+          truncate -s 96M "$IMG"
+          LOOP="$(sudo losetup --find --show "$IMG")"
+          cleanup() {
+            set +e
+            [ -n "$HOLDER" ] && sudo kill "$HOLDER" 2>/dev/null || true
+            sudo umount "$PRIVATE" 2>/dev/null || true
+            sudo umount "$PUB" 2>/dev/null || true
+            sudo losetup -d "$LOOP" 2>/dev/null || true
+            sudo rm -rf "$PRIVATE" "$GUARD" 2>/dev/null || true
+          }
+          HOLDER=""
+          trap cleanup EXIT
+          sudo mkfs.vfat -F 32 -i C49E0225 -n R36UPDATE "$LOOP" >/dev/null
+          sudo mount -t vfat "$LOOP" "$PUB"
+          sudo mkdir -p "$PUB/R36OS-Cache" "$PUB/R36OS-Logs" "$PUB/R36OS-KernelLab" "$PUB/update"
+
+          run_policy() {
+            sudo -E env R36OS_UPDATE_MOUNT="$PUB" R36OS_UPDATE_DEV="$LOOP" R36OS_EXPECTED_UPDATE_UUID=C49E-0225 R36OS_STATE_ROOT="$STATE" R36OS_R36UPDATE_POLICY_STATUS="$W/policy.conf" "$POLICY" "$@"
+          }
+          run_maint() {
+            sudo -E env R36OS_UPDATE_MOUNT="$PUB" R36OS_UPDATE_DEV="$LOOP" R36OS_EXPECTED_UPDATE_UUID=C49E-0225 R36OS_STATE_ROOT="$STATE" R36OS_R36UPDATE_POLICY="$POLICY" R36OS_K1_PACKAGED_ROOT="$SRC" R36OS_K1_PREFLIGHT="$PREFLIGHT" R36OS_VERSION_HELPER="$VERSION" R36OS_FSCK_FAT="$CHECKER" R36OS_R36UPDATE_POLICY_STATUS="$W/policy.conf" R36OS_R36UPDATE_MAINT_RESULT="$W/maint.conf" R36OS_K1_PROGRESS_FILE="$W/progress" "$MAINT" "$@"
+          }
+          assert_ro() {
+            mountpoint -q "$PUB"
+            O="$(findmnt -n -o OPTIONS "$PUB" | head -1)"
+            case ",$O," in *,ro,*) ;; *) echo "public FAT is not RO: $O" >&2; exit 200;; esac
+          }
+
+          echo 'TEST normal-readonly-and-bind'
+          run_policy normal
+          assert_ro
+          sudo touch "$PUB/R36OS-Logs/write-test"
+          test -f "$STATE/compat/r36update/logs/write-test"
+          set +e
+          run_policy prepare-write >/dev/null 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 2
+
+          echo 'TEST clean-maintenance-stage'
+          run_maint prepare-stage
+          grep -q '^status=PASS_RO_STAGED$' "$W/maint.conf"
+          test -s "$PUB/R36OS-KernelNext/K1/K1.conf"
+          assert_ro
+          ! mountpoint -q "$PRIVATE"
+
+          echo 'TEST public-direct-arm-rejected'
+          set +e
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PUB/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PUB" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" arm-once > "$W/ro-arm.out" 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 67
+          grep -q 'controlled-write-window-required' "$W/ro-arm.out"
+
+          echo 'TEST private-marker-window'
+          run_maint marker-open
+          test "$(readlink -f "$(findmnt -n -o SOURCE "$PRIVATE" | head -1)")" = "$(readlink -f "$LOOP")"
+          POPT="$(findmnt -n -o OPTIONS "$PRIVATE" | head -1)"
+          case ",$POPT," in *,rw,*) ;; *) exit 201;; esac
+          GSRC="$(findmnt -n -o SOURCE "$PUB" | head -1)"
+          echo "$GSRC" | grep -q 'r36os-r36update-guard'
+          GOPT="$(findmnt -n -o OPTIONS "$PUB" | head -1)"
+          case ",$GOPT," in *,ro,*) ;; *) exit 202;; esac
+
+          echo 'TEST private-arm-disarm'
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PRIVATE/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PRIVATE" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" arm-once > "$W/private-arm.out"
+          grep -q '^status=PASS' "$W/private-arm.out"
+          test -s "$PRIVATE/R36OS-KernelNext/boot-next.$CID.once"
+          sudo -E env R36OS_KERNEL_NEXT_ROOT="$PRIVATE/R36OS-KernelNext" R36OS_UPDATE_MOUNT="$PRIVATE" R36OS_LEGACY_BOOT="$BOOT" R36OS_VERSION_HELPER="$VERSION" R36OS_K1_PREFLIGHT="$PREFLIGHT" "$SLOT" disarm >/dev/null
+          test ! -e "$PRIVATE/R36OS-KernelNext/boot-next.$CID.once"
+          run_maint marker-abort-ro >/dev/null
+          assert_ro
+
+          echo 'TEST busy-private-unmount-fails-closed'
+          run_maint marker-open >/dev/null
+          sudo bash -c "cd '$PRIVATE'; exec sleep 30" &
+          HOLDER=$!
+          sleep 1
+          set +e
+          run_maint marker-close-unmounted > "$W/busy.out" 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 97
+          sudo kill "$HOLDER" 2>/dev/null || true
+          wait "$HOLDER" 2>/dev/null || true
+          HOLDER=""
+          run_maint marker-abort-ro >/dev/null
+          assert_ro
+
+          echo 'TEST successful-final-close'
+          run_maint marker-open >/dev/null
+          run_maint marker-close-unmounted >/dev/null
+          ! mountpoint -q "$PUB"
+          ! mountpoint -q "$PRIVATE"
+
+          echo 'R49_INTEGRATION_TEST=PASS' | tee r49-integration.log
 
       - name: Upload integration evidence
         uses: actions/upload-artifact@v4
