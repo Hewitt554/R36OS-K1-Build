@@ -1,0 +1,9 @@
+[Unit]
+Description=Prepare R36OS UI-only running-kernel version label
+Before=r36os.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/r36os-ui-kernel-label
+RemainAfterExit=yes
