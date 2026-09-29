@@ -1,0 +1,149 @@
+name: Validate R36OS Alpha 5R47
+
+on:
+  push:
+    branches:
+      - work/r47-r36update-repair-clean-rollback-2026-09-29
+    paths:
+      - 'r47-release/**'
+      - 'R47_AUDIT.md'
+      - '.github/workflows/validate-r47.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R46 and R43 packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r46 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd' --dir inputs
+          gh release download alpha5r43 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' --dir inputs
+          echo '9fd037fd79f78420c6f1b6e8df67db2280ed4339df714ef2aeadb225f4e95815  inputs/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd' | sha256sum -c -
+          echo 'cd4e66c08de18c0dbdd4ec3ff3babd5efcf6cc876113f1bd0f57aa1fc3ee421a  inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' | sha256sum -c -
+
+      - name: Audit R47 source
+        run: |
+          set -euo pipefail
+          bash -n r47-release/r36os-update-rollback
+          bash -n r47-release/build_release.sh
+          grep -Fq 'umount "$UPDATE_MOUNT"' r47-release/r36os-update-rollback
+          ! grep -Eq 'umount[[:space:]]+(-f|-l|--force|--lazy)' r47-release/r36os-update-rollback
+          ! grep -Eq 'reboot[[:space:]]+-f|poweroff[[:space:]]+-f' r47-release/r36os-update-rollback
+          grep -q 'R36UPDATE_UNMOUNT=pass' r47-release/r36os-update-rollback
+          grep -q 'normal_unmount=failed' r47-release/r36os-update-rollback
+          echo R47_SOURCE_AUDIT=PASS
+
+      - name: Build R47 twice
+        run: |
+          set -euo pipefail
+          chmod +x r47-release/build_release.sh
+          R46="$PWD/inputs/00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd"
+          R43="$PWD/inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd"
+          ./r47-release/build_release.sh "$R46" "$R43" "$PWD/out-a" | tee r47-build-a.log
+          ./r47-release/build_release.sh "$R46" "$R43" "$PWD/out-b" | tee r47-build-b.log
+
+      - name: Audit deterministic package and scope
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd
+          B=out-b/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf audit r43-audit
+          mkdir audit r43-audit
+          tar -xzf "$A" -C audit
+          tar -xzf inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd -C r43-audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.47.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.46.0
+          test "$(awk -F= '$1=="requires_reboot"{print $2}' audit/manifest.conf)" = true
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="post_install_repair_restart_required"{print $2}' audit/manifest.conf)" = yes
+          test "$(awk -F= '$1=="rollback_r36update_cleanup"{print $2}' audit/manifest.conf)" = sync-normal-unmount-retry-no-force-no-lazy
+
+          cat >/tmp/expected-files.txt <<'EOF'
+          etc/r36os-core-manifest.sha256
+          etc/r36os-release
+          etc/r36os/r36update-repair-once.conf
+          etc/systemd/system-generators/r36os-firstboot-update-repair-generator
+          etc/systemd/system/r36os-firstboot-update-repair.service
+          lib/systemd/system-generators/r36os-firstboot-update-repair-generator
+          opt/r36os/features/alpha5r47
+          usr/local/bin/r36os-firstboot-update-repair
+          usr/local/bin/r36os-kernel-next-prepare
+          usr/local/bin/r36os-kernel-slot
+          usr/local/bin/r36os-r36update-repair
+          usr/local/bin/r36os-update-rollback
+          usr/local/libexec/r36os/fsck.fat-static
+          usr/local/libexec/r36os/fsck.fat-static.sha256
+          EOF
+          (cd audit/payload/root && find . -type f -printf '%P\n' | LC_ALL=C sort) >/tmp/actual-files.txt
+          cmp /tmp/expected-files.txt /tmp/actual-files.txt
+
+          test ! -e audit/payload/root/r36state
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find audit/payload/root -type l | grep -q .
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' audit/payload/root || true)"
+          test -z "$HITS"
+
+          cmp r43-audit/payload/root/usr/local/bin/r36os-r36update-repair audit/payload/root/usr/local/bin/r36os-r36update-repair
+          cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck.fat-static audit/payload/root/usr/local/libexec/r36os/fsck.fat-static
+          cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck.fat-static.sha256 audit/payload/root/usr/local/libexec/r36os/fsck.fat-static.sha256
+
+          grep -q 'release=0.5.47.0' audit/payload/root/etc/r36os/r36update-repair-once.conf
+          grep -q '0.5.47.0' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+          ! grep -q '0.5.43.0' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+          grep -q '0.5.47.0' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.47.0' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'Alpha 5R47' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'r47-runtime-lock' audit/payload/root/usr/local/bin/r36os-kernel-slot
+
+          grep -Fq 'umount "$UPDATE_MOUNT"' audit/payload/root/usr/local/bin/r36os-update-rollback
+          ! grep -Eq 'umount[[:space:]]+(-f|-l|--force|--lazy)' audit/payload/root/usr/local/bin/r36os-update-rollback
+          ! grep -Eq 'reboot[[:space:]]+-f|poweroff[[:space:]]+-f' audit/payload/root/usr/local/bin/r36os-update-rollback
+
+          M=audit/payload/root/etc/r36os-core-manifest.sha256
+          for p in             /usr/local/bin/r36os-kernel-next-prepare             /usr/local/bin/r36os-kernel-slot             /usr/local/bin/r36os-r36update-repair             /usr/local/bin/r36os-firstboot-update-repair             /usr/local/bin/r36os-update-rollback             /usr/local/libexec/r36os/fsck.fat-static             /usr/local/libexec/r36os/fsck.fat-static.sha256             /etc/systemd/system-generators/r36os-firstboot-update-repair-generator             /lib/systemd/system-generators/r36os-firstboot-update-repair-generator             /etc/systemd/system/r36os-firstboot-update-repair.service; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "audit/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R47_PACKAGE_AUDIT=PASS
+
+      - name: Prove exact R43 checker identity and syntax
+        run: |
+          set -euo pipefail
+          bash -n audit/payload/root/usr/local/bin/r36os-r36update-repair
+          bash -n audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+          bash -n audit/payload/root/usr/local/bin/r36os-update-rollback
+          (cd audit/payload/root/usr/local/libexec/r36os && sha256sum -c fsck.fat-static.sha256)
+          echo R47_REPAIR_IDENTITY=PASS
+
+      - name: Upload exact validated R47 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R47-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd
+            out-a/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r47-build-a.log
+            r47-build-b.log
+            R47_AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
