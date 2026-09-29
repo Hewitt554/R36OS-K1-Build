@@ -7,6 +7,7 @@ on:
       - work/r49-r36update-isolation-maintenance-2026-09-29
     paths:
       - '.github/workflows/integration-r49.yml'
+      - 'R49_INTEGRATION_TRIGGER.txt'
   workflow_dispatch:
 
 permissions:
