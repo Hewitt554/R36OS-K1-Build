@@ -1,0 +1,229 @@
+name: Validate R36OS Alpha 5R44
+
+on:
+  push:
+    branches:
+      - work/r44-k1-fat-staging-2026-09-29
+    paths:
+      - 'r44-release/r36os-kernel-next-prepare'
+      - 'R44_AUDIT.md'
+      - '.github/workflows/validate-r44-release.yml'
+      - 'r44-release/build_release.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FAT tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y dosfstools >/dev/null
+
+      - name: Download exact published R43 helper and R38 K1 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs r43 r38
+          gh release download alpha5r43 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' --dir inputs
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir inputs
+          echo 'cd4e66c08de18c0dbdd4ec3ff3babd5efcf6cc876113f1bd0f57aa1fc3ee421a  inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' | sha256sum -c -
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+          tar -xzf inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd -C r43
+          tar -xzf inputs/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C r38
+          (cd r43 && sha256sum -c checksums.sha256 >/dev/null)
+          (cd r38 && sha256sum -c checksums.sha256 >/dev/null)
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          H=r44-release/r36os-kernel-next-prepare
+          bash -n "$H"
+          grep -q '0.5.44.0' "$H"
+          grep -q 'candidate_tree_digest' "$H"
+          grep -q 'cp -R "$SRC/." "$TMP/"' "$H"
+          if grep -Eq '^[[:space:]]*cp[[:space:]]+-a([[:space:]]|$)' "$H"; then
+            echo executable-cp-a-remains >&2
+            exit 20
+          fi
+          if grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r44-release R44_AUDIT.md; then
+            echo credential-pattern-found >&2
+            exit 21
+          fi
+          echo R44_SOURCE_AUDIT=PASS
+
+      - name: Reproduce R43 code 33 and prove R44 FAT-safe staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK=/tmp/r44-stage
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          PKGROOT="$PWD/r38/payload/root/opt/r36os/kernel-next"
+          SRC="$PKGROOT/K1"
+          OLD="$PWD/r43/payload/root/usr/local/bin/r36os-kernel-next-prepare"
+          NEW="$PWD/r44-release/r36os-kernel-next-prepare"
+          PREFLIGHT="$PWD/r38/payload/root/usr/local/bin/r36os-k1-preflight"
+          chmod +x "$OLD" "$NEW" "$PREFLIGHT"
+          "$PREFLIGHT" "$SRC" >/dev/null
+
+          tree_digest() {
+            root="$1"
+            (
+              cd "$root"
+              find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r rel; do
+                [ -n "$rel" ] || continue
+                printf '%s  %s\n' "$(sha256sum "$rel" | awk '{print $1}')" "$rel"
+              done
+            ) | sha256sum | awk '{print $1}'
+          }
+
+          make_ver() {
+            p="$1"; v="$2"
+            printf '#!/bin/sh\n[ "$1" = version ] && { echo "%s"; exit 0; }\nexit 1\n' "$v" > "$p"
+            chmod +x "$p"
+          }
+          make_ver "$WORK/ver43" 0.5.43.0
+          make_ver "$WORK/ver44" 0.5.44.0
+
+          # Exact R43 failure reproduction.
+          truncate -s 768M "$WORK/old.img"
+          mkfs.fat -F 32 -n R36UPDATE -i C49E0225 "$WORK/old.img" >/dev/null
+          mkdir -p "$WORK/oldmnt"
+          OLDLOOP="$(sudo losetup --find --show "$WORK/old.img")"
+          sudo mount -t vfat -o rw,fmask=0022,dmask=0022,iocharset=utf8,shortname=mixed "$OLDLOOP" "$WORK/oldmnt"
+          OLDUUID="$(sudo blkid -s UUID -o value "$OLDLOOP" | tr 'a-f' 'A-F')"
+          set +e
+          sudo env R36OS_K1_PACKAGED_ROOT="$PKGROOT" R36OS_UPDATE_MOUNT="$WORK/oldmnt" R36OS_KERNEL_NEXT_ROOT="$WORK/oldmnt/R36OS-KernelNext" R36OS_EXPECTED_UPDATE_UUID="$OLDUUID" R36OS_VERSION_HELPER="$WORK/ver43" R36OS_K1_PREFLIGHT="$PREFLIGHT" R36OS_K1_PROGRESS_FILE="$WORK/old.progress" bash "$OLD" stage-only >"$WORK/old.out" 2>&1
+          OLDRC=$?
+          set -e
+          test "$OLDRC" -eq 33
+          grep -q 'detail=stage-copy' "$WORK/old.out"
+          grep -q 'Operation not permitted' "$WORK/old.out"
+          test ! -d "$WORK/oldmnt/R36OS-KernelNext/K1"
+          test -z "$(find "$WORK/oldmnt/R36OS-KernelNext" -maxdepth 1 -type d -name '.K1.stage.*' -print -quit 2>/dev/null)"
+          sudo umount "$WORK/oldmnt"
+          sudo losetup -d "$OLDLOOP"
+          echo R44_R43_CODE33_REPRODUCED=PASS
+
+          # Same exact candidate using R44.
+          truncate -s 768M "$WORK/new.img"
+          mkfs.fat -F 32 -n R36UPDATE "$WORK/new.img" >/dev/null
+          mkdir -p "$WORK/newmnt"
+          NEWLOOP="$(sudo losetup --find --show "$WORK/new.img")"
+          sudo mount -t vfat -o rw,fmask=0022,dmask=0022,iocharset=utf8,shortname=mixed "$NEWLOOP" "$WORK/newmnt"
+          NEWUUID="$(sudo blkid -s UUID -o value "$NEWLOOP" | tr 'a-f' 'A-F')"
+          CID="$(awk -F= '$1=="candidate_id"{print $2;exit}' "$SRC/K1.conf")"
+          sudo mkdir -p "$WORK/newmnt/R36OS-KernelNext/.K1.stage.$CID.stale"
+          printf 'stale\n' | sudo tee "$WORK/newmnt/R36OS-KernelNext/.K1.stage.$CID.stale/junk" >/dev/null
+
+          sudo env R36OS_K1_PACKAGED_ROOT="$PKGROOT" R36OS_UPDATE_MOUNT="$WORK/newmnt" R36OS_KERNEL_NEXT_ROOT="$WORK/newmnt/R36OS-KernelNext" R36OS_EXPECTED_UPDATE_UUID="$NEWUUID" R36OS_VERSION_HELPER="$WORK/ver44" R36OS_K1_PREFLIGHT="$PREFLIGHT" R36OS_K1_PROGRESS_FILE="$WORK/new.progress" bash "$NEW" stage-only | tee "$WORK/new.out"
+          grep -q 'result=STAGED' "$WORK/new.out"
+          test -d "$WORK/newmnt/R36OS-KernelNext/K1"
+          test ! -e "$WORK/newmnt/R36OS-KernelNext/.K1.stage.$CID.stale"
+          test -z "$(find "$WORK/newmnt/R36OS-KernelNext" -maxdepth 1 -type d -name '.K1.stage.*' -print -quit)"
+          "$PREFLIGHT" "$WORK/newmnt/R36OS-KernelNext/K1" >/dev/null
+          test "$(tree_digest "$SRC")" = "$(tree_digest "$WORK/newmnt/R36OS-KernelNext/K1")"
+          test "$(sha256sum "$PKGROOT/hook.conf" | awk '{print $1}')" = "$(sha256sum "$WORK/newmnt/R36OS-KernelNext/hook.conf" | awk '{print $1}')"
+          echo R44_FAT_STAGE_TREE_READBACK=PASS
+
+          # Reuse exact existing staged candidate.
+          sudo env R36OS_K1_PACKAGED_ROOT="$PKGROOT" R36OS_UPDATE_MOUNT="$WORK/newmnt" R36OS_KERNEL_NEXT_ROOT="$WORK/newmnt/R36OS-KernelNext" R36OS_EXPECTED_UPDATE_UUID="$NEWUUID" R36OS_VERSION_HELPER="$WORK/ver44" R36OS_K1_PREFLIGHT="$PREFLIGHT" R36OS_K1_PROGRESS_FILE="$WORK/reuse.progress" bash "$NEW" stage-only >"$WORK/reuse.out"
+          grep -q 'result=STAGED' "$WORK/reuse.out"
+          test "$(tree_digest "$SRC")" = "$(tree_digest "$WORK/newmnt/R36OS-KernelNext/K1")"
+          sudo umount "$WORK/newmnt"
+          sudo losetup -d "$NEWLOOP"
+          echo R44_EXISTING_STAGE_REUSE=PASS
+
+          # Insufficient space must stop before any candidate exists.
+          truncate -s 300M "$WORK/small.img"
+          mkfs.fat -F 32 -n R36UPDATE "$WORK/small.img" >/dev/null
+          mkdir -p "$WORK/smallmnt"
+          SMALLLOOP="$(sudo losetup --find --show "$WORK/small.img")"
+          sudo mount -t vfat -o rw,fmask=0022,dmask=0022,iocharset=utf8,shortname=mixed "$SMALLLOOP" "$WORK/smallmnt"
+          SMALLUUID="$(sudo blkid -s UUID -o value "$SMALLLOOP" | tr 'a-f' 'A-F')"
+          set +e
+          sudo env R36OS_K1_PACKAGED_ROOT="$PKGROOT" R36OS_UPDATE_MOUNT="$WORK/smallmnt" R36OS_KERNEL_NEXT_ROOT="$WORK/smallmnt/R36OS-KernelNext" R36OS_EXPECTED_UPDATE_UUID="$SMALLUUID" R36OS_VERSION_HELPER="$WORK/ver44" R36OS_K1_PREFLIGHT="$PREFLIGHT" R36OS_K1_PROGRESS_FILE="$WORK/small.progress" bash "$NEW" stage-only >"$WORK/small.out" 2>&1
+          SMALLRC=$?
+          set -e
+          test "$SMALLRC" -eq 26
+          grep -q 'detail=r36update-space' "$WORK/small.out"
+          test ! -d "$WORK/smallmnt/R36OS-KernelNext/K1"
+          test -z "$(find "$WORK/smallmnt/R36OS-KernelNext" -maxdepth 1 -type d -name '.K1.stage.*' -print -quit 2>/dev/null)"
+          sudo umount "$WORK/smallmnt"
+          sudo losetup -d "$SMALLLOOP"
+          echo R44_LOW_SPACE_FAIL_CLOSED=PASS
+
+          echo R44_STAGE_VALIDATION=PASS
+
+      - name: Build R44 twice from exact published R43
+        run: |
+          set -euo pipefail
+          chmod +x r44-release/build_release.sh
+          R43="$PWD/inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd"
+          ./r44-release/build_release.sh "$R43" "$PWD/out-a" | tee r44-build-a.log
+          ./r44-release/build_release.sh "$R43" "$PWD/out-b" | tee r44-build-b.log
+
+      - name: Audit deterministic narrow R44 package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd
+          B=out-b/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$A" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' package-audit/manifest.conf)" = 0.5.44.0
+          test "$(awk -F= '$1=="base_version"{print $2}' package-audit/manifest.conf)" = 0.5.43.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' package-audit/manifest.conf)" = no
+          grep -q '^k1_staging=fat-safe-data-copy-tree-digest-preflight-atomic-rename$' package-audit/manifest.conf
+
+          printf '%s\n'             etc/r36os-core-manifest.sha256             etc/r36os-release             opt/r36os/features/alpha5r44             usr/local/bin/r36os-kernel-next-prepare             usr/local/bin/r36os-kernel-slot > /tmp/expected-r44-files.txt
+          (cd package-audit/payload/root && find . -type f -printf '%P\n' | LC_ALL=C sort) > /tmp/actual-r44-files.txt
+          cmp /tmp/expected-r44-files.txt /tmp/actual-r44-files.txt
+
+          test ! -e package-audit/payload/root/etc/r36os/r36update-repair-once.conf
+          test ! -e package-audit/payload/root/r36state
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' package-audit/payload/root
+          if grep -Eq '^[[:space:]]*cp[[:space:]]+-a([[:space:]]|$)' package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare; then
+            echo executable-cp-a-in-package >&2
+            exit 30
+          fi
+          grep -q 'cp -R "$SRC/." "$TMP/"' package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q 'candidate_tree_digest' package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.44.0' package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.44.0' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'Alpha 5R44' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'r44-runtime-lock' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q '^r43_source_sha256=cd4e66c08de18c0dbdd4ec3ff3babd5efcf6cc876113f1bd0f57aa1fc3ee421a$' out-a/RELEASE_REPORT.txt
+          echo R44_PACKAGE_AUDIT=PASS
+
+      - name: Upload exact audited R44 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R44-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd
+            out-a/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r44-build-a.log
+            r44-build-b.log
+            R44_AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
