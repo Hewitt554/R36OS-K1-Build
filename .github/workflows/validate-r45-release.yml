@@ -1,0 +1,129 @@
+name: Validate R36OS Alpha 5R45
+
+on:
+  push:
+    branches:
+      - work/r45-k1-handoff-diagnostics-2026-09-29
+    paths:
+      - 'r45-release/**'
+      - 'R45_AUDIT.md'
+      - '.github/workflows/validate-r45-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R44 base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r44 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' --dir inputs
+          echo '2a6b872c3e7b81a88272c03f8c1484d9d4ae582dfe9172796ebff4e8e396a4fa  inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd' | sha256sum -c -
+
+      - name: Audit R45 sources
+        run: |
+          set -euo pipefail
+          for f in r45-release/r36os-k1-boot-audit r45-release/r36os-github-diagnostics r45-release/r36os-diagnostic-snapshot r45-release/test_boot_audit.sh r45-release/build_release.sh; do
+            bash -n "$f"
+          done
+          grep -q 'r36os-k1-boot-audit' r45-release/r36os-github-diagnostics
+          grep -q 'k1-boot-handoff' r45-release/r36os-diagnostic-snapshot
+          grep -q 'marker_state=' r45-release/r36os-k1-boot-audit
+          grep -q 'CONSUMED_WITH_REQUEST' r45-release/r36os-k1-boot-audit
+          grep -q 'ARMED_PENDING' r45-release/r36os-k1-boot-audit
+
+          # The helper may write only its R36STATE audit file. It must never mutate boot markers.
+          if grep -n -E 'rm .*boot-next|mv .*boot-next|>.*boot-next|disarm|arm-once' r45-release/r36os-k1-boot-audit; then
+            echo destructive-or-arming-operation-found >&2
+            exit 20
+          fi
+
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' r45-release || true)"
+          HITS="$(printf '%s\n' "$HITS" | grep -v -F 'raw_github=github_pat_11AAABBBCCCDDDEEE' | grep -v -F 'legacy_token=ghp_1234567890abcdefghijk' || true)"
+          test -z "$HITS" || { printf '%s\n' "$HITS" >&2; exit 21; }
+
+          echo R45_SOURCE_AUDIT=PASS
+
+      - name: Execute passive handoff marker matrix
+        run: |
+          set -euo pipefail
+          chmod +x r45-release/test_boot_audit.sh
+          ./r45-release/test_boot_audit.sh r45-release/r36os-k1-boot-audit
+
+      - name: Build R45 twice from exact published R44
+        run: |
+          set -euo pipefail
+          chmod +x r45-release/build_release.sh
+          R44="$PWD/inputs/00-R36OS-Alpha5R44-K1FATStaging-FromR43.r36upd"
+          ./r45-release/build_release.sh "$R44" "$PWD/out-a" | tee r45-build-a.log
+          ./r45-release/build_release.sh "$R44" "$PWD/out-b" | tee r45-build-b.log
+
+      - name: Audit deterministic R45 package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd
+          B=out-b/00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$A" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' package-audit/manifest.conf)" = 0.5.45.0
+          test "$(awk -F= '$1=="base_version"{print $2}' package-audit/manifest.conf)" = 0.5.44.0
+          test "$(awk -F= '$1=="requires_reboot"{print $2}' package-audit/manifest.conf)" = false
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' package-audit/manifest.conf)" = no
+          grep -qx 'boot_handoff_diagnostics=passive-marker-hook-preflight-cmdline-pstore' package-audit/manifest.conf
+
+          printf '%s\n'             etc/r36os-core-manifest.sha256             etc/r36os-release             opt/r36os/features/alpha5r45             usr/local/bin/r36os-diagnostic-snapshot             usr/local/bin/r36os-github-diagnostics             usr/local/bin/r36os-k1-boot-audit             usr/local/bin/r36os-kernel-next-prepare             usr/local/bin/r36os-kernel-slot > /tmp/expected-files.txt
+          (cd package-audit/payload/root && find . -type f -printf '%P\n' | LC_ALL=C sort) > /tmp/actual-files.txt
+          cmp /tmp/expected-files.txt /tmp/actual-files.txt
+
+          test ! -e package-audit/payload/root/etc/r36os/r36update-repair-once.conf
+          test ! -e package-audit/payload/root/r36state
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' package-audit/payload/root || true)"
+          HITS="$(printf '%s\n' "$HITS" | grep -v -F 'raw_github=github_pat_11AAABBBCCCDDDEEE' | grep -v -F 'legacy_token=ghp_1234567890abcdefghijk' || true)"
+          test -z "$HITS" || { printf '%s\n' "$HITS" >&2; exit 30; }
+
+          bash -n package-audit/payload/root/usr/local/bin/r36os-k1-boot-audit
+          bash -n package-audit/payload/root/usr/local/bin/r36os-github-diagnostics
+          bash -n package-audit/payload/root/usr/local/bin/r36os-diagnostic-snapshot
+          package-audit/payload/root/usr/local/bin/r36os-github-diagnostics selftest | grep -qx 'R36OS_GITHUB_DIAGNOSTICS_SELFTEST=PASS'
+
+          grep -q '0.5.45.0' package-audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.45.0' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'Alpha 5R45' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'r45-runtime-lock' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -qx 'requires_reboot=false' out-a/RELEASE_REPORT.txt
+
+          echo R45_PACKAGE_AUDIT=PASS
+
+      - name: Upload exact audited R45 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R45-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd
+            out-a/00-R36OS-Alpha5R45-K1HandoffDiagnostics-FromR44.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r45-build-a.log
+            r45-build-b.log
+            R45_AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
