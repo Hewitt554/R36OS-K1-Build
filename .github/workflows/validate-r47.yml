@@ -120,7 +120,7 @@ jobs:
           ! grep -Eq 'reboot[[:space:]]+-f|poweroff[[:space:]]+-f' audit/payload/root/usr/local/bin/r36os-update-rollback
 
           M=audit/payload/root/etc/r36os-core-manifest.sha256
-          for p in             /usr/local/bin/r36os-kernel-next-prepare             /usr/local/bin/r36os-kernel-slot             /usr/local/bin/r36os-r36update-repair             /usr/local/bin/r36os-firstboot-update-repair             /usr/local/bin/r36os-update-rollback             /usr/local/libexec/r36os/fsck.fat-static             /usr/local/libexec/r36os/fsck.fat-static.sha256             /etc/systemd/system-generators/r36os-firstboot-update-repair-generator             /lib/systemd/system-generators/r36os-firstboot-update-repair-generator             /etc/systemd/system/r36os-firstboot-update-repair.service; do
+          for p in /usr/local/bin/r36os-kernel-next-prepare /usr/local/bin/r36os-kernel-slot /usr/local/bin/r36os-r36update-repair /usr/local/bin/r36os-firstboot-update-repair /usr/local/bin/r36os-update-rollback /usr/local/libexec/r36os/fsck.fat-static /usr/local/libexec/r36os/fsck.fat-static.sha256 /usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt /usr/local/libexec/r36os/fsck-selftest.img.gz /usr/local/libexec/r36os/fsck-selftest.img.gz.sha256; do
             exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
             got="$(sha256sum "audit/payload/root$p" | awk '{print $1}')"
             test -n "$exp" && test "$exp" = "$got"
