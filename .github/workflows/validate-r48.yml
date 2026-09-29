@@ -1,0 +1,173 @@
+name: Validate R36OS Alpha 5R48
+
+on:
+  push:
+    branches:
+      - work/r48-stale-k1-disarm-before-fat-repair-2026-09-29
+    paths:
+      - 'r48-release/**'
+      - 'R48_AUDIT.md'
+      - '.github/workflows/validate-r48.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R47 and R43 packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r47 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd' --dir inputs
+          gh release download alpha5r43 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' --dir inputs
+          echo '0f012501b0f8bebb0bd377f62dde554901f1584ab85c49e77cfad5e73b750808  inputs/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd' | sha256sum -c -
+          echo 'cd4e66c08de18c0dbdd4ec3ff3babd5efcf6cc876113f1bd0f57aa1fc3ee421a  inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd' | sha256sum -c -
+
+      - name: Audit R48 source
+        run: |
+          set -euo pipefail
+          bash -n r48-release/r36os-kernel-slot
+          bash -n r48-release/r36os-firstboot-update-repair
+          bash -n r48-release/build_release.sh
+          grep -Fq 'if [ -s "$PENDING" ]' r48-release/r36os-firstboot-update-repair
+          grep -Fq 'yes:no)' r48-release/r36os-firstboot-update-repair
+          grep -Fq 'unexpected-k1-marker-state' r48-release/r36os-firstboot-update-repair
+          grep -Fq 'STALE_K1_DISARM_PASS' r48-release/r36os-firstboot-update-repair
+          grep -Fq 'FAT_REPAIR_PASS' r48-release/r36os-firstboot-update-repair
+          grep -Fq 'status=FAIL code=$V detail=verification' r48-release/r36os-kernel-slot
+          grep -Fq 'code=66 detail=marker-clear-failed' r48-release/r36os-kernel-slot
+          echo R48_SOURCE_AUDIT=PASS
+
+      - name: Unit-test R48 kernel-slot disarm
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/r48-slot-test"
+          rm -rf "$T"; mkdir -p "$T/next/K1" "$T/bin"
+          cp r48-release/r36os-kernel-slot "$T/slot"
+          chmod +x "$T/slot"
+
+          cat >"$T/bin/version" <<'EOF'
+          #!/bin/sh
+          [ "$1" = version ] && echo 0.5.48.0
+          EOF
+          cat >"$T/bin/preflight-pass" <<'EOF'
+          #!/bin/sh
+          exit 0
+          EOF
+          cat >"$T/bin/preflight-fail" <<'EOF'
+          #!/bin/sh
+          exit 77
+          EOF
+          chmod +x "$T/bin/"*
+
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz BUILD_INFO.txt; do echo "$f" >"$T/next/K1/$f"; done
+          cat >"$T/next/K1/K1.conf" <<'EOF'
+          hardware=R36XX-RK3326
+          panel=PANEL4_NV3051D_640X480
+          root_uuid=e139ce78-9841-40fe-8823-96a304a09859
+          boot_mode=R36OS_K1_BOOT_ONCE
+          candidate_id=e551eb6598d6da7a8e8320e9
+          EOF
+          (cd "$T/next/K1" && sha256sum Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt >MANIFEST.sha256)
+
+          CID=e551eb6598d6da7a8e8320e9
+          REQ="$T/next/boot-next.$CID.once"
+          echo request >"$REQ"
+
+          R36OS_KERNEL_NEXT_ROOT="$T/next" R36OS_VERSION_HELPER="$T/bin/version" R36OS_K1_PREFLIGHT="$T/bin/preflight-pass" "$T/slot" disarm >"$T/pass.out"
+          grep -q '^status=PASS' "$T/pass.out"
+          test ! -e "$REQ"
+
+          echo request >"$REQ"
+          set +e
+          R36OS_KERNEL_NEXT_ROOT="$T/next" R36OS_VERSION_HELPER="$T/bin/version" R36OS_K1_PREFLIGHT="$T/bin/preflight-fail" "$T/slot" disarm >"$T/fail.out"
+          rc=$?
+          set -e
+          test "$rc" -eq 77
+          grep -q '^status=FAIL code=77 detail=verification$' "$T/fail.out"
+          test -e "$REQ"
+          echo R48_DISARM_UNIT_TEST=PASS
+
+      - name: Build R48 twice
+        run: |
+          set -euo pipefail
+          chmod +x r48-release/build_release.sh
+          R47="$PWD/inputs/00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd"
+          R43="$PWD/inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd"
+          ./r48-release/build_release.sh "$R47" "$R43" "$PWD/out-a" | tee r48-build-a.log
+          ./r48-release/build_release.sh "$R47" "$R43" "$PWD/out-b" | tee r48-build-b.log
+
+      - name: Audit deterministic R48 package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd
+          B=out-b/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          rm -rf audit r43-audit
+          mkdir audit r43-audit
+          tar -xzf "$A" -C audit
+          tar -xzf inputs/00-R36OS-Alpha5R43-FATRepairAudit-FromR42.r36upd -C r43-audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.48.0
+          test "$(awk -F= '$1=="base_version"{print $2}' audit/manifest.conf)" = 0.5.47.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="repair_activation"{print $2}' audit/manifest.conf)" = defer-while-transaction-pending
+          test "$(awk -F= '$1=="stale_k1_cleanup"{print $2}' audit/manifest.conf)" = armed-yes-consumed-no-only-full-verify-fail-closed
+
+          test ! -e audit/payload/root/r36state
+          ! find audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          ! find audit/payload/root -type l | grep -q .
+          HITS="$(grep -R -n -E 'github_pat_[A-Za-z0-9]|gh[pousr]_[A-Za-z0-9]' audit/payload/root || true)"
+          test -z "$HITS"
+
+          cmp r43-audit/payload/root/usr/local/bin/r36os-r36update-repair audit/payload/root/usr/local/bin/r36os-r36update-repair
+          for p in fsck.fat-static fsck.fat-static.sha256 fsck-fat-BUILD_INFO.txt fsck-selftest.img.gz fsck-selftest.img.gz.sha256; do
+            cmp "r43-audit/payload/root/usr/local/libexec/r36os/$p" "audit/payload/root/usr/local/libexec/r36os/$p"
+          done
+
+          grep -q 'release=0.5.48.0' audit/payload/root/etc/r36os/r36update-repair-once.conf
+          grep -q '0.5.48.0' audit/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          grep -q '0.5.48.0' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'Alpha 5R48' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -q 'r48-runtime-lock' audit/payload/root/usr/local/bin/r36os-kernel-slot
+          grep -Fq 'if [ -s "$PENDING" ]' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+          grep -Fq 'yes:no)' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+          grep -Fq 'STALE_K1_DISARM_PASS' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
+
+          M=audit/payload/root/etc/r36os-core-manifest.sha256
+          for p in /usr/local/bin/r36os-kernel-next-prepare /usr/local/bin/r36os-kernel-slot /usr/local/bin/r36os-firstboot-update-repair /usr/local/bin/r36os-r36update-repair /usr/local/libexec/r36os/fsck.fat-static /usr/local/libexec/r36os/fsck.fat-static.sha256 /usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt /usr/local/libexec/r36os/fsck-selftest.img.gz /usr/local/libexec/r36os/fsck-selftest.img.gz.sha256; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "audit/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+
+          (cd audit/payload/root/usr/local/libexec/r36os && sha256sum -c fsck.fat-static.sha256 >/dev/null && sha256sum -c fsck-selftest.img.gz.sha256 >/dev/null)
+          echo R48_PACKAGE_AUDIT=PASS
+
+      - name: Upload exact validated R48 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R48-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd
+            out-a/00-R36OS-Alpha5R48-StaleK1DisarmBeforeFATRepair-FromR47.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r48-build-a.log
+            r48-build-b.log
+            R48_AUDIT.md
+          if-no-files-found: error
+          retention-days: 30
