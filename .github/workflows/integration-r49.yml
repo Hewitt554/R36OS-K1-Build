@@ -1,0 +1,72 @@
+name: Validate R36OS Alpha 5R49 Integration
+
+on:
+  push:
+    branches:
+      - work/r49-r36update-isolation-maintenance-2026-09-29
+    paths:
+      - 'r49-release/test_r36update_integration.sh'
+      - '.github/workflows/integration-r49.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      BUILD_RUN: '36585893665'
+      BUILD_ARTIFACT: '11041701667'
+      BUILD_HEAD_SHA: '00f9102588f7a51b8ffdc7510b7a7c8dbb172a3e'
+      PACKAGE: 00-R36OS-Alpha5R49-R36UpdateIsolationMaintenance-FromR48.r36upd
+      PACKAGE_SHA: cb491fd442fae9c64896580b73cc2fe6cfbc2d01970a69f7f01b634137962056
+      PACKAGE_SIZE: '408872'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FAT test tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools
+
+      - name: Download exact build-gated R49 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$BUILD_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$BUILD_HEAD_SHA"
+          ART="$(gh api "repos/$REPO/actions/artifacts/$BUILD_ARTIFACT")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R49-build-gated-candidate
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$BUILD_ARTIFACT/zip" > candidate.zip
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+          PKG="$(find candidate -type f -name "$PACKAGE" -print)"
+          test -n "$PKG" && test -f "$PKG"
+          test "$(stat -c %s "$PKG")" = "$PACKAGE_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$PACKAGE_SHA"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+
+      - name: Run loopback FAT isolation and failure-mode tests
+        run: |
+          set -euo pipefail
+          chmod +x r49-release/test_r36update_integration.sh
+          bash -n r49-release/test_r36update_integration.sh
+          ./r49-release/test_r36update_integration.sh "$PKG" "$RUNNER_TEMP/r49-integration" | tee r49-integration.log
+          grep -Fxq 'R49_INTEGRATION_TEST=PASS' r49-integration.log
+
+      - name: Upload integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R49-integration-evidence
+          path: r49-integration.log
+          if-no-files-found: error
+          retention-days: 30
