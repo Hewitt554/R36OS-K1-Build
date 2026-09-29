@@ -120,7 +120,7 @@ jobs:
           SLOT=pkg/payload/root/usr/local/bin/r36os-kernel-slot
           grep -Fq 'breadcrumb_deepest=' "$SLOT"
           for f in K1CON.OK K1IMG.OK K1INI.OK K1DTB.OK K1BOT.OK K1RET.OK; do
-            grep -Fq "\"$UPDATE_MOUNT/$f\"" "$SLOT"
+            grep -Fq "\$UPDATE_MOUNT/$f" "$SLOT"
           done
           echo R51_SLOT_BREADCRUMB_TEST=PASS
 
