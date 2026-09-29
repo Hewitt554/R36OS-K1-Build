@@ -1,0 +1,189 @@
+name: Publish R36OS Alpha 5R47 exact validated artifact
+
+on:
+  push:
+    branches:
+      - work/r47-r36update-repair-clean-rollback-2026-09-29
+    paths:
+      - '.github/workflows/publish-r47.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      VALIDATION_RUN: '36564864051'
+      VALIDATION_ARTIFACT_ID: '11030938406'
+      VALIDATED_SOURCE_SHA: 098f06dd9d22ac9079da91dbc0318e927498d459
+      PREPUBLISH_MAIN_SHA: f01d24bc2507ec1dc16538f0ec56eacaa4ae4279
+      TAG: alpha5r47
+      NAME: 00-R36OS-Alpha5R47-R36UpdateRepairRollbackFix-FromR46.r36upd
+      EXPECTED_SHA: 0f012501b0f8bebb0bd377f62dde554901f1584ab85c49e77cfad5e73b750808
+      EXPECTED_SIZE: '403879'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact validated artifact and prove lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$VALIDATED_SOURCE_SHA"
+
+          ART="$(gh api "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R47-audited-validation-candidate
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID/zip" > candidate.zip
+          rm -rf candidate
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          AUDIT="$(find candidate -type f -name R47_AUDIT.md -print)"
+          for v in PKG SHA_FILE LATEST REPORT AUDIT; do
+            p="${!v}"
+            test -n "$p" && test -f "$p"
+            echo "$v=$p" >> "$GITHUB_ENV"
+          done
+
+      - name: Audit exact downloaded R47 package
+        run: |
+          set -euo pipefail
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
+
+          test "$(awk -F= '$1=="version"{print $2}' "$LATEST")" = 0.5.47.0
+          test "$(awk -F= '$1=="base_version"{print $2}' "$LATEST")" = 0.5.46.0
+          test "$(awk -F= '$1=="filename"{print $2}' "$LATEST")" = "$NAME"
+          test "$(awk -F= '$1=="size_bytes"{print $2}' "$LATEST")" = "$EXPECTED_SIZE"
+          test "$(awk -F= '$1=="sha256"{print $2}' "$LATEST")" = "$EXPECTED_SHA"
+
+          grep -Fxq 'version=0.5.47.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.46.0' "$REPORT"
+          grep -Fxq 'k1_binary_change=no' "$REPORT"
+          grep -Fxq 'r43_repair_reused_exactly=yes' "$REPORT"
+          grep -Fxq 'rollback_normal_r36update_unmount=yes' "$REPORT"
+          grep -Fxq 'rollback_forced_or_lazy_unmount=no' "$REPORT"
+          grep -Fxq 'post_install_repair_restart_required=yes' "$REPORT"
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$PKG" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' package-audit/manifest.conf)" = 0.5.47.0
+          test "$(awk -F= '$1=="base_version"{print $2}' package-audit/manifest.conf)" = 0.5.46.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' package-audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="rollback_r36update_cleanup"{print $2}' package-audit/manifest.conf)" = sync-normal-unmount-retry-no-force-no-lazy
+          test "$(awk -F= '$1=="post_install_repair_restart_required"{print $2}' package-audit/manifest.conf)" = yes
+
+          test ! -e package-audit/payload/root/r36state
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          grep -q 'release=0.5.47.0' package-audit/payload/root/etc/r36os/r36update-repair-once.conf
+          grep -Fq 'umount "$UPDATE_MOUNT"' package-audit/payload/root/usr/local/bin/r36os-update-rollback
+          ! grep -Eq 'umount[[:space:]]+(-f|-l|--force|--lazy)' package-audit/payload/root/usr/local/bin/r36os-update-rollback
+          ! grep -Eq 'reboot[[:space:]]+-f|poweroff[[:space:]]+-f' package-audit/payload/root/usr/local/bin/r36os-update-rollback
+          echo R47_PREPUBLISH_AUDIT=PASS
+
+      - name: Create prerelease and upload exact validated assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$TAG already exists" >&2
+            exit 30
+          fi
+
+          cat >/tmp/notes.txt <<'EOF'
+          R36OS Alpha 5R47
+
+          Corrective update from Alpha 5R46.
+
+          - Re-arms the exact target-validated R43 R36UPDATE FAT repair for the physically confirmed dirty /dev/mmcblk0p3.
+          - Transactional rollback now syncs and normally unmounts /r36update before the caller reboots; forced/lazy unmount is forbidden.
+          - Reuses the exact R43 AArch64 fsck checker and self-test fixture.
+          - Preserves the R46 120-second update-health window and quick kernel-slot status.
+          - Does not replace K1 Image, DTB, uInitrd, or modules.
+          - Legacy Linux 4.4 remains the fallback.
+          - After R47 reaches the UI, one ordinary restart is required to run the one-time FAT repair. Do not use Boot Next Once until post-repair diagnostics are checked.
+          EOF
+
+          gh release create "$TAG"             --repo "$REPO"             --target "$VALIDATED_SOURCE_SHA"             --title 'R36OS Alpha 5R47 — R36UPDATE repair + rollback unmount fix'             --notes-file /tmp/notes.txt             --prerelease
+
+          gh release upload "$TAG" "$PKG" "$SHA_FILE" "$REPORT" "$AUDIT" --repo "$REPO"
+
+      - name: Verify published package before channel update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          test "$(printf '%s' "$REL" | jq -r .prerelease)" = true
+          test "$(printf '%s' "$REL" | jq -r .target_commitish)" = "$VALIDATED_SOURCE_SHA"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/published.r36upd
+          test "$(stat -c %s /tmp/published.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/published.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R47_PUBLISHED_ASSET_VERIFY=PASS
+
+      - name: Advance live channel from R46 to R47
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
+          git checkout -B publish-r47-main origin/main
+          cp "$LATEST" r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R47 update channel'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Preserve post-publish evidence and backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live-latest.conf
+          cmp /tmp/live-latest.conf "$LATEST"
+
+          cat >/tmp/PUBLISH_EVIDENCE.txt <<EOF
+          R36OS Alpha 5R47 publish evidence
+          validation_run=$VALIDATION_RUN
+          validation_artifact_id=$VALIDATION_ARTIFACT_ID
+          validated_source_sha=$VALIDATED_SOURCE_SHA
+          prepublish_main_sha=$PREPUBLISH_MAIN_SHA
+          channel_commit=$CHANNEL_COMMIT
+          tag=$TAG
+          package=$NAME
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA
+          exact_validated_artifact=yes
+          rebuilt_at_publish=no
+          EOF
+          gh release upload "$TAG" /tmp/PUBLISH_EVIDENCE.txt --repo "$REPO"
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r47-postpublish-verified-2026-09-29"
+          echo R47_PUBLISH=PASS
