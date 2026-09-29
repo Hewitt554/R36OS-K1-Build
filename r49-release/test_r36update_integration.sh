@@ -167,61 +167,7 @@ assert_private_absent
 
 echo "=== direct slot arm must fail on public RO ==="
 set +e
-sudo -E env \
-  R36OS_KERNEL_NEXT_ROOT="$PUB/R36OS-KernelNext" \
-  R36OS_UPDATE_MOUNT="$PUB" \
-  R36OS_LEGACY_BOOT="$BOOT" \
-  R36OS_VERSION_HELPER="$VERSION" \
-  R36OS_K1_PREFLIGHT="$PREFLIGHT" \
-  "$SLOT" arm-once >"$T/direct-ro-arm.out" 2>&1
-rc=$?
-set -e
-test "$rc" -eq 67
-grep -q 'controlled-write-window-required' "$T/direct-ro-arm.out"
-
-echo "=== simulated dirty FAT repair path ==="
-echo dirty >"$MODE"
-rm -f "$REPAIRED"
-run_root "$MAINT" prepare-stage
-grep -q '^repair_rc=0$' "$T/maint-result"
-grep -q '^verify_rc=0$' "$T/maint-result"
-test -f "$REPAIRED"
-assert_public_ro
-assert_private_absent
-
-echo "=== checker hard failure restores RO ==="
-echo fail >"$MODE"
-set +e
-run_root "$MAINT" prepare-stage >"$T/checker-fail.out" 2>&1
-rc=$?
-set -e
-test "$rc" -eq 61
-assert_public_ro
-assert_private_absent
-
-echo "=== staging failure restores RO ==="
-run_root "$POLICY" leave-unmounted >/dev/null
-sudo mkfs.vfat -F 32 -i C49E0225 -n R36UPDATE "$LOOP" >/dev/null
-sudo mount -t vfat "$LOOP" "$PUB"
-sudo mkdir -p "$PUB/R36OS-Cache" "$PUB/R36OS-Logs" "$PUB/R36OS-KernelLab" "$PUB/update"
-echo clean >"$MODE"
-set +e
-sudo -E env "${ENVV[@]}" R49_PREFLIGHT_FAIL_STAGE=1 "$MAINT" prepare-stage >"$T/stage-fail.out" 2>&1
-rc=$?
-set -e
-test "$rc" -eq 75
-assert_public_ro
-assert_private_absent
-
-echo "=== recover staging for marker tests ==="
-run_root "$MAINT" prepare-stage >/dev/null
-assert_public_ro
-
-echo "==== marker window is private + guarded ==="
-run_root "$MAINT" marker-open >"$T/marker-open.out"
-test "$(readlink -f "$(findmnt -n -o SOURCE "$PRIVATE" | head -1)")" = "$(readlink -f "$LOOP")"
-popts="$(findmnt -n -o OPTIONS "$PRIVATE" | head -1)"
-case ",$popts," in *,rw,*) ;; *) echo "private not RW" >&2; exit 201;; esac
-gsrc="$(findmnt -n -o SOURCE "$PUB" | head -1)"
-echo "$gsrc" | grep -q 'r36os-r36update-guard'
-gopts="$(findmnt -n -o OPTIONS "$PUB"ÂVBÓ ¦66R"ÂFv÷G2Â"â¢Ç&òÂ¢³²¢V6ò&wV&Bæ÷B$ò"âc#²WB##³²W60 ¦V6ò#ÓÓÒ&fFR6Æ÷B&ÒöF6&ÒÓÓÒ §7VFòÔRVçbÀ¢#3dõ5ô´U$äTÅôäUEõ$ôõCÒ"E$dDRõ#3dõ2Ô¶W&æVÄæWB"À¢#3dõ5õUDDUôÔõTåCÒ"E$dDR"À¢#3dõ5ôÄTt5ô$ôõCÒ"D$ôõB"À¢#3dõ5õdU%4ôåôTÅU#Ò"EdU%4ôâ"À¢#3dõ5ô³õ$TdÄtCÒ"E$TdÄtB"À¢"E4ÄõB"&ÒÖöæ6Râ"EB÷&fFRÖ&Òæ÷WB ¦w&W×uç7FGW3Õ52r"EB÷&fFRÖ&Òæ÷WB §FW7B×2"E$dDRõ#3dõ2Ô¶W&æVÄæWBö&ö÷BÖæWBâD4Bæöæ6R §7VFòÔRVçb PKÿÿ
+sudo -E env"p(HÌÙ=M}-I91}9aQ}I==PôAU½HÌÙ=Lµ-É¹±9áÐÀ¢#3dõ5õUDDUôÔõTåCÒ"ET"" WÍÔ×ÓQÐPÖWÐÓÕHÓÕ\
+  R36OS_VERSION_HELPER="$VERSION""p(HÌÙ=M},Å}AI1%!PôAI1%!PÀ¢"E4ÄõB"&ÒÖöæ6Râ"EBöF&V7B×&òÖ&Òæ÷WB"#âc§&3ÒCð§6WBÖP§FW7B"G&2"ÖWcp¦w&W×v6öçG&öÆÆVB×w&FR×væF÷r×&WV&VBr"EBöF&V7B×&òÖ&Òæ÷WB  ¦V6ò#ÓÓÒ6×VÆFVBF'GdB&W"FÓÓÒ ¦V6òF'Gâ"DÔôDR §&ÒÖb"E$U$TB §'Vå÷&ö÷B"DÔåB"&W&R×7FvP¦w&W×uç&W%÷&3ÓBr"EBöÖçB×&W7VÇB ¦w&W×uçfW&g÷&3ÓBr"EBöÖçB×&W7VÇB §FW7BÖb"E$U$TB ¦76W'E÷V&Æ5÷&ð¦76W'E÷&fFUö'6Vç@ ¦V6ò#ÓÓÒ6V6¶W"&BfÇW&R&W7F÷&W2$òÓÓÒ ¦V6òfÂâ"DÔôDR §6WB¶P§'Vå÷&ö÷B"DÔåB"&W&R×7FvRâ"EBö6V6¶W"ÖfÂæ÷WB"#âc§&3ÒCð§6WBÖP§FW7B"G&2"ÖWc¦76W'E÷V&Æ5÷&ð¦76W'E÷&fFUö'6Vç@ ¦V6ò#ÓÓÒ7FværfÇW&R&W7F÷&W2$òÓÓÒ §'Vå÷&ö÷B"EôÄ5"ÆVfR×VæÖ÷VçFVBâöFWböçVÆÀ§7VFòÖ¶g2çffBÔb3"Ö3CS##RÖâ#3eUDDR"DÄôõ"âöFWböçVÆÀ§7VFòÖ÷VçB×BffB"DÄôõ""ET" §7VFòÖ¶F"×"ET"õ#3dõ2Ô66R""ET"õ#3dõ2ÔÆöw2""ET"õ#3dõ2Ô¶W&æVÄÆ"""ET"÷WFFR ¦V6ò6ÆVââ"DÔôDR §6WB¶P§7VFòÔRVçb"G´Tåee´×Ò"#Cõ$TdÄtEôdÅõ5DtSÓ"DÔåB"&W&R×7FvRâ"EB÷7FvRÖfÂæ÷WB"#âc§&3ÒCð§6WBÖP§FW7B"G&2"ÖWsP¦76W'E÷V&Æ5÷&ð¦76W'E÷&fFUö'6Vç@ ¦V6ò#ÓÓÒ&V6÷fW"7Fværf÷"Ö&¶W"FW7G2ÓÓÒ §'Vå÷&ö÷B"DÔåB"&W&R×7FvRâöFWböçVÆÀ¦76W'E÷V&Æ5÷&ð ¦V6ò#ÓÓÒÖ&¶W"væF÷r2&fFR²wV&FVBÓÓÒ §'Vå÷&ö÷B"DÔåB"Ö&¶W"Ö÷Vââ"EBöÖ&¶W"Ö÷Vâæ÷WB §FW7B"B&VFÆæ²Öb"BfæFÖçBÖâÖò4õU$4R"E$dDR"ÂVBÓ""Ò"B&VFÆæ²Öb"DÄôõ" §÷G3Ò"BfæFÖçBÖâÖòõDôå2"E$dDR"ÂVBÓ ¦66R"ÂG÷G2Â"â¢Ç'rÂ¢³²¢V6ò'&fFRæ÷B%r"âc#²WB#³²W60¦w7&3Ò"BfæFÖçBÖâÖò4õU$4R"ET""ÂVBÓ ¦V6ò"Fw7&2"Âw&W×w#3f÷2×#3gWFFRÖwV&Bp¦v÷G3Ò"BfæFÖçBÖâÖòõDôå2"ET""ÂVBÓ ¦66R"ÂFv÷G2Â"â¢Ç&òÂ¢³²¢V6ò&wV&Bæ÷B$ò"âc#²WB##³²W60 ¦V6ò#ÓÓÒ&fFR6Æ÷B&ÒöF6&ÒÓÓÒ §7VFòÔRVçb WÍÔ×ÒÑTSÓVÔÓÕHUUKÔÍÔËRÙ\[^ÍÔ×ÕTUWÓSÕSHUUHÍÔ×ÓQÐPÖWÐÓÕHÓÕÍÔ×ÕTÒSÓÒSTHTÒSÓÍÔ×ÒÌWÔQQÒHQQÒÓÕ\K[ÛÙHÜ]]KX\KÝ]Ü\\H	×Ý]\ÏTTÔÉÈÜ]]KX\KÝ]\Ý\ÈUUKÔÍÔËRÙ\[^ØÛÝ[^ÒQÛÙHÝYÈQH[ÍÔ×ÒÑTSÓVÔÓÕHUUKÔÍÔËRÙ\[^ÍÔ×ÕTUWÓSÕSHUUHÍÔ×ÓQÐPÖWÐÓÕHÓÕÍÔ×ÕTÒSÓÒSTHTÒSÓÍÔ×ÒÌWÔQQÒHQQÒÓÕ\Ø\HÙ]Û[\ÝHYHUUKÔÍÔËRÙ\[^ØÛÝ[^ÒQÛÙHXÚÈOOHX\Ù\Ü]HZ[\H]OOHÝYÈ[Ý[[È[[Ý[ÈUUHÙ]
+ÙBÝYÈQH[ÍÔ×ÒÑTSÓVÔÓÕHUUKÔÍÔËRÙ\[^ÍÔ×ÕTUWÓSÕSHUUHÍÔ×ÓQÐPÖWÐÓÕHÓÕÍÔ×ÕTÒSÓÒSTHTÒSÓÍÔ×ÒÌWÔQQÒHQQÒÓÕ\K[ÛÙHÜ]]K\ËX\KÝ]BÏIÂÙ]YB\ÝÈY\HÂÝYÈ[Ý[[È[[Ý[ÈUUH[ÜÛÝPRSX\Ù\XXÜ\ÈÙ]Û[\ÜÙ\ÜXX×ÜÂ\ÜÙ\Ü]]WØXÙ[XÚÈOOH\ÞH[[]]H[[Ý[Z[ÈÛÜÙYOOH[ÜÛÝPRSX\Ù\[Ü[Ù]Û[ÝYÈ\ÚXÈÙ	ÉUUIÎÈ^XÈÛY\Ì	ÓTIBÛY\BÙ]
+ÙB[ÜÛÝPRSX\Ù\XÛÜÙK][[Ý[YØ\ÞKXÛÜÙKÝ]BÏIÂÙ]YB\ÝÈY\HMÂÝYÈÚ[ÓTÙ]Û[YBØZ]ÓTÙ]Û[YBÓTH[ÜÛÝPRSX\Ù\XXÜ\ÈÙ]Û[\ÜÙ\ÜXX×ÜÂ\ÜÙ\Ü]]WØXÙ[XÚÈOOHÝXØÙ\ÜÙ[ÛÜÙHX]\ÈU[[Ý[YOOH[ÜÛÝPRSX\Ù\[Ü[Ù]Û[[ÜÛÝPRSX\Ù\XÛÜÙK][[Ý[YÙ]Û[H[Ý[Ú[\HPH[Ý[Ú[\HUUH[ÜÛÝÓPÖHÜX[Ù]Û[\ÜÙ\ÜXX×ÜÂXÚÈWÒSQÔUSÓÕTÕTTÔÈÿÿ
