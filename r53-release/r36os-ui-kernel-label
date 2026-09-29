@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
-REL=/etc/r36os-release
-OUT=/run/r36os-ui-release
+REL="${R36OS_RELEASE_FILE:-/etc/r36os-release}"
+OUT="${R36OS_UI_RELEASE_OUT:-/run/r36os-ui-release}"
 . "$REL"
 K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null || echo unknown)}"
 case "$K" in
