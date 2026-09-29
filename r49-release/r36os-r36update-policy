@@ -9,7 +9,7 @@ EXPECTED_UUID="${R36OS_EXPECTED_UPDATE_UUID:-C49E-0225}"
 STATE="${R36OS_STATE_ROOT:-/r36state}"
 STATUS="${R36OS_R36UPDATE_POLICY_STATUS:-/run/r36os-r36update-policy.conf}"
 BINDROOT="$STATE/compat/r36update"
-VFAT_OPTS='relatime,fmask=0022,dmask=0022,codepage=936,iocharset=utf8,shortname=mixed,errors=remount-ro'
+VFAT_OPTS=''
 
 write_status(){
   st="$1"; detail="$2"; mode="${3:-unknown}"
@@ -107,7 +107,7 @@ mount_fresh(){
   mode="$1"
   is_mounted && return 2
   mkdir -p "$MOUNT" || return 3
-  mount -t vfat -o "$mode,$VFAT_OPTS" "$DEV" "$MOUNT" >/dev/null 2>&1 || return 4
+  mount -t vfat -o "$mode" "$DEV" "$MOUNT" >/dev/null 2>&1 || return 4
   verify_identity || return 5
   [ "$mode" = ro ] && is_ro
   [ "$mode" = rw ] && is_rw
