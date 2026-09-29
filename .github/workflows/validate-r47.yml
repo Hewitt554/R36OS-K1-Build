@@ -78,15 +78,15 @@ jobs:
           etc/r36os-core-manifest.sha256
           etc/r36os-release
           etc/r36os/r36update-repair-once.conf
-          etc/systemd/system-generators/r36os-firstboot-update-repair-generator
-          etc/systemd/system/r36os-firstboot-update-repair.service
-          lib/systemd/system-generators/r36os-firstboot-update-repair-generator
           opt/r36os/features/alpha5r47
           usr/local/bin/r36os-firstboot-update-repair
           usr/local/bin/r36os-kernel-next-prepare
           usr/local/bin/r36os-kernel-slot
           usr/local/bin/r36os-r36update-repair
           usr/local/bin/r36os-update-rollback
+          usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt
+          usr/local/libexec/r36os/fsck-selftest.img.gz
+          usr/local/libexec/r36os/fsck-selftest.img.gz.sha256
           usr/local/libexec/r36os/fsck.fat-static
           usr/local/libexec/r36os/fsck.fat-static.sha256
           EOF
@@ -103,6 +103,9 @@ jobs:
           cmp r43-audit/payload/root/usr/local/bin/r36os-r36update-repair audit/payload/root/usr/local/bin/r36os-r36update-repair
           cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck.fat-static audit/payload/root/usr/local/libexec/r36os/fsck.fat-static
           cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck.fat-static.sha256 audit/payload/root/usr/local/libexec/r36os/fsck.fat-static.sha256
+          cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt audit/payload/root/usr/local/libexec/r36os/fsck-fat-BUILD_INFO.txt
+          cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck-selftest.img.gz audit/payload/root/usr/local/libexec/r36os/fsck-selftest.img.gz
+          cmp r43-audit/payload/root/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256 audit/payload/root/usr/local/libexec/r36os/fsck-selftest.img.gz.sha256
 
           grep -q 'release=0.5.47.0' audit/payload/root/etc/r36os/r36update-repair-once.conf
           grep -q '0.5.47.0' audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
@@ -130,7 +133,7 @@ jobs:
           bash -n audit/payload/root/usr/local/bin/r36os-r36update-repair
           bash -n audit/payload/root/usr/local/bin/r36os-firstboot-update-repair
           bash -n audit/payload/root/usr/local/bin/r36os-update-rollback
-          (cd audit/payload/root/usr/local/libexec/r36os && sha256sum -c fsck.fat-static.sha256)
+          (cd audit/payload/root/usr/local/libexec/r36os && sha256sum -c fsck.fat-static.sha256 && sha256sum -c fsck-selftest.img.gz.sha256)
           echo R47_REPAIR_IDENTITY=PASS
 
       - name: Upload exact validated R47 candidate
