@@ -1,0 +1,164 @@
+#!/bin/bash
+# R36OS Alpha 5R45 passive K1 boot-handoff evidence recorder.
+# This script never arms, disarms, consumes, deletes or renames K1 boot markers.
+set +e
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+NEXT="${R36OS_KERNEL_NEXT_ROOT:-/r36update/R36OS-KernelNext}"
+K1="$NEXT/K1"
+BOOT="${R36OS_LEGACY_BOOT:-/boot/boot.ini}"
+META="${R36OS_K1_HOOK_META:-$NEXT/hook.conf}"
+CMDLINE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
+PSTORE="${R36OS_PSTORE_ROOT:-/sys/fs/pstore}"
+EARLY="${R36OS_EARLY_MARKER:-/var/lib/r36os/kernel-next/early-boot.conf}"
+PREFLIGHT="${R36OS_K1_PREFLIGHT:-/usr/local/bin/r36os-k1-preflight}"
+SLOT="${R36OS_KERNEL_SLOT_HELPER:-/usr/local/bin/r36os-kernel-slot}"
+OUTDIR="$STATE/logs/kernel-next"
+OUT="${R36OS_K1_BOOT_AUDIT_OUT:-$OUTDIR/boot-handoff-current.conf}"
+TMP="$OUT.tmp.$$"
+
+sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+yesno(){ [ "$1" = 1 ] && echo yes || echo no; }
+exists(){ [ -e "$1" ] && echo yes || echo no; }
+size(){ stat -c %s "$1" 2>/dev/null || echo 0; }
+cmdval(){
+  [ -r "$CMDLINE" ] || return 1
+  tr ' ' '\n' <"$CMDLINE" | awk -F= -v k="$1" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\""
+}
+
+[ -d "$STATE" ] || exit 20
+mkdir -p "$OUTDIR" 2>/dev/null || exit 21
+umask 077
+
+CID="$(val "$K1/K1.conf" candidate_id)"
+KREL="$(val "$K1/K1.conf" kernel_release)"
+MANSHA="$(sha "$K1/MANIFEST.sha256")"
+REQ=""
+CONSUMED=""
+if echo "$CID" | grep -Eq '^[0-9a-f]{24}$'; then
+  REQ="$NEXT/boot-next.$CID.once"
+  CONSUMED="$NEXT/boot-next.$CID.consumed"
+fi
+
+CAND_RC=127
+if [ -x "$PREFLIGHT" ]; then
+  "$PREFLIGHT" "$K1" >/dev/null 2>&1
+  CAND_RC=$?
+fi
+
+REQ_EXISTS=no; CON_EXISTS=no
+[ -n "$REQ" ] && [ -e "$REQ" ] && REQ_EXISTS=yes
+[ -n "$CONSUMED" ] && [ -e "$CONSUMED" ] && CON_EXISTS=yes
+case "$REQ_EXISTS:$CON_EXISTS" in
+  no:no) MARKER_STATE=NONE;;
+  yes:no) MARKER_STATE=ARMED_PENDING;;
+  yes:yes) MARKER_STATE=CONSUMED_WITH_REQUEST;;
+  no:yes) MARKER_STATE=ORPHAN_CONSUMED;;
+  *) MARKER_STATE=UNKNOWN;;
+esac
+
+REQ_SHA=""; CON_SHA=""; HASH_MATCH=not-applicable
+[ "$REQ_EXISTS" = yes ] && REQ_SHA="$(sha "$REQ")"
+[ "$CON_EXISTS" = yes ] && CON_SHA="$(sha "$CONSUMED")"
+if [ "$REQ_EXISTS" = yes ] && [ "$CON_EXISTS" = yes ]; then
+  [ -n "$REQ_SHA" ] && [ "$REQ_SHA" = "$CON_SHA" ] && HASH_MATCH=yes || HASH_MATCH=no
+fi
+
+BOOT_EXISTS=no; META_EXISTS=no; BOOT_SHA=""; META_SHA=""
+[ -f "$BOOT" ] && { BOOT_EXISTS=yes; BOOT_SHA="$(sha "$BOOT")"; }
+[ -f "$META" ] && { META_EXISTS=yes; META_SHA="$(sha "$META")"; }
+HOOK_MARKER=no; HOOK_CANDIDATE_MARKER=no
+[ "$BOOT_EXISTS" = yes ] && grep -qF '# R36OS-K1-BOOT-ONCE-HOOK' "$BOOT" 2>/dev/null && HOOK_MARKER=yes
+[ "$BOOT_EXISTS" = yes ] && [ -n "$CID" ] && grep -qF "# candidate_id=$CID" "$BOOT" 2>/dev/null && HOOK_CANDIDATE_MARKER=yes
+HOOK_EXPECTED_SHA="$(val "$META" hooked_boot_sha256)"
+HOOK_HASH_MATCH=not-applicable
+if [ -n "$HOOK_EXPECTED_SHA" ] && [ -n "$BOOT_SHA" ]; then
+  [ "$HOOK_EXPECTED_SHA" = "$BOOT_SHA" ] && HOOK_HASH_MATCH=yes || HOOK_HASH_MATCH=no
+fi
+
+PSTORE_COUNT=0; PSTORE_BYTES=0
+if [ -d "$PSTORE" ]; then
+  PSTORE_COUNT="$(find "$PSTORE" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
+  PSTORE_BYTES="$(find "$PSTORE" -maxdepth 1 -type f -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{printf "%.0f",s+0}')"
+fi
+
+HEALTH_UNIT_LOAD=unknown; HEALTH_UNIT_ACTIVE=unknown; HEALTH_UNIT_SUB=unknown; HEALTH_UNIT_FILE=unknown
+if command -v systemctl >/dev/null 2>&1; then
+  HEALTH_UNIT_LOAD="$(systemctl show -p LoadState --value r36os-kernel-next-health.service 2>/dev/null | head -1)"
+  HEALTH_UNIT_ACTIVE="$(systemctl show -p ActiveState --value r36os-kernel-next-health.service 2>/dev/null | head -1)"
+  HEALTH_UNIT_SUB="$(systemctl show -p SubState --value r36os-kernel-next-health.service 2>/dev/null | head -1)"
+  HEALTH_UNIT_FILE="$(systemctl show -p UnitFileState --value r36os-kernel-next-health.service 2>/dev/null | head -1)"
+  [ -n "$HEALTH_UNIT_LOAD" ] || HEALTH_UNIT_LOAD=unknown
+  [ -n "$HEALTH_UNIT_ACTIVE" ] || HEALTH_UNIT_ACTIVE=unknown
+  [ -n "$HEALTH_UNIT_SUB" ] || HEALTH_UNIT_SUB=unknown
+  [ -n "$HEALTH_UNIT_FILE" ] || HEALTH_UNIT_FILE=unknown
+fi
+
+{
+  echo 'format=R36OS_K1_BOOT_HANDOFF_AUDIT_V1'
+  echo "time=$(date -Is 2>/dev/null || date)"
+  echo "kernel_running=$(uname -r 2>/dev/null || echo unknown)"
+  echo "candidate_dir=$K1"
+  echo "candidate_present=$( [ -d "$K1" ] && echo yes || echo no )"
+  echo "candidate_id=${CID:-unknown}"
+  echo "kernel_release_expected=${KREL:-unknown}"
+  echo "candidate_manifest_sha256=${MANSHA:-}"
+  echo "candidate_preflight_rc=$CAND_RC"
+  echo "marker_state=$MARKER_STATE"
+  echo "request_path=$REQ"
+  echo "request_exists=$REQ_EXISTS"
+  echo "request_size=$( [ "$REQ_EXISTS" = yes ] && size "$REQ" || echo 0 )"
+  echo "request_sha256=$REQ_SHA"
+  echo "request_format=$( [ "$REQ_EXISTS" = yes ] && val "$REQ" format || true )"
+  echo "request_candidate_id=$( [ "$REQ_EXISTS" = yes ] && val "$REQ" candidate_id || true )"
+  echo "request_manifest_sha256=$( [ "$REQ_EXISTS" = yes ] && val "$REQ" candidate_manifest_sha256 || true )"
+  echo "consumed_path=$CONSUMED"
+  echo "consumed_exists=$CON_EXISTS"
+  echo "consumed_size=$( [ "$CON_EXISTS" = yes ] && size "$CONSUMED" || echo 0 )"
+  echo "consumed_sha256=$CON_SHA"
+  echo "consumed_format=$( [ "$CON_EXISTS" = yes ] && val "$CONSUMED" format || true )"
+  echo "consumed_candidate_id=$( [ "$CON_EXISTS" = yes ] && val "$CONSUMED" candidate_id || true )"
+  echo "consumed_manifest_sha256=$( [ "$CON_EXISTS" = yes ] && val "$CONSUMED" candidate_manifest_sha256 || true )"
+  echo "request_consumed_hash_match=$HASH_MATCH"
+  echo "boot_file=$BOOT"
+  echo "boot_file_exists=$BOOT_EXISTS"
+  echo "boot_file_sha256=$BOOT_SHA"
+  echo "boot_hook_marker=$HOOK_MARKER"
+  echo "boot_candidate_marker=$HOOK_CANDIDATE_MARKER"
+  echo "hook_meta=$META"
+  echo "hook_meta_exists=$META_EXISTS"
+  echo "hook_meta_sha256=$META_SHA"
+  echo "hook_meta_candidate_id=$(val "$META" candidate_id)"
+  echo "hook_expected_boot_sha256=$HOOK_EXPECTED_SHA"
+  echo "hook_boot_hash_match=$HOOK_HASH_MATCH"
+  echo "cmdline_kernel_slot=$(cmdval r36os.kernel_slot)"
+  echo "cmdline_kernel_attempt=$(cmdval r36os.kernel_attempt)"
+  echo "cmdline_kernel_candidate=$(cmdval r36os.kernel_candidate)"
+  echo "cmdline_root=$(cmdval root)"
+  echo "early_marker_exists=$( [ -s "$EARLY" ] && echo yes || echo no )"
+  echo "early_marker_sha256=$( [ -s "$EARLY" ] && sha "$EARLY" || true )"
+  echo "early_marker_status=$( [ -s "$EARLY" ] && val "$EARLY" status || true )"
+  echo "early_marker_candidate_id=$( [ -s "$EARLY" ] && val "$EARLY" candidate_id || true )"
+  echo "pstore_files=$PSTORE_COUNT"
+  echo "pstore_bytes=$PSTORE_BYTES"
+  echo "health_unit_load=$HEALTH_UNIT_LOAD"
+  echo "health_unit_active=$HEALTH_UNIT_ACTIVE"
+  echo "health_unit_sub=$HEALTH_UNIT_SUB"
+  echo "health_unit_file_state=$HEALTH_UNIT_FILE"
+  echo 'slot_status_begin'
+  if [ -x "$SLOT" ]; then "$SLOT" status 2>&1 | tail -64; else echo slot-helper-unavailable; fi
+  echo 'slot_status_end'
+  echo 'attempt_records_begin'
+  find "$OUTDIR" -maxdepth 1 -type f \( -name 'HEALTHY-*.conf' -o -name 'FALLBACK-*.conf' \) -printf '%f|%s\n' 2>/dev/null | LC_ALL=C sort
+  echo 'attempt_records_end'
+} >"$TMP" || { rm -f "$TMP"; exit 22; }
+
+BYTES="$(stat -c %s "$TMP" 2>/dev/null || echo 0)"
+[ "$BYTES" -gt 0 ] && [ "$BYTES" -le 131072 ] || { rm -f "$TMP"; exit 23; }
+mv -f "$TMP" "$OUT" || { rm -f "$TMP"; exit 24; }
+chmod 0600 "$OUT" 2>/dev/null || true
+printf '%s\n' "$OUT"
+exit 0
