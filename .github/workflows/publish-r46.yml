@@ -1,0 +1,185 @@
+name: Publish R36OS Alpha 5R46 exact validated artifact
+
+on:
+  push:
+    branches:
+      - work/r46-k1-handoff-probe-2026-09-29
+    paths:
+      - '.github/workflows/publish-r46.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      VALIDATION_RUN: '36554084906'
+      VALIDATION_ARTIFACT_ID: '11025727879'
+      VALIDATED_SOURCE_SHA: e4cb4e0366c590fffff0a933e8220be3fe02dfb4
+      PREPUBLISH_MAIN_SHA: c6b30c5cb3538b1c50dfd28f8b7acb937aaa3729
+      TAG: alpha5r46
+      NAME: 00-R36OS-Alpha5R46-K1HandoffProbe-FromR44.r36upd
+      EXPECTED_SHA: 9fd037fd79f78420c6f1b6e8df67db2280ed4339df714ef2aeadb225f4e95815
+      EXPECTED_SIZE: '15185'
+      EXPECTED_HOOK_SHA: 1125feda2dd9811c3e2bdf0d31a51457e70560091e9ec5e4ceb5119ec56be588
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact validated artifact and prove lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$VALIDATED_SOURCE_SHA"
+
+          ART="$(gh api "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R46-audited-validation-candidate
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+
+          gh api -H 'Accept: application/vnd.github+json'             "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID/zip" > candidate.zip
+          rm -rf candidate
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          AUDIT="$(find candidate -type f -name R46_AUDIT.md -print)"
+          for v in PKG SHA_FILE LATEST REPORT AUDIT; do
+            p="$(eval "printf '%s' \"$$v\"")"
+            test -n "$p" && test -f "$p"
+            echo "$v=$p" >> "$GITHUB_ENV"
+          done
+
+      - name: Audit exact downloaded R46 package
+        run: |
+          set -euo pipefail
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
+
+          test "$(awk -F= '$1=="version"{print $2}' "$LATEST")" = 0.5.46.0
+          test "$(awk -F= '$1=="base_version"{print $2}' "$LATEST")" = 0.5.44.0
+          test "$(awk -F= '$1=="filename"{print $2}' "$LATEST")" = "$NAME"
+          test "$(awk -F= '$1=="size_bytes"{print $2}' "$LATEST")" = "$EXPECTED_SIZE"
+          test "$(awk -F= '$1=="sha256"{print $2}' "$LATEST")" = "$EXPECTED_SHA"
+
+          grep -Fxq 'version=0.5.46.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.44.0' "$REPORT"
+          grep -Fxq 'k1_binary_change=no' "$REPORT"
+          grep -Fxq 'update_health_timeout_seconds=120' "$REPORT"
+          grep -Fxq "new_hook_sha256=$EXPECTED_HOOK_SHA" "$REPORT"
+
+          rm -rf package-audit
+          mkdir package-audit
+          tar -xzf "$PKG" -C package-audit
+          (cd package-audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' package-audit/manifest.conf)" = 0.5.46.0
+          test "$(awk -F= '$1=="base_version"{print $2}' package-audit/manifest.conf)" = 0.5.44.0
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' package-audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="update_health_timeout_seconds"{print $2}' package-audit/manifest.conf)" = 120
+          test ! -e package-audit/payload/root/r36state
+          ! find package-audit/payload/root -type f | grep -Eq '/(boot/|lib/modules/|usr/lib/modules/)'
+          ! find package-audit/payload/root -type f | grep -Eq '/opt/r36os/kernel-next/K1/(Image|uInitrd|rk3326-r36s-k1.dtb|modules.tar.xz)$'
+          test "$(sha256sum package-audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini | awk '{print $1}')" = "$EXPECTED_HOOK_SHA"
+          grep -q 'r36os.k1_probe=' package-audit/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          grep -q 'candidate_verify_mode=quick-identity-no-payload-hash' package-audit/payload/root/usr/local/bin/r36os-kernel-slot
+          echo R46_PREPUBLISH_AUDIT=PASS
+
+      - name: Create prerelease and upload exact validated assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$TAG already exists" >&2
+            exit 30
+          fi
+
+          cat >/tmp/notes.txt <<'EOF'
+          R36OS Alpha 5R46
+
+          Direct support update from Alpha 5R44.
+
+          - Fixes the transactional update false-rollback window after K1 staging by extending first-frame health from 25 seconds to 120 seconds.
+          - Removes full 281 MB K1 payload hashing from ordinary kernel-slot status; full candidate verification is still mandatory before Boot Next Once can arm.
+          - Safely migrates the exact previous audited K1 boot hook.
+          - Adds r36os.k1_probe boot breadcrumbs so the next restart identifies exactly how far U-Boot reached in the one-shot path.
+          - Does not replace K1 Image, DTB, uInitrd, or modules.
+          - Legacy Linux 4.4 remains the fallback.
+          EOF
+
+          gh release create "$TAG"             --repo "$REPO"             --target "$VALIDATED_SOURCE_SHA"             --title 'R36OS Alpha 5R46 — K1 handoff probe + update timing fix'             --notes-file /tmp/notes.txt             --prerelease
+
+          gh release upload "$TAG" "$PKG" "$SHA_FILE" "$REPORT" "$AUDIT" --repo "$REPO"
+
+      - name: Verify published package before channel update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          test "$(printf '%s' "$REL" | jq -r .prerelease)" = true
+          test "$(printf '%s' "$REL" | jq -r .target_commitish)" = "$VALIDATED_SOURCE_SHA"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/published.r36upd
+          test "$(stat -c %s /tmp/published.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/published.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R46_PUBLISHED_ASSET_VERIFY=PASS
+
+      - name: Advance live channel from R44 to R46
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
+          git checkout -B publish-r46-main origin/main
+          cp "$LATEST" r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R46 update channel'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >> "$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Preserve post-publish evidence and backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live-latest.conf
+          cmp /tmp/live-latest.conf "$LATEST"
+
+          cat >/tmp/PUBLISH_EVIDENCE.txt <<EOF
+          R36OS Alpha 5R46 publish evidence
+          validation_run=$VALIDATION_RUN
+          validation_artifact_id=$VALIDATION_ARTIFACT_ID
+          validated_source_sha=$VALIDATED_SOURCE_SHA
+          prepublish_main_sha=$PREPUBLISH_MAIN_SHA
+          channel_commit=$CHANNEL_COMMIT
+          tag=$TAG
+          package=$NAME
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA
+          hook_sha256=$EXPECTED_HOOK_SHA
+          exact_validated_artifact=yes
+          rebuilt_at_publish=no
+          EOF
+          gh release upload "$TAG" /tmp/PUBLISH_EVIDENCE.txt --repo "$REPO"
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r46-postpublish-verified-2026-09-29"
+          echo R46_PUBLISH=PASS
