@@ -204,7 +204,7 @@ test ! -e "$ROOT/r36state"
 ! find "$ROOT" -type l | grep -q .
 for p in "$ROOT"/usr/local/bin/*; do bash -n "$p"; done
 python3 -m py_compile "$HERE/"*.py
-"$ROOT/usr/local/bin/r36os-version" version | grep -Fxq '0.5.53.0'
+R36OS_RELEASE_FILE="$ROOT/etc/r36os-release" "$ROOT/usr/local/bin/r36os-version" version | grep -Fxq '0.5.53.0'
 
 # Test UI-private label generation without changing the host.
 mkdir -p "$WORK/ui-test"
