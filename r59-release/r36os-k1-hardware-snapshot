@@ -10,7 +10,7 @@ cmdval(){ tr ' ' '\n' <"$CMDLINE" 2>/dev/null | awk -F= -v k="$1" '$1==k{print s
 val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
 CID="$(cmdval r36os.kernel_candidate)"
 [ -n "$CID" ] || CID="$(val "$K1CONF" candidate_id)"
-echo "$CID" | grep -Eq '^[0-9a-f]{24}
+echo "$CID" | grep -Eq '^[0-9a-f]{24}$' || CID='unknown'
 STATE="${R36OS_STATE_ROOT:-/r36state}"
 OUTDIR="$STATE/logs/kernel-next"
 OUT="$OUTDIR/K1-HARDWARE-$CID.conf"
