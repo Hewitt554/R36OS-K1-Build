@@ -1,0 +1,209 @@
+name: Validate R36OS Alpha 5R57
+
+on:
+  push:
+    branches:
+      - work/r57-k1-controller-capability-ui-2026-09-30
+    paths:
+      - 'r57-release/**'
+      - '.github/workflows/validate-r57.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R56
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd' --dir inputs
+          echo 'f96d11043eb989f5ba22c5ea54d46e9ef4ac9d11f1f3f14d0101fb33306c5818  inputs/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd' | sha256sum -c -
+
+      - name: Install ARM64 build and test tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu qemu-user file >/dev/null
+          aarch64-linux-gnu-gcc --version | head -1
+          qemu-aarch64 --version | head -1
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          bash -n r57-release/build_release.sh
+          bash -n r57-release/r36os-session-k1-wrapper
+          python3 -m py_compile r57-release/*.py
+          grep -Fq 'BTN_SELECT)return 704' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'BTN_START)return 705' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'BTN_THUMBL)return 706' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'BTN_THUMBR)return 707' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'BTN_MODE)return 708' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'bridge-ready-key-only' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'bridge-ready-combined' r57-release/r36os-k1-input-compat.c
+          grep -Fq 'bridge-ready-split' r57-release/r36os-k1-input-compat.c
+          echo R57_SOURCE_AUDIT=PASS
+
+      - name: Build R57 twice
+        run: |
+          set -euo pipefail
+          chmod +x r57-release/build_release.sh
+          R56="$PWD/inputs/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd"
+          ./r57-release/build_release.sh "$R56" "$PWD/out-a" | tee r57-build-a.log
+          ./r57-release/build_release.sh "$R56" "$PWD/out-b" | tee r57-build-b.log
+
+      - name: Audit deterministic package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd
+          B=out-b/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.57.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.56.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)" = 4c70486f70ba16acf7437403
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="native_ui_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="original_session_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_input_compat"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="legacy_direct_exec"{print $2}' pkg/manifest.conf)" = yes
+
+          test ! -e pkg/payload/root/usr/local/bin/r36os-session
+          test ! -e pkg/payload/root/usr/local/bin/r36os-alpha5
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hook.conf
+          echo R57_PACKAGE_AUDIT=PASS
+
+      - name: Execute ARM64 bridge self-test
+        run: |
+          set -euo pipefail
+          BIN=pkg/payload/root/usr/local/bin/r36os-k1-input-compat
+          file "$BIN" | grep -Eq 'ARM aarch64|ARM64'
+          file "$BIN" | grep -Fq 'statically linked'
+          qemu-aarch64 "$BIN" --selftest | tee /tmp/r57-selftest
+          grep -Fxq 'R57_INPUT_COMPAT_SELFTEST=PASS' /tmp/r57-selftest
+          echo R57_ARM64_BRIDGE_SELFTEST=PASS
+
+      - name: Prove legacy wrapper directly delegates
+        run: |
+          set -euo pipefail
+          W=pkg/payload/root/usr/local/bin/r36os-session-k1-wrapper
+          chmod +x "$W"
+          echo 'root=x quiet splash' >/tmp/r57-legacy-cmdline
+          cat >/tmp/r57-fake-session <<'EOF'
+          #!/bin/sh
+          printf '%s\n' "$*" >/tmp/r57-legacy-args
+          exit 23
+          EOF
+          chmod +x /tmp/r57-fake-session
+          set +e
+          R36OS_CMDLINE_FILE=/tmp/r57-legacy-cmdline \
+          R36OS_SESSION_BIN=/tmp/r57-fake-session \
+          "$W" alpha beta
+          RC=$?
+          set -e
+          test "$RC" -eq 23
+          grep -Fxq 'alpha beta' /tmp/r57-legacy-args
+          test ! -e /run/r36os-k1-input-compat.ready
+          echo R57_LEGACY_DIRECT_EXEC=PASS
+
+      - name: Prove K1 wrapper orders bridge before session
+        run: |
+          set -euo pipefail
+          W=pkg/payload/root/usr/local/bin/r36os-session-k1-wrapper
+          echo 'root=x r36os.kernel_slot=next r36os.kernel_attempt=K1' >/tmp/r57-k1-cmdline
+
+          cat >/tmp/r57-fake-snapshot <<'EOF'
+          #!/bin/sh
+          echo snapshot >>/tmp/r57-order
+          exit 0
+          EOF
+
+          cat >/tmp/r57-fake-compat <<'EOF'
+          #!/bin/sh
+          echo compat-start >>/tmp/r57-order
+          echo 'bridge-ready-split' >/run/r36os-k1-input-compat.ready
+          cat >/run/r36os-k1-input-compat.status <<EOS
+          status=PASS
+          detail=bridge-ready-split
+          EOS
+          trap 'exit 0' TERM INT
+          while :; do sleep 1; done
+          EOF
+
+          cat >/tmp/r57-fake-session <<'EOF'
+          #!/bin/sh
+          test -s /run/r36os-k1-input-compat.ready || exit 42
+          echo session >>/tmp/r57-order
+          exit 0
+          EOF
+          chmod +x /tmp/r57-fake-snapshot /tmp/r57-fake-compat /tmp/r57-fake-session
+          rm -f /tmp/r57-order /run/r36os-k1-input-compat.ready /run/r36os-k1-input-compat.status
+
+          sudo env \
+            R36OS_CMDLINE_FILE=/tmp/r57-k1-cmdline \
+            R36OS_SESSION_BIN=/tmp/r57-fake-session \
+            R36OS_K1_INPUT_COMPAT_BIN=/tmp/r57-fake-compat \
+            R36OS_K1_SNAPSHOT_BIN=/tmp/r57-fake-snapshot \
+            "$W"
+
+          grep -Fxq 'snapshot' <(sed -n '1p' /tmp/r57-order)
+          grep -Fxq 'compat-start' <(sed -n '2p' /tmp/r57-order)
+          grep -Fxq 'snapshot' <(sed -n '3p' /tmp/r57-order)
+          grep -Fxq 'session' <(sed -n '4p' /tmp/r57-order)
+          echo R57_K1_WRAPPER_ORDER=PASS
+
+      - name: Audit service override safety
+        run: |
+          set -euo pipefail
+          D=pkg/payload/root/etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf
+          test "$(grep -Fc 'ExecStart=' "$D")" -eq 2
+          grep -Fxq 'ExecStart=/usr/local/bin/r36os-session-k1-wrapper' "$D"
+          ! grep -Eq 'Requires=|Wants=|Bind(ReadOnly)?Paths=|ConditionKernel' "$D"
+          echo R57_SERVICE_OVERRIDE=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint \
+            /usr/local/bin/r36os-k1-input-compat \
+            /usr/local/bin/r36os-session-k1-wrapper \
+            /etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R57_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R57 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R57-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd
+            out-a/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r57-build-a.log
+            r57-build-b.log
+          if-no-files-found: error
+          retention-days: 30
