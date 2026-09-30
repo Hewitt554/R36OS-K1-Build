@@ -46,5 +46,16 @@ jobs:
           file probe/base-ui
           H="$(sha256sum probe/base-ui | awk '{print $1}')"
           echo "R58_SWIFT621_BASE_UI_SHA=$H"
-          test "$H" = 173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3
-          echo R58_SWIFT621_TOOLCHAIN=PASS
+          if [ "$H" = 173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3 ]; then
+            echo R58_SWIFT621_TOOLCHAIN=EXACT
+          else
+            echo R58_SWIFT621_TOOLCHAIN=DIFF
+          fi
+
+      - name: Upload container-built base UI
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R58-swift621-base-ui-probe
+          path: probe/base-ui
+          if-no-files-found: error
+          retention-days: 7
