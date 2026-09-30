@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           bash -n r58-release/build_release.sh
           python3 -m py_compile r58-release/*.py
-          test -s r58-release/r36os_alpha5_r37.c.gz.b64
+          for p in 00 01 02 03 04; do test -s "r58-release/source/r36os_alpha5.c.gz.b64.part$p"; done
           grep -Fq 'BASE_SHA="25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd"' r58-release/transform_ui.py
           grep -Fq 'PATCHED_SHA="c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687"' r58-release/transform_ui.py
           grep -Fq 'K1 split input: gpio-keys event' r58-release/transform_ui.py
