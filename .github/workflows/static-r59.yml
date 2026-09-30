@@ -1,0 +1,112 @@
+name: Static preflight R36OS Alpha 5R59
+
+on:
+  push:
+    branches:
+      - work/r59-k1-rtl8188eu-wifi-2026-09-30
+    paths:
+      - 'r59-release/**'
+      - '.github/workflows/validate-r59.yml'
+      - '.github/workflows/static-r59.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r36os-r59-static
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install static audit tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-yaml >/dev/null
+
+      - name: Parse workflow YAML
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import yaml
+          for p in ['.github/workflows/validate-r59.yml','.github/workflows/static-r59.yml']:
+              with open(p,'r',encoding='utf-8') as f:
+                  obj=yaml.safe_load(f)
+              if not isinstance(obj,dict) or 'jobs' not in obj:
+                  raise SystemExit(f'invalid workflow structure: {p}')
+              print('YAML_PARSE=PASS',p)
+          PY
+
+      - name: Syntax and source invariants
+        run: |
+          set -euo pipefail
+          bash -n r59-release/build_release.sh
+          bash -n r59-release/r36os-k1-hardware-snapshot
+          python3 -m py_compile r59-release/*.py
+          test "$(grep -Fc 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' r59-release/r36os-k1-hardware-snapshot)" -eq 1
+          test "$(grep -Fc 'R36OS-K1 hardware snapshot saved.' r59-release/r36os-k1-hardware-snapshot)" -eq 1
+          ! grep -Fq "CID='4c70486f70ba16acf7437403'" r59-release/r36os-k1-hardware-snapshot
+          grep -Fq 'r36os.kernel_candidate' r59-release/r36os-k1-hardware-snapshot
+          grep -Fq 'stage_new_modules(){' r59-release/transform_prepare.py
+          grep -Fq 'modules-backup-rename' r59-release/transform_prepare.py
+          grep -Fq 'modules-new-readback' r59-release/transform_prepare.py
+          grep -Fq 'candidate_payload_change=modules-rtl8xxxu' r59-release/transform_hook_candidate.py
+          grep -Fq 'rtl8xxxu-modalias-missing' r59-release/build_release.sh
+          echo R59_STATIC_SOURCE=PASS
+
+      - name: Download exact R58 and R54 carrier packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd' --dir inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd' --dir inputs
+          echo '7d8b5483d1bf3d104072366b1879fedb08ba49dcd7be4d56ee411d332873983b  inputs/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd' | sha256sum -c -
+          echo 'ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e  inputs/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd' | sha256sum -c -
+          mkdir r58 r54
+          tar -xzf inputs/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd -C r58
+          tar -xzf inputs/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd -C r54
+          (cd r58 && sha256sum -c checksums.sha256 >/dev/null)
+          (cd r54 && sha256sum -c checksums.sha256 >/dev/null)
+          echo R59_BASE_PACKAGES=PASS
+
+      - name: Exercise exact helper transforms
+        run: |
+          set -euo pipefail
+          R58=r58/payload/root
+          R54=r54/payload/root
+          CID=0123456789abcdef01234567
+          mkdir transformed
+          python3 r59-release/transform_prepare.py "$R58/usr/local/bin/r36os-kernel-next-prepare" transformed/r36os-kernel-next-prepare
+          python3 r59-release/transform_identity.py slot "$R58/usr/local/bin/r36os-kernel-slot" transformed/r36os-kernel-slot
+          python3 r59-release/transform_identity.py maint "$R58/usr/local/bin/r36os-r36update-maint" transformed/r36os-r36update-maint
+          python3 r59-release/transform_hook_candidate.py "$R54/opt/r36os/kernel-next/hooked-boot.ini" "$R54/opt/r36os/kernel-next/hook.conf" "$CID" transformed/hooked-boot.ini transformed/hook.conf
+          python3 r59-release/transform_installer.py "$R54/usr/local/bin/r36os-k1-install-hook" transformed/r36os-k1-install-hook
+          for f in transformed/r36os-kernel-next-prepare transformed/r36os-kernel-slot transformed/r36os-r36update-maint transformed/r36os-k1-install-hook; do bash -n "$f"; done
+          grep -Fq '0.5.59.0' transformed/r36os-kernel-next-prepare
+          grep -Fq 'duplicate-request-ignored-in-progress' transformed/r36os-kernel-next-prepare
+          grep -Fq 'already-armed-duplicate-ignored' transformed/r36os-kernel-next-prepare
+          grep -Fq 'stage_new_modules(){' transformed/r36os-kernel-next-prepare
+          grep -Fq 'modules-backup-rename' transformed/r36os-kernel-next-prepare
+          grep -Fq 'modules-new-readback' transformed/r36os-kernel-next-prepare
+          test "$(grep -Foc "$CID" transformed/hooked-boot.ini)" -eq 3
+          ! grep -Fq '4c70486f70ba16acf7437403' transformed/hooked-boot.ini
+          grep -Fxq 'format=R36OS_K1_BOOT_HOOK_V7' transformed/hook.conf
+          grep -Fxq "candidate_id=$CID" transformed/hook.conf
+          grep -Fxq 'candidate_payload_change=modules-rtl8xxxu' transformed/hook.conf
+          echo R59_EXACT_TRANSFORMS=PASS
+
+      - name: Verify pinned firmware provenance metadata
+        run: |
+          set -euo pipefail
+          grep -Fxq 'source_commit=711d3297bac870af42088a467459a0634c1970ca' r59-release/firmware-source.conf
+          grep -Fxq 'source_git_blob=4ae7e1c5deb7846e59c461546a49679504ffed28' r59-release/firmware-source.conf
+          grep -Fxq 'license_git_blob=d70921f493795acb9af2a38f405193ba7a1b28a3' r59-release/firmware-source.conf
+          echo R59_FIRMWARE_METADATA=PASS
