@@ -67,11 +67,19 @@ p,k=sys.argv[1:]; expected='modules-'+k
 files=0; total=0; rtl=0; dep=0; aliasok=0; roots=set()
 with tarfile.open(p,'r:xz') as t:
     members=t.getmembers()
+    allowed_symlinks={expected+'/build', expected+'/source'}
+    seen_symlinks=set()
     for m in members:
         name=m.name.lstrip('./')
         if name: roots.add(name.split('/',1)[0])
-        if m.issym() or m.islnk(): raise SystemExit('archive contains link: '+m.name)
         if name.startswith('/') or '..' in name.split('/'): raise SystemExit('unsafe path: '+m.name)
+        if m.islnk(): raise SystemExit('archive contains hardlink: '+m.name)
+        if m.issym():
+            if name not in allowed_symlinks: raise SystemExit('archive contains unexpected symlink: '+m.name)
+            seen_symlinks.add(name)
+            continue
+        if name.startswith(expected+'/build/') or name.startswith(expected+'/source/'):
+            raise SystemExit('archive contains member below build/source symlink: '+m.name)
         if m.isfile():
             files+=1; total+=m.size
             if name.endswith('/rtl8xxxu.ko'): rtl+=1
