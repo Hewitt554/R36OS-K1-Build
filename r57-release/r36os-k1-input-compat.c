@@ -77,8 +77,10 @@ static void write_status(const char *status,const char *detail,const char *axis_
 }
 static void mark_ready(const char *detail){FILE *f=fopen(READY,"w");if(f){fprintf(f,"%s\n",detail);fclose(f);}}
 static int mirror_loop(int a,int k,int ui){
+  int same=(a==k);
   struct pollfd p[2]={{.fd=a,.events=POLLIN},{.fd=k,.events=POLLIN}};
-  while(!stop_flag){int r=poll(p,2,500);if(r<0){if(errno==EINTR)continue;return 2;}for(int i=0;i<2;i++)if(p[i].revents&POLLIN){struct input_event ev[32];ssize_t n=read(p[i].fd,ev,sizeof(ev));if(n<=0)continue;ssize_t cnt=n/(ssize_t)sizeof(ev[0]);for(ssize_t q=0;q<cnt;q++){if(ev[q].type==EV_SYN||ev[q].type==EV_KEY||ev[q].type==EV_ABS)write(ui,&ev[q],sizeof(ev[q]));}}}
+  int np=same?1:2;
+  while(!stop_flag){int r=poll(p,np,500);if(r<0){if(errno==EINTR)continue;return 2;}for(int i=0;i<np;i++)if(p[i].revents&POLLIN){struct input_event ev[32];ssize_t n=read(p[i].fd,ev,sizeof(ev));if(n<=0)continue;ssize_t cnt=n/(ssize_t)sizeof(ev[0]);for(ssize_t q=0;q<cnt;q++){if(ev[q].type==EV_SYN||ev[q].type==EV_KEY||ev[q].type==EV_ABS)write(ui,&ev[q],sizeof(ev[q]));}}}
   return 0;
 }
 int main(int argc,char **argv){
@@ -113,8 +115,9 @@ int main(int argc,char **argv){
     usleep(100000);
   }
   if(axis<0||key<0){logline("result=no-compatible-sources axis=%d key=%d",axis,key);write_status("FAIL","no-compatible-sources",an,kn);if(logf)fclose(logf);return 2;}
-  char ap[64],kp[64];int afd=open_event(axis,O_RDONLY,ap,sizeof(ap));int kfd=open_event(key,O_RDONLY,kp,sizeof(kp));
-  if(afd<0||kfd<0){write_status("FAIL","source-open-failed",an,kn);return 3;}
+  char ap[64],kp[64];int same_source=(axis==key);int afd=open_event(axis,O_RDONLY,ap,sizeof(ap));int kfd=same_source?afd:open_event(key,O_RDONLY,kp,sizeof(kp));
+  if(afd<0||kfd<0){if(afd>=0)close(afd);write_status("FAIL","source-open-failed",an,kn);return 3;}
+  if(same_source)logline("source_mode=combined event=%d name=%s",axis,an);else logline("source_mode=split axis_event=%d key_event=%d",axis,key);
   int ui=open("/dev/uinput",O_WRONLY|O_NONBLOCK|O_CLOEXEC); if(ui<0)ui=open("/dev/input/uinput",O_WRONLY|O_NONBLOCK|O_CLOEXEC); if(ui<0){logline("uinput_open_fail errno=%d",errno);write_status("FAIL","uinput-open-failed",an,kn);return 4;}
   ioctl(ui,UI_SET_EVBIT,EV_SYN); if(copy_keys(kfd,ui)<0||copy_abs(afd,ui)<0){write_status("FAIL","uinput-capability-copy-failed",an,kn);return 5;}
   struct uinput_setup us;memset(&us,0,sizeof(us));snprintf(us.name,UINPUT_MAX_NAME_SIZE,"R36OS K1 Gamepad");us.id.bustype=BUS_VIRTUAL;us.id.vendor=0x5233;us.id.product=0x3601;us.id.version=1;
@@ -126,5 +129,5 @@ int main(int argc,char **argv){
   }
   logline("result=bridge-ready virtual_event_visible=%d axis_event=%d axis_name=%s key_event=%d key_name=%s",visible,axis,an,key,kn);
   write_status(visible?"PASS":"WARN",visible?"bridge-ready":"bridge-created-event-node-not-yet-visible",an,kn);mark_ready(visible?"bridge-ready":"bridge-created");
-  int rc=mirror_loop(afd,kfd,ui);ioctl(ui,UI_DEV_DESTROY);close(ui);close(afd);close(kfd);if(logf)fclose(logf);unlink(READY);return rc;
+  int rc=mirror_loop(afd,kfd,ui);ioctl(ui,UI_DEV_DESTROY);close(ui);close(afd);if(!same_source)close(kfd);if(logf)fclose(logf);unlink(READY);return rc;
 }
