@@ -34,7 +34,7 @@ jobs:
           bash -n r56-release/build_release.sh
           bash -n r56-release/r36os-k1-hardware-snapshot
           python3 -m py_compile r56-release/*.py
-          grep -Fq 'LOCKDIR=/run/r36os-k1-prepare.lock' r56-release/transform_prepare.py
+          grep -Fq 'R36OS_K1_LOCKDIR:-/run/r36os-k1-prepare.lock' r56-release/transform_prepare.py
           grep -Fxq 'ConditionKernelCommandLine=!r36os.kernel_slot=next' r56-release/90-r36os-k1-skip.conf
           echo R56_SOURCE_AUDIT=PASS
 
@@ -78,13 +78,13 @@ jobs:
           set -euo pipefail
           PREP=pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
           chmod +x "$PREP"
-          rm -rf /run/r36os-k1-prepare.lock
-          mkdir /run/r36os-k1-prepare.lock
+          rm -rf /tmp/r36os-k1-prepare.lock
+          mkdir /tmp/r36os-k1-prepare.lock
           set +e
-          OUT="$("$PREP" arm-once 2>&1)"
+          OUT="$(R36OS_K1_LOCKDIR=/tmp/r36os-k1-prepare.lock "$PREP" arm-once 2>&1)"
           RC=$?
           set -e
-          rmdir /run/r36os-k1-prepare.lock
+          rmdir /tmp/r36os-k1-prepare.lock
           test "$RC" -eq 0
           printf '%s\n' "$OUT" | grep -Fq 'duplicate-request-ignored-in-progress'
           echo R56_CONCURRENT_R1_SUPPRESSION=PASS
@@ -99,13 +99,13 @@ jobs:
           exit 1
           EOF
           chmod +x /tmp/fake-slot
-          rm -rf /run/r36os-k1-prepare.lock
+          rm -rf /tmp/r36os-k1-prepare.lock
           rm -f /run/r36os-kernel-next-prepare.result /tmp/r56-progress
-          R36OS_KERNEL_SLOT_HELPER=/tmp/fake-slot R36OS_K1_PROGRESS_FILE=/tmp/r56-progress "$PREP" arm-once >/tmp/r56-out
+          R36OS_K1_LOCKDIR=/tmp/r36os-k1-prepare.lock R36OS_KERNEL_SLOT_HELPER=/tmp/fake-slot R36OS_K1_PROGRESS_FILE=/tmp/r56-progress "$PREP" arm-once >/tmp/r56-out
           grep -Fq 'already-armed-duplicate-ignored' /tmp/r56-out
           grep -Fxq 'detail=already-armed-duplicate-ignored' /run/r36os-kernel-next-prepare.result
           grep -Fq 'Duplicate R1 press ignored' /tmp/r56-progress
-          test ! -d /run/r36os-k1-prepare.lock
+          test ! -d /tmp/r36os-k1-prepare.lock
           echo R56_BUFFERED_R1_SUPPRESSION=PASS
 
       - name: Test K1 hardware snapshot
