@@ -119,7 +119,7 @@ jobs:
           grep -Fq 'modules-new-readback' r59-release/transform_prepare.py
           grep -Fq 'mv "$OLD_MODDST" "$MODDST"' r59-release/transform_prepare.py
           grep -Fq "OLD_HOOK_SHA='6b7fcb76bbd989c24c74da3b59523198c5310f6598a51c2d0d5c4646dee7de43'" r59-release/transform_hook_candidate.py
-          grep -Fq 'candidate_payload_change=modules-rtl8188eu' r59-release/transform_hook_candidate.py
+          grep -Fq 'candidate_payload_change=modules-rtl8xxxu' r59-release/transform_hook_candidate.py
           grep -Fq 'r36os.kernel_candidate' r59-release/r36os-k1-hardware-snapshot
           echo R59_SOURCE_AUDIT=PASS
 
@@ -166,6 +166,8 @@ jobs:
           grep -Fq 'stage_new_modules(){' pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
           grep -Fq 'already-armed-duplicate-ignored' pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
           grep -Fq 'r36os.kernel_candidate' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot
+          test "$(grep -Fc 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot)" -eq 1
+          test "$(grep -Fc 'R36OS-K1 hardware snapshot saved.' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot)" -eq 1
           echo R59_PACKAGE_AUDIT=PASS
 
       - name: Upload exact validated R59 candidate
