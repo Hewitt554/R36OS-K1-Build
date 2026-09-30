@@ -79,6 +79,12 @@ _r36os_check_hits = [
 ]
 if len(_r36os_check_hits) != 1:
     raise SystemExit(f"ERROR: CLOUD9 olddefconfig validation anchor count != 1: {len(_r36os_check_hits)}")
+_r36os_diag = (
+    'echo "CLOUD9_WIFI_CONFIG_BEGIN"\n'
+    "grep -E '^(CONFIG_(NET|WIRELESS|WLAN|USB|MODULES|CFG80211|MAC80211|WLAN_VENDOR_REALTEK|NEW_LEDS|LEDS_CLASS|RTL8XXXU)=|# CONFIG_(NET|WIRELESS|WLAN|USB|MODULES|CFG80211|MAC80211|WLAN_VENDOR_REALTEK|NEW_LEDS|LEDS_CLASS|RTL8XXXU) is not set)' \"$OBJ/.config\" || true\n"
+    'echo "CLOUD9_WIFI_CONFIG_END"\n'
+)
+_r36os_lines.insert(_r36os_check_hits[0] + 1, _r36os_diag)
 _r36os_check = (
     'for spec in WLAN=y USB=y CFG80211=m MAC80211=m WLAN_VENDOR_REALTEK=y NEW_LEDS=y LEDS_CLASS=y RTL8XXXU=m; do\n'
     '  sym="${spec%%=*}"; val="${spec#*=}"\n'
@@ -86,7 +92,7 @@ _r36os_check = (
     'done\n'
     "grep -q '^# CONFIG_RTL8XXXU_UNTESTED is not set$' \"$OBJ/.config\" || fail \"RTL8XXXU_UNTESTED unexpectedly enabled\"\n"
 )
-_r36os_lines.insert(_r36os_check_hits[0] + 1, _r36os_check)
+_r36os_lines.insert(_r36os_check_hits[0] + 2, _r36os_check)
 
 _r36os_make_hits = [
     i for i,line in enumerate(_r36os_lines)
