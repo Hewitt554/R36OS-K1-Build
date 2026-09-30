@@ -14,7 +14,7 @@ anchor='''sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }'''
 
 insert='''sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 
-LOCKDIR=/run/r36os-k1-prepare.lock
+LOCKDIR="${R36OS_K1_LOCKDIR:-/run/r36os-k1-prepare.lock}"
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
   echo "status=PASS code=0 detail=duplicate-request-ignored-in-progress"
   exit 0
