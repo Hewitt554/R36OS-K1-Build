@@ -1,0 +1,114 @@
+name: Build R36OS K1 R58 uinput
+
+on:
+  push:
+    branches:
+      - work/r58-k1-uinput-2026-09-30
+    paths:
+      - 'r58-kernel/**'
+      - '.github/workflows/build-r58-k1-uinput.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r36os-k1-r58-uinput
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit R58 kernel wrapper
+        run: |
+          set -euo pipefail
+          bash -n r58-kernel/bootstrap_r36os_k1_uinput.sh
+          grep -Fq 'CONFIG_INPUT_UINPUT=y' r58-kernel/bootstrap_r36os_k1_uinput.sh
+          grep -Fq 'INPUT_EVDEV INPUT_UINPUT KEYBOARD_GPIO' r58-kernel/bootstrap_r36os_k1_uinput.sh
+          grep -Fq 'CP04Q-R58-UINPUT' r58-kernel/bootstrap_r36os_k1_uinput.sh
+          echo R58_UINPUT_WRAPPER_AUDIT=PASS
+
+      - name: Cache frozen downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/r36os-k1-cp04-downloads
+          key: r36os-k1-cp04-linux-6.12.94-e998a232
+
+      - name: Build R58 K1 candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          chmod +x r58-kernel/bootstrap_r36os_k1_uinput.sh
+          ./r58-kernel/bootstrap_r36os_k1_uinput.sh 2>&1 | tee r58-kernel-build.log
+
+      - name: Audit built candidate
+        run: |
+          set -euo pipefail
+          grep -Fq 'R58U=PASS CONFIG_INPUT_UINPUT=y injected and required by CP04 validator' r58-kernel-build.log
+          grep -Fq 'STATUS=PASS CP04' r58-kernel-build.log
+          grep -Fq 'STATUS=PASS CP05' r58-kernel-build.log
+
+          mapfile -t result_archives < <(find results -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' -print)
+          test "${#result_archives[@]}" -eq 1
+          mkdir -p extracted
+          tar -xzf "${result_archives[0]}" -C extracted
+
+          mapfile -t candidates < <(
+            {
+              find extracted -type d -path '*/candidate/K1' -print
+              find extracted -type d -path '*/external_cp05_candidate/K1' -print
+            } | sort -u
+          )
+          test "${#candidates[@]}" -eq 1
+          CAND="${candidates[0]}"
+          echo "CAND=$CAND" >>"$GITHUB_ENV"
+
+          for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz MANIFEST.sha256 BUILD_INFO.txt K1.conf; do
+            test -s "$CAND/$f"
+          done
+          (cd "$CAND" && sha256sum -c MANIFEST.sha256)
+
+          strings "$CAND/Image" | grep -i -m1 'uinput' >/tmp/uinput-string || true
+          if ! test -s /tmp/uinput-string; then
+            echo 'ERROR: built Image does not expose any uinput string; refusing candidate' >&2
+            exit 1
+          fi
+
+          {
+            echo 'R36OS R58 K1 uinput candidate'
+            echo 'source_kernel=Linux 6.12.94'
+            echo 'required_config=CONFIG_INPUT_UINPUT=y'
+            echo "image_sha256=$(sha256sum "$CAND/Image" | awk '{print $1}')"
+            echo "uinitrd_sha256=$(sha256sum "$CAND/uInitrd" | awk '{print $1}')"
+            echo "dtb_sha256=$(sha256sum "$CAND/rk3326-r36s-k1.dtb" | awk '{print $1}')"
+            echo "modules_sha256=$(sha256sum "$CAND/modules.tar.xz" | awk '{print $1}')"
+            echo "candidate_id=$(awk -F= '$1==\"candidate_id\"{print $2}' "$CAND/K1.conf")"
+          } | tee R58_UINPUT_CANDIDATE.txt
+          echo R58_UINPUT_CANDIDATE_AUDIT=PASS
+
+      - name: Package exact R58 candidate
+        run: |
+          set -euo pipefail
+          mkdir -p r58-out/R36OS-KernelNext
+          cp -a "$CAND" r58-out/R36OS-KernelNext/K1
+          cp R58_UINPUT_CANDIDATE.txt r58-out/
+          tar --sort=name --mtime='UTC 2026-09-30 00:00:00' --owner=0 --group=0 --numeric-owner \
+            -C r58-out -czf R36OS-K1-R58-uinput-candidate.tar.gz .
+          sha256sum R36OS-K1-R58-uinput-candidate.tar.gz >R36OS-K1-R58-uinput-candidate.tar.gz.sha256
+          ls -lh R36OS-K1-R58-uinput-candidate.tar.gz
+
+      - name: Upload R58 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-K1-R58-uinput-candidate
+          path: |
+            R36OS-K1-R58-uinput-candidate.tar.gz
+            R36OS-K1-R58-uinput-candidate.tar.gz.sha256
+            R58_UINPUT_CANDIDATE.txt
+            r58-kernel-build.log
+          if-no-files-found: error
+          retention-days: 30
