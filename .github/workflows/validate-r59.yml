@@ -148,7 +148,7 @@ jobs:
           test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = no
           test "$(awk -F= '$1=="k1_dtb_change"{print $2}' pkg/manifest.conf)" = no
           test "$(awk -F= '$1=="k1_uinitrd_change"{print $2}' pkg/manifest.conf)" = no
-          test "$(awk -F= '$1=="k1_modules_change"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="module_payload_change"{print $2}' pkg/manifest.conf)" = yes
           test "$(awk -F= '$1=="wifi_driver"{print $2}' pkg/manifest.conf)" = rtl8xxxu
           test "$(awk -F= '$1=="wifi_usb_id"{print $2}' pkg/manifest.conf)" = 0bda:0179
           CID="$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)"
