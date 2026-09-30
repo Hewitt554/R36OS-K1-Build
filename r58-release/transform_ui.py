@@ -6,7 +6,7 @@ if len(sys.argv)!=3:
 
 src=Path(sys.argv[1]); out=Path(sys.argv[2])
 BASE_SHA="25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd"
-PATCHED_SHA="c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687"
+PATCHED_SHA="657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a"
 sha=lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
 if sha(src)!=BASE_SHA:
     raise SystemExit(f"source sha mismatch: {sha(src)}")
