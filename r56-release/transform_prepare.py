@@ -10,6 +10,11 @@ if s.count("0.5.55.0") != 1:
     raise SystemExit(f"expected one R55 version gate, found {s.count('0.5.55.0')}")
 s=s.replace("0.5.55.0","0.5.56.0",1)
 
+if s.count("RESULT=/run/r36os-kernel-next-prepare.result") != 1:
+    raise SystemExit("result-path anchor mismatch")
+s=s.replace("RESULT=/run/r36os-kernel-next-prepare.result",
+            'RESULT="${R36OS_K1_RESULT_FILE:-/run/r36os-kernel-next-prepare.result}"',1)
+
 anchor='''sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }'''
 
 insert='''sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
