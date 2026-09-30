@@ -36,6 +36,14 @@ static int get_bits(int fd,int ev,unsigned long *bits,size_t bytes){memset(bits,
 static int open_event(int i,int flags,char *path,size_t n){snprintf(path,n,"/dev/input/event%d",i);return open(path,flags|O_NONBLOCK|O_CLOEXEC);}
 static int named_old_gamepad(const char *n){return strstr(n,"GO-Super")||strstr(n,"Gamepad")||strstr(n,"gamepad")||strstr(n,"odroid");}
 static int count_face(unsigned long *key){int c=0; int v[]={BTN_SOUTH,BTN_EAST,BTN_NORTH,BTN_WEST}; for(unsigned i=0;i<4;i++)c+=TESTBIT(key,v[i])?1:0; return c;}
+static int map_key_code(int code){
+  if(code==BTN_SELECT)return 704;
+  if(code==BTN_START)return 705;
+  if(code==BTN_THUMBL)return 706;
+  if(code==BTN_THUMBR)return 707;
+  if(code==BTN_MODE)return 708;
+  return code;
+}
 static int axis_candidate(int fd){
   unsigned long ev[NBITS(EV_MAX+1)], ab[NBITS(ABS_MAX+1)];
   if(get_bits(fd,0,ev,sizeof(ev))<0||!TESTBIT(ev,EV_ABS))return 0;
@@ -57,7 +65,7 @@ static int key_score(int fd,const char *name){if(!key_candidate(fd))return 0;ret
 static int copy_keys(int src,int ui){
   unsigned long key[NBITS(KEY_MAX+1)]; if(get_bits(src,EV_KEY,key,sizeof(key))<0)return -1;
   if(ioctl(ui,UI_SET_EVBIT,EV_KEY)<0)return -1;
-  for(int c=0;c<=KEY_MAX;c++) if(TESTBIT(key,c)) ioctl(ui,UI_SET_KEYBIT,c);
+  for(int c=0;c<=KEY_MAX;c++) if(TESTBIT(key,c)) ioctl(ui,UI_SET_KEYBIT,map_key_code(c));
   return 0;
 }
 static int copy_abs(int src,int ui){
@@ -90,6 +98,12 @@ int main(int argc,char **argv){
        ABS_X!=0||ABS_Y!=1||ABS_RX!=3||ABS_RY!=4){
       fprintf(stderr,"R57_INPUT_COMPAT_SELFTEST=FAIL linux-input-code-mismatch\n");
       return 90;
+    }
+    if(map_key_code(BTN_SELECT)!=704||map_key_code(BTN_START)!=705||
+       map_key_code(BTN_THUMBL)!=706||map_key_code(BTN_THUMBR)!=707||
+       map_key_code(BTN_MODE)!=708||map_key_code(BTN_SOUTH)!=BTN_SOUTH){
+      fprintf(stderr,"R57_INPUT_COMPAT_SELFTEST=FAIL key-translation\n");
+      return 91;
     }
     printf("R57_INPUT_COMPAT_SELFTEST=PASS\n");
     return 0;
