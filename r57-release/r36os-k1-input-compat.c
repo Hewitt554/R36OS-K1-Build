@@ -85,10 +85,20 @@ static void write_status(const char *status,const char *detail,const char *axis_
 }
 static void mark_ready(const char *detail){FILE *f=fopen(READY,"w");if(f){fprintf(f,"%s\n",detail);fclose(f);}}
 static int mirror_loop(int a,int k,int ui){
-  int same=(a==k);
-  struct pollfd p[2]={{.fd=a,.events=POLLIN},{.fd=k,.events=POLLIN}};
-  int np=same?1:2;
-  while(!stop_flag){int r=poll(p,np,500);if(r<0){if(errno==EINTR)continue;return 2;}for(int i=0;i<np;i++)if(p[i].revents&POLLIN){struct input_event ev[32];ssize_t n=read(p[i].fd,ev,sizeof(ev));if(n<=0)continue;ssize_t cnt=n/(ssize_t)sizeof(ev[0]);for(ssize_t q=0;q<cnt;q++){if(ev[q].type==EV_SYN||ev[q].type==EV_KEY||ev[q].type==EV_ABS)write(ui,&ev[q],sizeof(ev[q]));}}}
+  struct pollfd p[2];int np=0;
+  if(k>=0){p[np].fd=k;p[np].events=POLLIN;p[np].revents=0;np++;}
+  if(a>=0&&a!=k){p[np].fd=a;p[np].events=POLLIN;p[np].revents=0;np++;}
+  while(!stop_flag){
+    int r=poll(p,np,500);if(r<0){if(errno==EINTR)continue;return 2;}
+    for(int i=0;i<np;i++)if(p[i].revents&POLLIN){
+      struct input_event ev[32];ssize_t n=read(p[i].fd,ev,sizeof(ev));if(n<=0)continue;
+      ssize_t cnt=n/(ssize_t)sizeof(ev[0]);
+      for(ssize_t q=0;q<cnt;q++){
+        if(ev[q].type==EV_KEY)ev[q].code=(uint16_t)map_key_code(ev[q].code);
+        if(ev[q].type==EV_SYN||ev[q].type==EV_KEY||ev[q].type==EV_ABS)write(ui,&ev[q],sizeof(ev[q]));
+      }
+    }
+  }
   return 0;
 }
 int main(int argc,char **argv){
@@ -128,12 +138,16 @@ int main(int argc,char **argv){
     if(axis>=0&&key>=0)break;
     usleep(100000);
   }
-  if(axis<0||key<0){logline("result=no-compatible-sources axis=%d key=%d",axis,key);write_status("FAIL","no-compatible-sources",an,kn);if(logf)fclose(logf);return 2;}
-  char ap[64],kp[64];int same_source=(axis==key);int afd=open_event(axis,O_RDONLY,ap,sizeof(ap));int kfd=same_source?afd:open_event(key,O_RDONLY,kp,sizeof(kp));
-  if(afd<0||kfd<0){if(afd>=0)close(afd);write_status("FAIL","source-open-failed",an,kn);return 3;}
-  if(same_source)logline("source_mode=combined event=%d name=%s",axis,an);else logline("source_mode=split axis_event=%d key_event=%d",axis,key);
+  if(key<0){logline("result=no-compatible-key-source axis=%d key=%d",axis,key);write_status("FAIL","no-compatible-key-source",an,kn);if(logf)fclose(logf);return 2;}
+  char ap[64]="",kp[64]="";int same_source=(axis>=0&&axis==key);
+  int afd=axis>=0?open_event(axis,O_RDONLY,ap,sizeof(ap)):-1;
+  int kfd=same_source?afd:open_event(key,O_RDONLY,kp,sizeof(kp));
+  if(kfd<0||(axis>=0&&afd<0)){if(afd>=0)close(afd);write_status("FAIL","source-open-failed",an,kn);return 3;}
+  if(axis<0)logline("source_mode=key-only key_event=%d key_name=%s",key,kn);
+  else if(same_source)logline("source_mode=combined event=%d name=%s",axis,an);
+  else logline("source_mode=split axis_event=%d axis_name=%s key_event=%d key_name=%s",axis,an,key,kn);
   int ui=open("/dev/uinput",O_WRONLY|O_NONBLOCK|O_CLOEXEC); if(ui<0)ui=open("/dev/input/uinput",O_WRONLY|O_NONBLOCK|O_CLOEXEC); if(ui<0){logline("uinput_open_fail errno=%d",errno);write_status("FAIL","uinput-open-failed",an,kn);return 4;}
-  ioctl(ui,UI_SET_EVBIT,EV_SYN); if(copy_keys(kfd,ui)<0||copy_abs(afd,ui)<0){write_status("FAIL","uinput-capability-copy-failed",an,kn);return 5;}
+  ioctl(ui,UI_SET_EVBIT,EV_SYN); if(copy_keys(kfd,ui)<0||(afd>=0&&copy_abs(afd,ui)<0)){write_status("FAIL","uinput-capability-copy-failed",an,kn);return 5;}
   struct uinput_setup us;memset(&us,0,sizeof(us));snprintf(us.name,UINPUT_MAX_NAME_SIZE,"R36OS K1 Gamepad");us.id.bustype=BUS_VIRTUAL;us.id.vendor=0x5233;us.id.product=0x3601;us.id.version=1;
   if(ioctl(ui,UI_DEV_SETUP,&us)<0||ioctl(ui,UI_DEV_CREATE)<0){logline("uinput_create_fail errno=%d",errno);write_status("FAIL","uinput-create-failed",an,kn);return 6;}
   int visible=0;
@@ -141,7 +155,12 @@ int main(int argc,char **argv){
     for(int i=0;i<MAXEV;i++){char vp[64],vn[128]="";int vfd=open_event(i,O_RDONLY,vp,sizeof(vp));if(vfd<0)continue;get_name(vfd,vn,sizeof(vn));close(vfd);if(strstr(vn,"R36OS K1 Gamepad")){visible=1;break;}}
     if(!visible)usleep(50000);
   }
-  logline("result=bridge-ready virtual_event_visible=%d axis_event=%d axis_name=%s key_event=%d key_name=%s",visible,axis,an,key,kn);
-  write_status(visible?"PASS":"WARN",visible?"bridge-ready":"bridge-created-event-node-not-yet-visible",an,kn);mark_ready(visible?"bridge-ready":"bridge-created");
-  int rc=mirror_loop(afd,kfd,ui);ioctl(ui,UI_DEV_DESTROY);close(ui);close(afd);if(!same_source)close(kfd);if(logf)fclose(logf);unlink(READY);return rc;
+  const char *detail=axis<0?"bridge-ready-key-only":(same_source?"bridge-ready-combined":"bridge-ready-split");
+  logline("result=%s virtual_event_visible=%d axis_event=%d axis_name=%s key_event=%d key_name=%s",detail,visible,axis,an,key,kn);
+  write_status(visible?"PASS":"WARN",visible?detail:"bridge-created-event-node-not-yet-visible",an,kn);
+  mark_ready(visible?detail:"bridge-created");
+  int rc=mirror_loop(afd,kfd,ui);
+  ioctl(ui,UI_DEV_DESTROY);close(ui);
+  if(afd>=0)close(afd);if(kfd>=0&&kfd!=afd)close(kfd);
+  if(logf)fclose(logf);unlink(READY);return rc;
 }
