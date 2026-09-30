@@ -100,10 +100,10 @@ jobs:
           EOF
           chmod +x /tmp/fake-slot
           rm -rf /tmp/r36os-k1-prepare.lock
-          rm -f /run/r36os-kernel-next-prepare.result /tmp/r56-progress
-          R36OS_K1_LOCKDIR=/tmp/r36os-k1-prepare.lock R36OS_KERNEL_SLOT_HELPER=/tmp/fake-slot R36OS_K1_PROGRESS_FILE=/tmp/r56-progress "$PREP" arm-once >/tmp/r56-out
+          rm -f /tmp/r56-result /tmp/r56-progress
+          R36OS_K1_LOCKDIR=/tmp/r36os-k1-prepare.lock R36OS_K1_RESULT_FILE=/tmp/r56-result R36OS_KERNEL_SLOT_HELPER=/tmp/fake-slot R36OS_K1_PROGRESS_FILE=/tmp/r56-progress "$PREP" arm-once >/tmp/r56-out
           grep -Fq 'already-armed-duplicate-ignored' /tmp/r56-out
-          grep -Fxq 'detail=already-armed-duplicate-ignored' /run/r36os-kernel-next-prepare.result
+          grep -Fxq 'detail=already-armed-duplicate-ignored' /tmp/r56-result
           grep -Fq 'Duplicate R1 press ignored' /tmp/r56-progress
           test ! -d /tmp/r36os-k1-prepare.lock
           echo R56_BUFFERED_R1_SUPPRESSION=PASS
