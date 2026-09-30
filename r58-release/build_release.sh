@@ -31,7 +31,9 @@ test -s "$CORE"
 command -v "$CC" >/dev/null 2>&1 || { echo "missing-clang:$CC" >&2; exit 11; }
 
 # Recover the exact source which deterministically produces the current R57 UI.
-base64 -d "$HERE/r36os_alpha5_r37.c.gz.b64" >"$WORK/src/base.c.gz"
+# Keep it in fixed-size text chunks so GitHub transport cannot silently truncate
+# the preserved source blob.
+cat "$HERE/source/r36os_alpha5.c.gz.b64.part00"     "$HERE/source/r36os_alpha5.c.gz.b64.part01"     "$HERE/source/r36os_alpha5.c.gz.b64.part02"     "$HERE/source/r36os_alpha5.c.gz.b64.part03"     "$HERE/source/r36os_alpha5.c.gz.b64.part04"   | base64 -d >"$WORK/src/base.c.gz"
 gzip -dc "$WORK/src/base.c.gz" >"$WORK/src/base.c"
 test "$(sha256sum "$WORK/src/base.c" | awk '{print $1}')" = "$BASE_SOURCE_SHA"
 
