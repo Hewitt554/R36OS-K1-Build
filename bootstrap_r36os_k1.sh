@@ -57,6 +57,7 @@ _r36os_wifi = {
     "CFG80211": "m",
     "MAC80211": "m",
     "WLAN_VENDOR_REALTEK": "y",
+    "LEDS_CLASS": "y",
     "RTL8XXXU": "m",
     "RTL8XXXU_UNTESTED": "n",
 }
@@ -77,7 +78,7 @@ _r36os_check_hits = [
 if len(_r36os_check_hits) != 1:
     raise SystemExit(f"ERROR: CLOUD9 olddefconfig validation anchor count != 1: {len(_r36os_check_hits)}")
 _r36os_check = (
-    'for spec in CFG80211=m MAC80211=m WLAN_VENDOR_REALTEK=y RTL8XXXU=m; do\n'
+    'for spec in CFG80211=m MAC80211=m WLAN_VENDOR_REALTEK=y LEDS_CLASS=y RTL8XXXU=m; do\n'
     '  sym="${spec%%=*}"; val="${spec#*=}"\n'
     '  grep -q "^CONFIG_${sym}=${val}$" "$OBJ/.config" || fail "required Wi-Fi config lost after olddefconfig: CONFIG_${sym}=${val}"\n'
     'done\n'
