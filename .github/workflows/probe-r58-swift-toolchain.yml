@@ -1,0 +1,50 @@
+name: Probe R58 Swift LLVM toolchain
+
+on:
+  push:
+    branches:
+      - work/r58-direct-split-input-ui-2026-09-30
+    paths:
+      - '.github/workflows/probe-r58-swift-toolchain.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct exact base source
+        run: |
+          set -euo pipefail
+          mkdir -p probe
+          cat \
+            r58-release/source/r36os_alpha5.c.gz.b64.part00 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part01 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part02 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part03 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part04 \
+            | base64 -d >probe/base.c.gz
+          gzip -dc probe/base.c.gz >probe/base.c
+          test "$(sha256sum probe/base.c | awk '{print $1}')" = 25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd
+
+      - name: Compile with official Swift 6.2.1 LLVM
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/probe:/probe" swift:6.2.1 bash -lc '
+            set -e
+            clang --version | head -3
+            ld.lld --version | head -1
+            clang --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2 \
+              -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables \
+              -Wl,-e,_start /probe/base.c -o /probe/base-ui
+          '
+          file probe/base-ui
+          H="$(sha256sum probe/base-ui | awk '{print $1}')"
+          echo "R58_SWIFT621_BASE_UI_SHA=$H"
+          test "$H" = 173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3
+          echo R58_SWIFT621_TOOLCHAIN=PASS
