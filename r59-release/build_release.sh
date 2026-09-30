@@ -10,7 +10,8 @@ EXPECTED_R58='7d8b5483d1bf3d104072366b1879fedb08ba49dcd7be4d56ee411d332873983b'
 EXPECTED_R54='ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e'
 OLD_CID='4c70486f70ba16acf7437403'
 KREL='6.12.94-r36os-k1'
-EXPECTED_IMAGE='a7a388d5ca21b276bddcc0e3892b0c965b73d92f2c0238cb9c25a210dba7c97e'
+OLD_IMAGE='a7a388d5ca21b276bddcc0e3892b0c965b73d92f2c0238cb9c25a210dba7c97e'
+EXPECTED_IMAGE='6a7b7801e293b17af7ac014fba8f6be63372f5f853cbd18ad1ac404f4332a7fe'
 EXPECTED_DTB='e2145905b1beb8d0f5b9dee6c5a21d31c29474be8762c893e81506fc40e627f4'
 EXPECTED_UINITRD='023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925'
 OLD_MODULES='f0c78a5ba54b4a800c0a64581c8fde977f8e6b02331d56b7771a00268821c7b2'
@@ -55,7 +56,7 @@ test "$(sha "$R54ROOT/usr/local/bin/r36os-k1-install-hook")" = '1f745e279b594095
 for f in Image uInitrd rk3326-r36s-k1.dtb modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do test -s "$NEWK1/$f" || fail "new-k1-missing-$f"; done
 (cd "$NEWK1" && sha256sum -c MANIFEST.sha256 >/dev/null) || fail new-k1-manifest
 test "$(val "$NEWK1/K1.conf" kernel_release)" = "$KREL" || fail new-k1-krel
-test "$(sha "$NEWK1/Image")" = "$EXPECTED_IMAGE" || fail image-regression
+test "$(sha "$NEWK1/Image")" = "$EXPECTED_IMAGE" || fail wifi-image-sha
 test "$(sha "$NEWK1/rk3326-r36s-k1.dtb")" = "$EXPECTED_DTB" || fail dtb-regression
 NEW_MODULES_SHA="$(sha "$NEWK1/modules.tar.xz")"
 test "$NEW_MODULES_SHA" != "$OLD_MODULES" || fail modules-did-not-change
@@ -136,7 +137,7 @@ cat >"$WORK/full-k1/BUILD_INFO.txt" <<EOF_BUILD
 R36OS K1 Alpha 5R59 RTL8188EU Wi-Fi candidate
 Kernel release: $KREL
 Candidate ID: $CID
-Image SHA256: $EXPECTED_IMAGE (unchanged from physically booted R58)
+Image SHA256: $EXPECTED_IMAGE (changed from R58 $OLD_IMAGE; exact successful Run-22 Wi-Fi build)
 Panel-4 DTB SHA256: $EXPECTED_DTB (unchanged from physically booted R58)
 uInitrd SHA256: $EXPECTED_UINITRD (unchanged R54 /opt/r36i handoff)
 Modules SHA256: $NEW_MODULES_SHA (changed: maintained in-tree rtl8xxxu)
@@ -152,7 +153,7 @@ EOF_BUILD
 RECHECK_CID="$(cd "$WORK/full-k1"; { sha256sum Image; sha256sum uInitrd; sha256sum rk3326-r36s-k1.dtb; sha256sum modules.tar.xz; printf 'kernel_release=%s\n' "$KREL"; } | sha256sum | awk '{print substr($1,1,24)}')"
 test "$RECHECK_CID" = "$CID" || fail candidate-id-recheck
 
-for f in modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do cp "$WORK/full-k1/$f" "$ROOT/opt/r36os/kernel-next/K1/$f"; chmod 0644 "$ROOT/opt/r36os/kernel-next/K1/$f"; done
+for f in Image modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do cp "$WORK/full-k1/$f" "$ROOT/opt/r36os/kernel-next/K1/$f"; chmod 0644 "$ROOT/opt/r36os/kernel-next/K1/$f"; done
 cp "$FW" "$ROOT/lib/firmware/rtlwifi/rtl8188eufw.bin"
 cp "$FWLIC" "$ROOT/lib/firmware/LICENCE.rtlwifi_firmware.txt"
 chmod 0644 "$ROOT/lib/firmware/rtlwifi/rtl8188eufw.bin" "$ROOT/lib/firmware/LICENCE.rtlwifi_firmware.txt"
@@ -174,7 +175,7 @@ R36OS_HARDWARE="R36XX-RK3326"
 R36OS_CHANNEL="system-core"
 R36OS_BUILD_DATE="2026-09-30"
 R36OS_COMPATIBILITY="K1 maintained rtl8xxxu support for built-in Realtek RTL8188EU USB Wi-Fi"
-R36OS_NOTES="Alpha 5R59 keeps the physically proven R58 Image, Panel-4 DTB, R54 /opt/r36i uInitrd, direct split-input UI, legacy 4.4 fallback and Boot Next Once safety. K1 modules change only to enable the maintained Linux 6.12 rtl8xxxu stack for USB 0bda:0179. The exact rtl8188eufw.bin firmware and Realtek firmware licence are included. Because modules.tar.xz changes while the kernel release stays $KREL, preparation stages/verifies the complete new module tree beside the old R36STATE tree and atomically swaps it with rollback on readback failure."
+R36OS_NOTES="Alpha 5R59 pairs the exact successful Run-22 Wi-Fi Image with its matching module tree, while preserving the proven Panel-4 DTB, R54 /opt/r36i uInitrd, R58 direct split-input UI, legacy 4.4 fallback and Boot Next Once safety. The maintained Linux 6.12 rtl8xxxu stack supports USB 0bda:0179 and the exact rtl8188eufw.bin firmware plus Realtek firmware licence are included. Because the Image and modules change together while the kernel release stays $KREL, the new candidate remains Boot Next Once only until physical validation."
 EOF_RELEASE
 cat >"$ROOT/opt/r36os/features/alpha5r59" <<EOF_FEATURE
 R36OS Alpha 5R59
@@ -182,7 +183,8 @@ R36OS Alpha 5R59
 - Physical R58 Wi-Fi evidence: USB 0bda:0179 enumerates but NetworkManager reports WIFI-HW missing.
 - Adds maintained Linux 6.12 rtl8xxxu support for RTL8188EU (0bda:0179).
 - Includes exact rtlwifi/rtl8188eufw.bin firmware and its Realtek redistribution licence.
-- Image unchanged: $EXPECTED_IMAGE
+- Image changed as required by Wi-Fi Kconfig: $EXPECTED_IMAGE
+- Previous physically booted R58 Image: $OLD_IMAGE
 - Panel-4 DTB unchanged: $EXPECTED_DTB
 - R54 /opt/r36i uInitrd unchanged: $EXPECTED_UINITRD
 - New K1 candidate: $CID
@@ -207,7 +209,7 @@ for line in base.read_text().splitlines():
 changed=[
 '/usr/local/bin/r36os-kernel-next-prepare','/usr/local/bin/r36os-kernel-slot','/usr/local/bin/r36os-r36update-maint',
 '/usr/local/bin/r36os-k1-install-hook','/usr/local/bin/r36os-k1-hardware-snapshot',
-'/opt/r36os/kernel-next/hooked-boot.ini','/opt/r36os/kernel-next/hook.conf','/opt/r36os/kernel-next/K1/MANIFEST.sha256',
+'/opt/r36os/kernel-next/hooked-boot.ini','/opt/r36os/kernel-next/hook.conf','/opt/r36os/kernel-next/K1/Image','/opt/r36os/kernel-next/K1/MANIFEST.sha256',
 '/lib/firmware/rtlwifi/rtl8188eufw.bin','/lib/firmware/LICENCE.rtlwifi_firmware.txt']
 for p in changed:
     fp=root/p.lstrip('/')
@@ -224,12 +226,12 @@ hardware=R36XX-RK3326
 base_version=0.5.58.0
 channel=system-core
 requires_reboot=true
-description=Alpha 5R59 adds K1 RTL8188EU Wi-Fi via maintained rtl8xxxu while preserving the physically proven R58 Image, DTB, uInitrd and input UI.
+description=Alpha 5R59 adds K1 RTL8188EU Wi-Fi via maintained rtl8xxxu using the exact successful Run-22 Image and modules while preserving the Panel-4 DTB, R54 uInitrd and R58 input UI.
 candidate_id=$CID
 kernel_release=$KREL
 k1_binary_change=yes
 candidate_id_change=yes
-k1_image_change=no
+k1_image_change=yes
 k1_dtb_change=no
 k1_uinitrd_change=no
 module_payload_change=yes
@@ -252,10 +254,11 @@ python3 -m py_compile "$HERE/"*.py
 test ! -e "$ROOT/usr/local/bin/r36os-alpha5" || fail ui-replacement-forbidden
 test ! -e "$ROOT/usr/local/bin/r36os-session" || fail session-replacement-forbidden
 test ! -e "$ROOT/etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf" || fail input-dropin-replacement-forbidden
-test ! -e "$ROOT/opt/r36os/kernel-next/K1/Image" || fail image-overlay-forbidden
+test -s "$ROOT/opt/r36os/kernel-next/K1/Image" || fail image-overlay-missing
+test "$(sha "$ROOT/opt/r36os/kernel-next/K1/Image")" = "$EXPECTED_IMAGE" || fail image-overlay-sha
 test ! -e "$ROOT/opt/r36os/kernel-next/K1/uInitrd" || fail uinitrd-overlay-forbidden
 test ! -e "$ROOT/opt/r36os/kernel-next/K1/rk3326-r36s-k1.dtb" || fail dtb-overlay-forbidden
-for f in modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do test -s "$ROOT/opt/r36os/kernel-next/K1/$f" || fail "missing-overlay-$f"; done
+for f in Image modules.tar.xz K1.conf BUILD_INFO.txt MANIFEST.sha256; do test -s "$ROOT/opt/r36os/kernel-next/K1/$f" || fail "missing-overlay-$f"; done
 grep -Fq 'R36OS_K1_LOCKDIR:-/run/r36os-k1-prepare.lock' "$ROOT/usr/local/bin/r36os-kernel-next-prepare" || fail r1-lock-regression
 grep -Fq 'duplicate-request-ignored-in-progress' "$ROOT/usr/local/bin/r36os-kernel-next-prepare" || fail r1-duplicate-regression
 grep -Fq 'stage_new_modules(){' "$ROOT/usr/local/bin/r36os-kernel-next-prepare" || fail module-replace-missing
@@ -300,8 +303,9 @@ candidate_id=$CID
 kernel_release=$KREL
 r58_source_sha256=$EXPECTED_R58
 r54_source_sha256=$EXPECTED_R54
+old_image_sha256=$OLD_IMAGE
 image_sha256=$EXPECTED_IMAGE
-image_change=no
+image_change=yes
 dtb_sha256=$EXPECTED_DTB
 dtb_change=no
 uinitrd_sha256=$EXPECTED_UINITRD
