@@ -1,0 +1,48 @@
+name: Export R58 patched UI source
+
+on:
+  push:
+    branches:
+      - work/r58-direct-split-input-ui-2026-09-30
+    paths:
+      - '.github/workflows/export-r58-patched-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and transform exact UI source
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cat \
+            r58-release/source/r36os_alpha5.c.gz.b64.part00 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part01 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part02 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part03 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part04 \
+            | base64 -d >out/base.c.gz
+          gzip -dc out/base.c.gz >out/base.c
+          test "$(sha256sum out/base.c | awk '{print $1}')" = 25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd
+          python3 r58-release/transform_ui.py out/base.c out/r58.c
+          test "$(sha256sum out/r58.c | awk '{print $1}')" = c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687
+          gzip -n -9 <out/r58.c >out/r58.c.gz
+          sha256sum out/base.c out/r58.c out/r58.c.gz >out/SHA256SUMS.txt
+          echo R58_PATCHED_SOURCE_EXPORT=PASS
+
+      - name: Upload patched source
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R58-patched-ui-source
+          path: |
+            out/r58.c.gz
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
