@@ -88,7 +88,15 @@ test "$MODFILES" -gt 0 && test "$MODBYTES" -gt 0 || fail module-counts
 test "$RTLKO_COUNT" = 1 || fail rtl8xxxu-module-count
 test "$MODDEP_OK" = 1 || fail modules-dep-missing
 test "$MODALIAS_OK" = 1 || fail rtl8xxxu-modalias-missing
-RTL_MEMBER="$(tar -tJf "$NEWK1/modules.tar.xz" | grep '/rtl8xxxu\.ko$' | head -1)"
+RTL_MEMBER="$(python3 - "$NEWK1/modules.tar.xz" <<'PY'
+import sys,tarfile
+with tarfile.open(sys.argv[1],'r:xz') as t:
+    hits=[m.name for m in t.getmembers() if m.isfile() and m.name.lstrip('./').endswith('/rtl8xxxu.ko')]
+if len(hits)!=1:
+    raise SystemExit(f'expected exactly one rtl8xxxu.ko, found {len(hits)}: {hits}')
+print(hits[0])
+PY
+)" || fail rtl8xxxu-member-audit
 test -n "$RTL_MEMBER" || fail rtl8xxxu-path
 RTL_PATH="${RTL_MEMBER#./}"
 mkdir -p "$WORK/rtlko"; tar -xJf "$NEWK1/modules.tar.xz" -C "$WORK/rtlko" "$RTL_MEMBER"
