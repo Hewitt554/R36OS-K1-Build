@@ -28,13 +28,16 @@ jobs:
           gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' --dir inputs
           echo 'f059968b6f73acf52fe61527273fa74e34f4781ad96465ba9153b1d47d2460ee  inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' | sha256sum -c -
 
-      - name: Install build tools
+      - name: Verify original LLVM 17 build toolchain
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang lld file >/dev/null
-          clang --version | head -1
-          ld.lld --version | head -1
+          sudo apt-get install -y -qq file >/dev/null
+          test -x /usr/local/swift/usr/bin/clang
+          test -x /usr/local/swift/usr/bin/ld.lld
+          /usr/local/swift/usr/bin/clang --version | head -1 | grep -F 'clang version 17.0.0'
+          /usr/local/swift/usr/bin/ld.lld --version | head -1 | grep -F 'LLD 17.0.0'
+          echo R58_ORIGINAL_TOOLCHAIN=PASS
 
       - name: Source audit
         run: |
@@ -52,6 +55,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x r58-release/build_release.sh
+          export PATH=/usr/local/swift/usr/bin:$PATH
+          export CLANG=/usr/local/swift/usr/bin/clang
           R57="$PWD/inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd"
           ./r58-release/build_release.sh "$R57" "$PWD/out-a" | tee r58-build-a.log
           ./r58-release/build_release.sh "$R57" "$PWD/out-b" | tee r58-build-b.log
