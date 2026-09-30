@@ -27,9 +27,9 @@ for line in ms.read_text().splitlines():
     elif line.startswith('previous_hook_sha256='): line='previous_hook_sha256='+OLD_HOOK_SHA
     elif line.startswith('request='): line=f'request=R36OS-KernelNext/boot-next.{cid}.once'
     elif line.startswith('candidate_payload_change='):
-        line='candidate_payload_change=modules-rtl8188eu'
+        line='candidate_payload_change=modules-rtl8xxxu'
         seen_payload=True
     lines.append(line)
-if not seen_payload: lines.append('candidate_payload_change=modules-rtl8188eu')
+if not seen_payload: lines.append('candidate_payload_change=modules-rtl8xxxu')
 lines += [f'previous_candidate_id={OLD_CID}','module_payload_change=yes','image_change=no','uinitrd_change=no','dtb_change=no']
 mout.write_text('\n'.join(lines)+'\n')
