@@ -81,7 +81,17 @@ static int mirror_loop(int a,int k,int ui){
   while(!stop_flag){int r=poll(p,2,500);if(r<0){if(errno==EINTR)continue;return 2;}for(int i=0;i<2;i++)if(p[i].revents&POLLIN){struct input_event ev[32];ssize_t n=read(p[i].fd,ev,sizeof(ev));if(n<=0)continue;ssize_t cnt=n/(ssize_t)sizeof(ev[0]);for(ssize_t q=0;q<cnt;q++){if(ev[q].type==EV_SYN||ev[q].type==EV_KEY||ev[q].type==EV_ABS)write(ui,&ev[q],sizeof(ev[q]));}}}
   return 0;
 }
-int main(void){
+int main(int argc,char **argv){
+  if(argc>1 && strcmp(argv[1],"--selftest")==0){
+    if(BTN_SOUTH!=304||BTN_EAST!=305||BTN_NORTH!=307||BTN_WEST!=308||
+       BTN_DPAD_UP!=544||BTN_DPAD_DOWN!=545||BTN_DPAD_LEFT!=546||BTN_DPAD_RIGHT!=547||
+       ABS_X!=0||ABS_Y!=1||ABS_RX!=3||ABS_RY!=4){
+      fprintf(stderr,"R57_INPUT_COMPAT_SELFTEST=FAIL linux-input-code-mismatch\n");
+      return 90;
+    }
+    printf("R57_INPUT_COMPAT_SELFTEST=PASS\n");
+    return 0;
+  }
   signal(SIGTERM,sigstop);signal(SIGINT,sigstop);signal(SIGHUP,sigstop);
   mkdir(LOGDIR,0755); char lp[256];snprintf(lp,sizeof(lp),LOGDIR "/K1-INPUT-COMPAT-%s.conf",CID); logf=fopen(lp,"w");
   logline("format=R36OS_K1_INPUT_COMPAT_LOG_V1");logline("candidate_id=%s",CID);unlink(READY);
