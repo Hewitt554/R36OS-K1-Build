@@ -1,0 +1,51 @@
+name: Inspect K1 input stack
+
+on:
+  push:
+    branches:
+      - work/r57-k1-controller-capability-ui-2026-09-30
+    paths:
+      - '.github/workflows/inspect-r57-k1-input.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact published R38 K1 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/r38 /tmp/pkg
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir /tmp/r38
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+          tar -xzf /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C /tmp/pkg
+
+      - name: Inspect Panel-4 DTB and modules
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler xz-utils >/dev/null
+          K=/tmp/pkg/payload/root/opt/r36os/kernel-next/K1
+          echo '=== K1 CONF ==='
+          cat "$K/K1.conf"
+          echo '=== DTB JOYPAD / KEYS / ADC NODES ==='
+          dtc -I dtb -O dts "$K/rk3326-r36s-k1.dtb" >/tmp/k1.dts 2>/tmp/dtc.err || true
+          grep -n -i -E -A40 -B12 'joypad|gamepad|adc.?joystick|gpio.?keys|odroidgo|button|rockchip.*saradc' /tmp/k1.dts || true
+          echo '=== DTS COMPATIBLES ==='
+          grep -n -i 'compatible.*joy\|compatible.*key\|compatible.*adc' /tmp/k1.dts || true
+          echo '=== MODULE JOYPAD / INPUT NAMES ==='
+          tar -tJf "$K/modules.tar.xz" | grep -Ei 'joy|gamepad|joystick|adc.?key|gpio.?key|input' | head -400 || true
+          echo '=== MODULE METADATA MATCHES ==='
+          mkdir -p /tmp/mods
+          tar -xJf "$K/modules.tar.xz" -C /tmp/mods
+          grep -R -n -i -E 'odroidgo|joypad|gamepad|adc.?joystick|gpio.?keys' /tmp/mods --include='modules.alias' --include='modules.dep' --include='modules.builtin' --include='modules.builtin.modinfo' 2>/dev/null | head -400 || true
+          echo '=== INPUT CONFIG ==='
+          if [ -f "$K/BUILD_INFO.txt" ]; then cat "$K/BUILD_INFO.txt"; fi
+          strings "$K/Image" | grep -Ei 'odroidgo3.?joypad|retrogame.?joypad|adc.?joystick' | head -80 || true
