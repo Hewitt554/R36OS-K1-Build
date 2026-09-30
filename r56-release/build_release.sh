@@ -121,7 +121,7 @@ test ! -e "$ROOT/r36state"
 for p in "$ROOT"/usr/local/bin/*; do bash -n "$p"; done
 python3 -m py_compile "$HERE/"*.py
 
-grep -Fq 'LOCKDIR=/run/r36os-k1-prepare.lock' "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
+grep -Fq 'R36OS_K1_LOCKDIR:-/run/r36os-k1-prepare.lock' "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
 grep -Fq 'duplicate-request-ignored-in-progress' "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
 grep -Fq 'already-armed-duplicate-ignored' "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
 grep -Fq '0.5.56.0' "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
