@@ -68,29 +68,39 @@ _r36os_frag.write_text(_r36os_cfg)
 
 _r36os_builder = root / "BUILD_K1_CHECKPOINT04.sh"
 _r36os_b = _r36os_builder.read_text()
-_r36os_check_anchor = '(( ${#missing_required[@]} == 0 )) || fail "required config lost after olddefconfig: ${missing_required[*]}"\\n'
-if _r36os_b.count(_r36os_check_anchor) != 1:
-    raise SystemExit("ERROR: CLOUD9 olddefconfig validation anchor mismatch")
-_r36os_check = _r36os_check_anchor + (
+_r36os_lines = _r36os_b.splitlines(keepends=True)
+
+_r36os_check_hits = [
+    i for i,line in enumerate(_r36os_lines)
+    if "required config lost after olddefconfig:" in line and "missing_required" in line
+]
+if len(_r36os_check_hits) != 1:
+    raise SystemExit(f"ERROR: CLOUD9 olddefconfig validation anchor count != 1: {len(_r36os_check_hits)}")
+_r36os_check = (
     'for spec in CFG80211=m MAC80211=m WLAN_VENDOR_REALTEK=y RTL8XXXU=m; do\n'
     '  sym="${spec%%=*}"; val="${spec#*=}"\n'
     '  grep -q "^CONFIG_${sym}=${val}$" "$OBJ/.config" || fail "required Wi-Fi config lost after olddefconfig: CONFIG_${sym}=${val}"\n'
     'done\n'
     "grep -q '^# CONFIG_RTL8XXXU_UNTESTED is not set$' \"$OBJ/.config\" || fail \"RTL8XXXU_UNTESTED unexpectedly enabled\"\n"
 )
-_r36os_b = _r36os_b.replace(_r36os_check_anchor, _r36os_check, 1)
+_r36os_lines.insert(_r36os_check_hits[0] + 1, _r36os_check)
 
-_r36os_make_anchor='"${MAKE[@]}" -j"$JOBS" Image rockchip/rk3326-r36os-k1.dtb modules\\n'
-if _r36os_b.count(_r36os_make_anchor) != 1:
-    raise SystemExit("ERROR: CLOUD9 kernel make anchor mismatch")
-_r36os_postmake = _r36os_make_anchor + (
-    "RTL8XXXU_KO=\"$(find \"$OBJ/drivers/net/wireless/realtek/rtl8xxxu\" -type f -name 'rtl8xxxu.ko' -print -quit)\"\n"
+_r36os_make_hits = [
+    i for i,line in enumerate(_r36os_lines)
+    if "Image rockchip/rk3326-r36os-k1.dtb modules" in line and "MAKE" in line
+]
+if len(_r36os_make_hits) != 1:
+    raise SystemExit(f"ERROR: CLOUD9 kernel make anchor count != 1: {len(_r36os_make_hits)}")
+_r36os_postmake = (
+    'RTL8XXXU_KO="$(find "$OBJ/drivers/net/wireless/realtek/rtl8xxxu" -type f -name \'rtl8xxxu.ko\' -print -quit)"\n'
     '[[ -n "$RTL8XXXU_KO" && -f "$RTL8XXXU_KO" ]] || fail "rtl8xxxu.ko was not built"\n'
-    "modinfo \"$RTL8XXXU_KO\" | grep -Fq 'alias:          usb:v0BDAp0179' || fail \"rtl8xxxu.ko missing RTL8188EU 0bda:0179 alias\"\n"
+    'RTL8XXXU_INFO="$(modinfo "$RTL8XXXU_KO")" || fail "modinfo failed for rtl8xxxu.ko"\n'
+    'grep -Eq \'^alias:[[:space:]]+usb:v0BDAp0179\' <<<"$RTL8XXXU_INFO" || fail "rtl8xxxu.ko missing RTL8188EU 0bda:0179 alias"\n'
     'echo "STATUS=PASS rtl8xxxu module built with RTL8188EU USB alias"\n'
 )
-_r36os_b = _r36os_b.replace(_r36os_make_anchor, _r36os_postmake, 1)
-_r36os_builder.write_text(_r36os_b)
+_r36os_lines.insert(_r36os_make_hits[0] + 1, _r36os_postmake)
+
+_r36os_builder.write_text("".join(_r36os_lines))
 print("CLOUD9=PASS injected RTL8188EU/rtl8xxxu Kconfig and build validation")
 '''
 
