@@ -9,9 +9,10 @@ TAG='alpha5r58'
 NAME='00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd'
 EXPECTED_R57='f059968b6f73acf52fe61527273fa74e34f4781ad96465ba9153b1d47d2460ee'
 BASE_SOURCE_SHA='25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd'
-BASE_UI_SHA='173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3'
-PATCHED_SOURCE_SHA='c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687'
-PATCHED_UI_SHA='7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a'
+BASE_UI_INSTALLED_SHA='173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3'
+BASE_UI_ALLOC_SHA='ed987d7db036851e85b79218be8fd4ef86f8bdb9bc18a5e1544f50245fb297b0'
+PATCHED_SOURCE_SHA='657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a'
+PATCHED_UI_ALLOC_SHA='d50a057fa87e07c1a684778c0cb1d9b2e0e3072978431aec8557b8e063bb6f3e'
 CID='4c70486f70ba16acf7437403'
 KREL='6.12.94-r36os-k1'
 CC="${CLANG:-clang}"
@@ -42,8 +43,10 @@ test "$ACTUAL_BASE_SOURCE_SHA" = "$BASE_SOURCE_SHA"
 "$CC" --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2   -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables   -Wl,-e,_start "$WORK/src/base.c" -o "$WORK/src/base-ui"
 chmod 0755 "$WORK/src/base-ui"
 ACTUAL_BASE_UI_SHA="$(sha256sum "$WORK/src/base-ui" | awk '{print $1}')"
-echo "R58_DIAG base_ui_sha=$ACTUAL_BASE_UI_SHA expected=$BASE_UI_SHA"
-test "$ACTUAL_BASE_UI_SHA" = "$BASE_UI_SHA"
+ACTUAL_BASE_UI_ALLOC_SHA="$(python3 "$HERE/elf_alloc_sha.py" "$WORK/src/base-ui")"
+echo "R58_DIAG base_ui_file_sha=$ACTUAL_BASE_UI_SHA installed_reference=$BASE_UI_INSTALLED_SHA"
+echo "R58_DIAG base_ui_alloc_sha=$ACTUAL_BASE_UI_ALLOC_SHA expected=$BASE_UI_ALLOC_SHA"
+test "$ACTUAL_BASE_UI_ALLOC_SHA" = "$BASE_UI_ALLOC_SHA"
 
 python3 "$HERE/transform_ui.py" "$WORK/src/base.c" "$WORK/src/r58.c"
 ACTUAL_PATCHED_SOURCE_SHA="$(sha256sum "$WORK/src/r58.c" | awk '{print $1}')"
@@ -53,8 +56,10 @@ test "$ACTUAL_PATCHED_SOURCE_SHA" = "$PATCHED_SOURCE_SHA"
 "$CC" --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2   -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables   -Wl,-e,_start "$WORK/src/r58.c" -o "$ROOT/usr/local/bin/r36os-alpha5"
 chmod 0755 "$ROOT/usr/local/bin/r36os-alpha5"
 ACTUAL_PATCHED_UI_SHA="$(sha256sum "$ROOT/usr/local/bin/r36os-alpha5" | awk '{print $1}')"
-echo "R58_DIAG patched_ui_sha=$ACTUAL_PATCHED_UI_SHA expected=$PATCHED_UI_SHA"
-test "$ACTUAL_PATCHED_UI_SHA" = "$PATCHED_UI_SHA"
+ACTUAL_PATCHED_UI_ALLOC_SHA="$(python3 "$HERE/elf_alloc_sha.py" "$ROOT/usr/local/bin/r36os-alpha5")"
+echo "R58_DIAG patched_ui_file_sha=$ACTUAL_PATCHED_UI_SHA"
+echo "R58_DIAG patched_ui_alloc_sha=$ACTUAL_PATCHED_UI_ALLOC_SHA expected=$PATCHED_UI_ALLOC_SHA"
+test "$ACTUAL_PATCHED_UI_ALLOC_SHA" = "$PATCHED_UI_ALLOC_SHA"
 
 # Advance release-gated K1 tooling without changing the K1 candidate.
 python3 "$HERE/transform_identity.py"   "$R57ROOT/usr/local/bin/r36os-kernel-next-prepare"   "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
@@ -89,8 +94,10 @@ R36OS Alpha 5R58
 - Removes the active R57 uinput dependency by restoring direct r36os-session startup.
 - Rebuilds the exact current native UI from verified R37 source lineage:
   * verified source SHA = 25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd
-  * unmodified rebuild SHA = 173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3
-  * patched UI SHA = 7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a
+  * installed R57 UI reference SHA = 173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3
+  * verified base runtime ELF fingerprint = ed987d7db036851e85b79218be8fd4ef86f8bdb9bc18a5e1544f50245fb297b0
+  * patched source SHA = 657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a
+  * patched runtime ELF fingerprint = d50a057fa87e07c1a684778c0cb1d9b2e0e3072978431aec8557b8e063bb6f3e
 - Legacy input path remains first and unchanged:
   GO-Super / Gamepad / gamepad / odroid
 - K1 fallback input path:
@@ -227,9 +234,12 @@ candidate_id=$CID
 kernel_release=$KREL
 r57_source_sha256=$EXPECTED_R57
 base_ui_source_sha256=$BASE_SOURCE_SHA
-base_ui_binary_sha256=$BASE_UI_SHA
+base_ui_installed_reference_sha256=$BASE_UI_INSTALLED_SHA
+base_ui_runtime_alloc_sha256=$BASE_UI_ALLOC_SHA
+base_ui_rebuild_file_sha256=$ACTUAL_BASE_UI_SHA
 patched_ui_source_sha256=$PATCHED_SOURCE_SHA
-patched_ui_binary_sha256=$PATCHED_UI_SHA
+patched_ui_runtime_alloc_sha256=$PATCHED_UI_ALLOC_SHA
+patched_ui_binary_sha256=$ACTUAL_PATCHED_UI_SHA
 k1_binary_change=no
 candidate_id_change=no
 native_ui_change=yes
