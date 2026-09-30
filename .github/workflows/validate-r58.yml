@@ -1,0 +1,165 @@
+name: Validate R36OS Alpha 5R58
+
+on:
+  push:
+    branches:
+      - work/r58-direct-split-input-ui-2026-09-30
+    paths:
+      - 'r58-release/**'
+      - '.github/workflows/validate-r58.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R57
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' --dir inputs
+          echo 'f059968b6f73acf52fe61527273fa74e34f4781ad96465ba9153b1d47d2460ee  inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' | sha256sum -c -
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld file >/dev/null
+          clang --version | head -1
+          ld.lld --version | head -1
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          bash -n r58-release/build_release.sh
+          python3 -m py_compile r58-release/*.py
+          test -s r58-release/r36os_alpha5_r37.c.gz.b64
+          grep -Fq 'BASE_SHA="25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd"' r58-release/transform_ui.py
+          grep -Fq 'PATCHED_SHA="c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687"' r58-release/transform_ui.py
+          grep -Fq 'K1 split input: gpio-keys event' r58-release/transform_ui.py
+          grep -Fq 'contains(name,"adc-joystick")' r58-release/transform_ui.py
+          echo R58_SOURCE_AUDIT=PASS
+
+      - name: Build R58 twice
+        run: |
+          set -euo pipefail
+          chmod +x r58-release/build_release.sh
+          R57="$PWD/inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd"
+          ./r58-release/build_release.sh "$R57" "$PWD/out-a" | tee r58-build-a.log
+          ./r58-release/build_release.sh "$R57" "$PWD/out-b" | tee r58-build-b.log
+
+      - name: Audit deterministic package and UI lineage
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd
+          B=out-b/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+
+          grep -Fxq 'base_ui_source_sha256=25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'base_ui_binary_sha256=173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'patched_ui_source_sha256=c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'patched_ui_binary_sha256=7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a' out-a/RELEASE_REPORT.txt
+
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.58.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.57.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)" = 4c70486f70ba16acf7437403
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="native_ui_change"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="direct_k1_split_input"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="uinput_required"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="legacy_input_path_preserved"{print $2}' pkg/manifest.conf)" = yes
+
+          test "$(sha256sum pkg/payload/root/usr/local/bin/r36os-alpha5 | awk '{print $1}')" = 7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a
+          file pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Eq 'ARM aarch64|ARM64'
+          file pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Fq 'statically linked'
+
+          test ! -e pkg/payload/root/usr/local/bin/r36os-session
+          test ! -e pkg/payload/root/usr/local/bin/r36os-k1-input-compat
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1
+          echo R58_PACKAGE_AUDIT=PASS
+
+      - name: Prove legacy-first and K1 split-input logic
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/r58-src
+          mkdir /tmp/r58-src
+          base64 -d r58-release/r36os_alpha5_r37.c.gz.b64 >/tmp/r58-src/base.c.gz
+          gzip -dc /tmp/r58-src/base.c.gz >/tmp/r58-src/base.c
+          python3 r58-release/transform_ui.py /tmp/r58-src/base.c /tmp/r58-src/r58.c
+
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('/tmp/r58-src/r58.c').read_text()
+          legacy=s.index('contains(name,"GO-Super")')
+          split=s.index('K1 6.12 exposes controls as gpio-keys + adc-joystick')
+          assert legacy < split, (legacy,split)
+          assert 'if(i==primary_event_index||i==k1_axis_event_index)continue;' in s
+          assert 'if(code==314)return KEY_SELECT;' in s
+          assert 'if(code==315)return KEY_START;' in s
+          assert 'if(code==316)return KEY_FN;' in s
+          assert 'if(code==317)return KEY_L3;' in s
+          assert 'if(code==318)return KEY_R3;' in s
+          assert 'if(k1_axisfd>=0)' in s
+          assert 'SYS_read,k1_axisfd' in s
+          print('R58_SPLIT_INPUT_SOURCE=PASS')
+          PY
+
+          strings pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Fq 'K1 split input: gpio-keys event'
+          strings pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Fq 'Primary gamepad event'
+          strings pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Fq 'GAMEPAD NOT FOUND'
+          echo R58_LEGACY_FIRST_SPLIT_INPUT=PASS
+
+      - name: Prove R57 uinput wrapper is inactive
+        run: |
+          set -euo pipefail
+          D=pkg/payload/root/etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf
+          test "$(grep -Fc 'ExecStart=' "$D")" -eq 2
+          grep -Fxq 'ExecStart=/usr/local/bin/r36os-session' "$D"
+          ! grep -Fq 'r36os-session-k1-wrapper' "$D"
+          ! grep -Eq 'Requires=|Wants=|Bind(ReadOnly)?Paths=' "$D"
+          echo R58_DIRECT_SESSION_OVERRIDE=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-alpha5 \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint \
+            /etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R58_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R58 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R58-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd
+            out-a/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r58-build-a.log
+            r58-build-b.log
+          if-no-files-found: error
+          retention-days: 30
