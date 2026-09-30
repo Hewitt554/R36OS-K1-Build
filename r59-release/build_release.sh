@@ -249,6 +249,8 @@ grep -Fq "$CID" "$ROOT/opt/r36os/kernel-next/hook.conf" || fail hook-candidate
 grep -Fq "$CID" "$ROOT/opt/r36os/kernel-next/hooked-boot.ini" || fail hooked-boot-candidate
 ! grep -Fq "CID='$OLD_CID'" "$ROOT/usr/local/bin/r36os-k1-hardware-snapshot" || fail snapshot-old-candidate
 grep -Fq 'r36os.kernel_candidate' "$ROOT/usr/local/bin/r36os-k1-hardware-snapshot" || fail snapshot-dynamic-candidate
+test "$(grep -Fc 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' "$ROOT/usr/local/bin/r36os-k1-hardware-snapshot")" -eq 1 || fail snapshot-body-count
+test "$(grep -Fc 'R36OS-K1 hardware snapshot saved.' "$ROOT/usr/local/bin/r36os-k1-hardware-snapshot")" -eq 1 || fail snapshot-tail-count
 test "$(blob_sha "$ROOT/lib/firmware/rtlwifi/rtl8188eufw.bin")" = "$FW_BLOB" || fail packaged-firmware-blob
 test "$(blob_sha "$ROOT/lib/firmware/LICENCE.rtlwifi_firmware.txt")" = "$LIC_BLOB" || fail packaged-licence-blob
 (cd "$WORK/full-k1" && sha256sum -c MANIFEST.sha256 >/dev/null) || fail final-candidate-manifest
