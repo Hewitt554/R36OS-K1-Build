@@ -1,0 +1,41 @@
+name: Inspect K1 uinput availability
+
+on:
+  push:
+    branches:
+      - work/r57-k1-controller-capability-ui-2026-09-30
+    paths:
+      - '.github/workflows/inspect-k1-uinput.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact published K1 package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/r38
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir /tmp/r38
+          echo '68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0  /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' | sha256sum -c -
+          mkdir -p /tmp/pkg
+          tar -xzf /tmp/r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd -C /tmp/pkg
+          M=/tmp/pkg/payload/root/opt/r36os/kernel-next/K1/modules.tar.xz
+          test -s "$M"
+          echo '=== uinput module entries ==='
+          tar -tJf "$M" | grep -Ei '(^|/)uinput\.ko(\.xz|\.zst)?$' || true
+          echo '=== input misc modules ==='
+          tar -tJf "$M" | grep -Ei '/drivers/input/.+\.ko' | grep -Ei 'uinput|joy|gpio|input' | head -200 || true
+          echo '=== verdict ==='
+          if tar -tJf "$M" | grep -Eq '(^|/)uinput\.ko(\.xz|\.zst)?$'; then
+            echo K1_UINPUT_MODULE_PRESENT=yes
+          else
+            echo K1_UINPUT_MODULE_PRESENT=no
+          fi
