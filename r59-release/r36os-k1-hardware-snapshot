@@ -78,9 +78,58 @@ mkdir -p "$OUTDIR" /run 2>/dev/null || exit 0
   find /sys/bus/platform/drivers -maxdepth 2 -type l -printf '%p -> %l\n' 2>/dev/null | grep -Ei 'joy|game|adc|key|gpio' || true
   echo '--- likely-input-drivers-end ---'
 
+  echo '--- wifi-usb-begin ---'
+  for u in /sys/bus/usb/devices/*; do
+    [ -d "$u" ] || continue
+    [ -r "$u/idVendor" ] || continue
+    [ -r "$u/idProduct" ] || continue
+    vid="$(cat "$u/idVendor" 2>/dev/null)"
+    pid="$(cat "$u/idProduct" 2>/dev/null)"
+    [ "$vid:$pid" = "0bda:0179" ] || continue
+    echo "device=$(basename "$u")"
+    echo "vidpid=$vid:$pid"
+    [ -r "$u/product" ] && echo "product=$(cat "$u/product" 2>/dev/null | tr -d '\r\n')"
+    [ -r "$u/bInterfaceClass" ] && echo "interface_class=$(cat "$u/bInterfaceClass" 2>/dev/null | tr -d '\r\n')"
+    readlink -f "$u/driver" 2>/dev/null | sed 's/^/driver=/'
+    for i in "$u":*; do
+      [ -d "$i" ] || continue
+      [ -r "$i/bInterfaceClass" ] && echo "interface=$(basename "$i") class=$(cat "$i/bInterfaceClass" 2>/dev/null) subclass=$(cat "$i/bInterfaceSubClass" 2>/dev/null) protocol=$(cat "$i/bInterfaceProtocol" 2>/dev/null)"
+      readlink -f "$i/driver" 2>/dev/null | sed 's/^/interface_driver=/'
+    done
+  done
+  echo '--- wifi-usb-end ---'
+
+  echo '--- wifi-netdev-begin ---'
+  for n in /sys/class/net/*; do
+    [ -e "$n" ] || continue
+    name="$(basename "$n")"
+    [ "$name" = "lo" ] && continue
+    echo "[$name]"
+    [ -r "$n/type" ] && echo "type=$(cat "$n/type" 2>/dev/null)"
+    [ -r "$n/operstate" ] && echo "operstate=$(cat "$n/operstate" 2>/dev/null)"
+    readlink -f "$n/device/driver" 2>/dev/null | sed 's/^/driver=/'
+  done
+  command -v nmcli >/dev/null 2>&1 && nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null || true
+  echo '--- wifi-netdev-end ---'
+
+  echo '--- wifi-firmware-begin ---'
+  FW=/lib/firmware/rtlwifi/rtl8188eufw.bin
+  if [ -f "$FW" ]; then
+    echo "firmware_present=yes"
+    echo "firmware_size=$(stat -c %s "$FW" 2>/dev/null)"
+    command -v sha256sum >/dev/null 2>&1 && sha256sum "$FW" 2>/dev/null | sed 's/^/firmware_sha256=/' || true
+  else
+    echo "firmware_present=no"
+  fi
+  echo '--- wifi-firmware-end ---'
+
   echo '--- modules-begin ---'
   cat /proc/modules 2>/dev/null
   echo '--- modules-end ---'
+
+  echo '--- dmesg-wifi-begin ---'
+  dmesg 2>/dev/null | grep -Ei 'rtl8|rtl8xxxu|wlan|wifi|firmware|cfg80211|mac80211|0bda|0179' | tail -400 || true
+  echo '--- dmesg-wifi-end ---'
 
   echo '--- systemd-journal-files-begin ---'
   ls -l /lib/systemd/system/systemd-journald.service /lib/systemd/system/systemd-journald.socket /run/systemd/journal 2>&1
