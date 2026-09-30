@@ -60,12 +60,13 @@ test "$(sha "$NEWK1/rk3326-r36s-k1.dtb")" = "$EXPECTED_DTB" || fail dtb-regressi
 NEW_MODULES_SHA="$(sha "$NEWK1/modules.tar.xz")"
 test "$NEW_MODULES_SHA" != "$OLD_MODULES" || fail modules-did-not-change
 
-read -r MODROOT MODFILES MODBYTES RTLKO_COUNT < <(python3 - "$NEWK1/modules.tar.xz" "$KREL" <<'PY'
+read -r MODROOT MODFILES MODBYTES RTLKO_COUNT MODDEP_OK MODALIAS_OK < <(python3 - "$NEWK1/modules.tar.xz" "$KREL" <<'PY'
 import sys,tarfile
 p,k=sys.argv[1:]; expected='modules-'+k
-files=0; total=0; rtl=0; roots=set()
+files=0; total=0; rtl=0; dep=0; aliasok=0; roots=set()
 with tarfile.open(p,'r:xz') as t:
-    for m in t:
+    members=t.getmembers()
+    for m in members:
         name=m.name.lstrip('./')
         if name: roots.add(name.split('/',1)[0])
         if m.issym() or m.islnk(): raise SystemExit('archive contains link: '+m.name)
@@ -73,13 +74,20 @@ with tarfile.open(p,'r:xz') as t:
         if m.isfile():
             files+=1; total+=m.size
             if name.endswith('/rtl8xxxu.ko'): rtl+=1
+            if name == expected+'/modules.dep' and m.size > 0: dep=1
+            if name == expected+'/modules.alias' and m.size > 0:
+                raw=t.extractfile(m).read().decode('utf-8','replace')
+                if any(line.startswith('alias usb:v0BDAp0179') and line.rstrip().endswith(' rtl8xxxu') for line in raw.splitlines()):
+                    aliasok=1
 if roots != {expected}: raise SystemExit(f'bad archive roots: {roots!r}')
-print(expected,files,total,rtl)
+print(expected,files,total,rtl,dep,aliasok)
 PY
 ) || fail module-archive-audit
 test "$MODROOT" = "modules-$KREL" || fail module-root
 test "$MODFILES" -gt 0 && test "$MODBYTES" -gt 0 || fail module-counts
 test "$RTLKO_COUNT" = 1 || fail rtl8xxxu-module-count
+test "$MODDEP_OK" = 1 || fail modules-dep-missing
+test "$MODALIAS_OK" = 1 || fail rtl8xxxu-modalias-missing
 RTL_MEMBER="$(tar -tJf "$NEWK1/modules.tar.xz" | grep '/rtl8xxxu\.ko$' | head -1)"
 test -n "$RTL_MEMBER" || fail rtl8xxxu-path
 RTL_PATH="${RTL_MEMBER#./}"
