@@ -80,7 +80,7 @@ jobs:
           echo "R59_IMAGE_SHA=$IMAGE_SHA"
           echo "R59_DTB_SHA=$DTB_SHA"
           echo "R59_KERNEL_RELEASE=$KREL_ACTUAL"
-          test "$IMAGE_SHA" = a7a388d5ca21b276bddcc0e3892b0c965b73d92f2c0238cb9c25a210dba7c97e
+          test "$IMAGE_SHA" = 6a7b7801e293b17af7ac014fba8f6be63372f5f853cbd18ad1ac404f4332a7fe
           test "$DTB_SHA" = e2145905b1beb8d0f5b9dee6c5a21d31c29474be8762c893e81506fc40e627f4
           test "$KREL_ACTUAL" = 6.12.94-r36os-k1
 
@@ -187,7 +187,7 @@ jobs:
           test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.59.0
           test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.58.0
           test "$(awk -F= '$1=="candidate_id_change"{print $2}' pkg/manifest.conf)" = yes
-          test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = yes
           test "$(awk -F= '$1=="k1_dtb_change"{print $2}' pkg/manifest.conf)" = no
           test "$(awk -F= '$1=="k1_uinitrd_change"{print $2}' pkg/manifest.conf)" = no
           test "$(awk -F= '$1=="module_payload_change"{print $2}' pkg/manifest.conf)" = yes
@@ -205,7 +205,8 @@ jobs:
           test ! -e pkg/payload/root/usr/local/bin/r36os-alpha5
           test ! -e pkg/payload/root/usr/local/bin/r36os-session
           test ! -e pkg/payload/root/etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf
-          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/Image
+          test -s pkg/payload/root/opt/r36os/kernel-next/K1/Image
+          test "$(sha256sum pkg/payload/root/opt/r36os/kernel-next/K1/Image | awk '{print $1}')" = 6a7b7801e293b17af7ac014fba8f6be63372f5f853cbd18ad1ac404f4332a7fe
           test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/uInitrd
           test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/rk3326-r36s-k1.dtb
           test -s pkg/payload/root/opt/r36os/kernel-next/K1/modules.tar.xz
