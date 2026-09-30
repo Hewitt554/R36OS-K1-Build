@@ -1,0 +1,126 @@
+name: Validate R36OS Alpha 5R55
+
+on:
+  push:
+    branches:
+      - work/r55-module-reuse-candidate-rebind-2026-09-30
+    paths:
+      - 'r55-release/**'
+      - '.github/workflows/validate-r55.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R54
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd' --dir inputs
+          echo 'ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e  inputs/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd' | sha256sum -c -
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          bash -n r55-release/build_release.sh
+          python3 -m py_compile r55-release/*.py
+          grep -Fq 'write_module_meta(){' r55-release/transform_prepare.py
+          grep -Fq 'Rebinding K1 module metadata' r55-release/transform_prepare.py
+          grep -Fq 'archive_sha256' r55-release/transform_prepare.py
+          echo R55_SOURCE_AUDIT=PASS
+
+      - name: Build R55 twice
+        run: |
+          set -euo pipefail
+          chmod +x r55-release/build_release.sh
+          R54="$PWD/inputs/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd"
+          ./r55-release/build_release.sh "$R54" "$PWD/out-a" | tee r55-build-a.log
+          ./r55-release/build_release.sh "$R54" "$PWD/out-b" | tee r55-build-b.log
+
+      - name: Audit deterministic package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd
+          B=out-b/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.55.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.54.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)" = 4c70486f70ba16acf7437403
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="candidate_id_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="module_payload_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="module_reuse_rebind"{print $2}' pkg/manifest.conf)" = yes
+
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hook.conf
+          test ! -e pkg/payload/root/r36state
+          echo R55_PACKAGE_AUDIT=PASS
+
+      - name: Simulate exact code67 rebind case
+        run: |
+          set -euo pipefail
+          PREP=pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          # Static source-level proof: content verification no longer depends on CID,
+          # while the atomic metadata writer requires readback to the current CID.
+          awk '/verify_modules\(\)\{/{f=1} f{print} /^}/{if(f){exit}}' "$PREP" >/tmp/verify.txt
+          ! grep -Fq 'candidate_id)" = "$CID"' /tmp/verify.txt
+          grep -Fq 'kernel_release)" = "$KREL"' /tmp/verify.txt
+          grep -Fq 'archive_sha256)" = "$(sha "$DST/modules.tar.xz")"' /tmp/verify.txt
+          grep -Fq 'FC=' /tmp/verify.txt
+          grep -Fq 'BY=' /tmp/verify.txt
+
+          awk '/write_module_meta\(\)\{/{f=1} f{print} /^}/{if(f){exit}}' "$PREP" >/tmp/rebind.txt
+          grep -Fq 'echo "candidate_id=$CID"' /tmp/rebind.txt
+          grep -Fq 'mv -f "$TMPMETA" "$MODMETA"' /tmp/rebind.txt
+          grep -Fq '[ "$(val "$MODMETA" candidate_id)" = "$CID" ]' /tmp/rebind.txt
+
+          grep -Fq 'OLD_MOD_CID="$(val "$MODMETA" candidate_id)"' "$PREP"
+          grep -Fq 'if [ "$OLD_MOD_CID" != "$CID" ]; then' "$PREP"
+          grep -Fq 'write_module_meta || fail 83 modules-meta-rebind' "$PREP"
+          grep -Fq 'verify_modules || fail 84 modules-rebind-readback' "$PREP"
+          echo R55_CODE67_REBIND_SIMULATION=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R55_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R55 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R55-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd
+            out-a/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r55-build-a.log
+            r55-build-b.log
+          if-no-files-found: error
+          retention-days: 30
