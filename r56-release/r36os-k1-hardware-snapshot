@@ -1,7 +1,7 @@
 #!/bin/bash
 set +e
 
-K="$(uname -r 2>/dev/null)"
+K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null)}"
 [ "$K" = "6.12.94-r36os-k1" ] || exit 0
 
 CID='4c70486f70ba16acf7437403'
@@ -16,7 +16,7 @@ mkdir -p "$OUTDIR" /run 2>/dev/null || exit 0
   echo 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1'
   echo "time=$(date -Is 2>/dev/null || date)"
   echo "candidate_id=$CID"
-  echo "kernel=$(uname -r 2>/dev/null)"
+  echo "kernel=$K"
   echo "uname=$(uname -a 2>/dev/null)"
   echo "cmdline=$(cat /proc/cmdline 2>/dev/null)"
 
