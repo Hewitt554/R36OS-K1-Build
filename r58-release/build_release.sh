@@ -35,18 +35,26 @@ command -v "$CC" >/dev/null 2>&1 || { echo "missing-clang:$CC" >&2; exit 11; }
 # the preserved source blob.
 cat "$HERE/source/r36os_alpha5.c.gz.b64.part00"     "$HERE/source/r36os_alpha5.c.gz.b64.part01"     "$HERE/source/r36os_alpha5.c.gz.b64.part02"     "$HERE/source/r36os_alpha5.c.gz.b64.part03"     "$HERE/source/r36os_alpha5.c.gz.b64.part04"   | base64 -d >"$WORK/src/base.c.gz"
 gzip -dc "$WORK/src/base.c.gz" >"$WORK/src/base.c"
-test "$(sha256sum "$WORK/src/base.c" | awk '{print $1}')" = "$BASE_SOURCE_SHA"
+ACTUAL_BASE_SOURCE_SHA="$(sha256sum "$WORK/src/base.c" | awk '{print $1}')"
+echo "R58_DIAG base_source_sha=$ACTUAL_BASE_SOURCE_SHA expected=$BASE_SOURCE_SHA"
+test "$ACTUAL_BASE_SOURCE_SHA" = "$BASE_SOURCE_SHA"
 
 "$CC" --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2   -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables   -Wl,-e,_start "$WORK/src/base.c" -o "$WORK/src/base-ui"
 chmod 0755 "$WORK/src/base-ui"
-test "$(sha256sum "$WORK/src/base-ui" | awk '{print $1}')" = "$BASE_UI_SHA"
+ACTUAL_BASE_UI_SHA="$(sha256sum "$WORK/src/base-ui" | awk '{print $1}')"
+echo "R58_DIAG base_ui_sha=$ACTUAL_BASE_UI_SHA expected=$BASE_UI_SHA"
+test "$ACTUAL_BASE_UI_SHA" = "$BASE_UI_SHA"
 
 python3 "$HERE/transform_ui.py" "$WORK/src/base.c" "$WORK/src/r58.c"
-test "$(sha256sum "$WORK/src/r58.c" | awk '{print $1}')" = "$PATCHED_SOURCE_SHA"
+ACTUAL_PATCHED_SOURCE_SHA="$(sha256sum "$WORK/src/r58.c" | awk '{print $1}')"
+echo "R58_DIAG patched_source_sha=$ACTUAL_PATCHED_SOURCE_SHA expected=$PATCHED_SOURCE_SHA"
+test "$ACTUAL_PATCHED_SOURCE_SHA" = "$PATCHED_SOURCE_SHA"
 
 "$CC" --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2   -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables   -Wl,-e,_start "$WORK/src/r58.c" -o "$ROOT/usr/local/bin/r36os-alpha5"
 chmod 0755 "$ROOT/usr/local/bin/r36os-alpha5"
-test "$(sha256sum "$ROOT/usr/local/bin/r36os-alpha5" | awk '{print $1}')" = "$PATCHED_UI_SHA"
+ACTUAL_PATCHED_UI_SHA="$(sha256sum "$ROOT/usr/local/bin/r36os-alpha5" | awk '{print $1}')"
+echo "R58_DIAG patched_ui_sha=$ACTUAL_PATCHED_UI_SHA expected=$PATCHED_UI_SHA"
+test "$ACTUAL_PATCHED_UI_SHA" = "$PATCHED_UI_SHA"
 
 # Advance release-gated K1 tooling without changing the K1 candidate.
 python3 "$HERE/transform_identity.py"   "$R57ROOT/usr/local/bin/r36os-kernel-next-prepare"   "$ROOT/usr/local/bin/r36os-kernel-next-prepare"
