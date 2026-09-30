@@ -1,4 +1,4 @@
-name: Publish R36OS Alpha 5R55 via verified carrier
+name: Publish R36OS Alpha 5R56 via verified carrier
 
 on:
   push:
@@ -18,14 +18,14 @@ jobs:
     timeout-minutes: 20
     env:
       REPO: Hewitt554/R36OS-K1-Build
-      VALIDATION_RUN: '36681043666'
-      VALIDATION_ARTIFACT_ID: '11081622538'
-      VALIDATED_HEAD_SHA: 1bdffe0f2542e12f11521efbab1e79cd8836939f
-      PREPUBLISH_MAIN_SHA: c167b71c90b8abdbc442402546dd2f8667fc51f7
+      VALIDATION_RUN: '36683971063'
+      VALIDATION_ARTIFACT_ID: '11082966391'
+      VALIDATED_HEAD_SHA: 4364c0d66558e00063869ac8da24c40b9929cc07
+      PREPUBLISH_MAIN_SHA: 0965beb26ba1bdc0be4e48b2baf90400007b168a
       CARRIER_TAG: alpha5r48
-      NAME: 00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd
-      EXPECTED_SHA: 09812b0f7a9e78f73fff42a6a1aafcacf16dbaebe0aa4e44d0a9d1f3b982ffad
-      EXPECTED_SIZE: '16572'
+      NAME: 00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd
+      EXPECTED_SHA: f96d11043eb989f5ba22c5ea54d46e9ef4ac9d11f1f3f14d0101fb33306c5818
+      EXPECTED_SIZE: '18683'
 
     steps:
       - uses: actions/checkout@v4
@@ -39,10 +39,10 @@ jobs:
           test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
           test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$VALIDATED_HEAD_SHA"
           ART="$(gh api "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID")"
-          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R55-audited-validation-candidate
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R56-audited-validation-candidate
           test "$(printf '%s' "$ART" | jq -r .expired)" = false
 
-      - name: Download exact validated R55 artifact
+      - name: Download exact validated R56 artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -62,27 +62,28 @@ jobs:
           test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
           test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
           grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
-          grep -Fxq 'version=0.5.55.0' "$REPORT"
-          grep -Fxq 'base_version=0.5.54.0' "$REPORT"
+          grep -Fxq 'version=0.5.56.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.55.0' "$REPORT"
           grep -Fxq 'candidate_id=4c70486f70ba16acf7437403' "$REPORT"
-          grep -Fxq 'r54_source_sha256=ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e' "$REPORT"
+          grep -Fxq 'r55_source_sha256=09812b0f7a9e78f73fff42a6a1aafcacf16dbaebe0aa4e44d0a9d1f3b982ffad' "$REPORT"
           grep -Fxq 'k1_binary_change=no' "$REPORT"
           grep -Fxq 'candidate_id_change=no' "$REPORT"
-          grep -Fxq 'module_payload_change=no' "$REPORT"
-          grep -Fxq 'module_reuse_rebind=yes' "$REPORT"
-          grep -Fxq 'legacy_ui_startup_change=no' "$REPORT"
+          grep -Fxq 'r1_singleflight=yes' "$REPORT"
+          grep -Fxq 'k1_hardware_snapshot=yes' "$REPORT"
+          grep -Fxq 'k1_batt_led_legacy_skip=yes' "$REPORT"
+          grep -Fxq 'native_ui_change=no' "$REPORT"
 
-      - name: Upload exact R55 package to carrier release
+      - name: Upload exact R56 package to carrier release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release view "$CARRIER_TAG" --repo "$REPO" >/dev/null
           if gh api "repos/$REPO/releases/tags/$CARRIER_TAG" | jq -e --arg n "$NAME" '.assets[] | select(.name==$n)' >/dev/null; then
-            echo "R55 asset already exists; verify instead of clobbering"
+            echo "R56 asset already exists; verify instead of clobbering"
           else
-            cp "$REPORT" /tmp/R55_RELEASE_REPORT.txt
-            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" /tmp/R55_RELEASE_REPORT.txt --repo "$REPO"
+            cp "$REPORT" /tmp/R56_RELEASE_REPORT.txt
+            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" /tmp/R56_RELEASE_REPORT.txt --repo "$REPO"
           fi
 
       - name: Verify published asset bytes
@@ -95,30 +96,30 @@ jobs:
           SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
           test -n "$ASSET_ID"
           test "$SIZE" = "$EXPECTED_SIZE"
-          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/r55.r36upd
-          test "$(stat -c %s /tmp/r55.r36upd)" = "$EXPECTED_SIZE"
-          test "$(sha256sum /tmp/r55.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
-          echo R55_CARRIER_ASSET_VERIFY=PASS
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/r56.r36upd
+          test "$(stat -c %s /tmp/r56.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/r56.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R56_CARRIER_ASSET_VERIFY=PASS
 
-      - name: Advance live channel R54 to R55
+      - name: Advance live channel R55 to R56
         run: |
           set -euo pipefail
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
-          git checkout -B publish-r55-main origin/main
-          cp "$LATEST" /tmp/r55-latest.conf
-          sed -i 's#/releases/download/alpha5r55/#/releases/download/alpha5r48/#' /tmp/r55-latest.conf
-          grep -Fxq 'version=0.5.55.0' /tmp/r55-latest.conf
-          grep -Fxq 'base_version=0.5.54.0' /tmp/r55-latest.conf
-          grep -Fxq "sha256=$EXPECTED_SHA" /tmp/r55-latest.conf
-          grep -Fxq "size_bytes=$EXPECTED_SIZE" /tmp/r55-latest.conf
-          grep -Fxq "url=https://github.com/$REPO/releases/download/$CARRIER_TAG/$NAME" /tmp/r55-latest.conf
-          cp /tmp/r55-latest.conf r36os-release-channel/latest.conf
+          git checkout -B publish-r56-main origin/main
+          cp "$LATEST" /tmp/r56-latest.conf
+          sed -i 's#/releases/download/alpha5r56/#/releases/download/alpha5r48/#' /tmp/r56-latest.conf
+          grep -Fxq 'version=0.5.56.0' /tmp/r56-latest.conf
+          grep -Fxq 'base_version=0.5.55.0' /tmp/r56-latest.conf
+          grep -Fxq "sha256=$EXPECTED_SHA" /tmp/r56-latest.conf
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" /tmp/r56-latest.conf
+          grep -Fxq "url=https://github.com/$REPO/releases/download/$CARRIER_TAG/$NAME" /tmp/r56-latest.conf
+          cp /tmp/r56-latest.conf r36os-release-channel/latest.conf
           git config user.name 'R36OS Release Bot'
           git config user.email 'r36os-release-bot@users.noreply.github.com'
           git add r36os-release-channel/latest.conf
           git diff --cached --check
-          git commit -m 'Publish Alpha 5R55 update channel via verified carrier asset'
+          git commit -m 'Publish Alpha 5R56 update channel via verified carrier asset'
           CHANNEL_COMMIT="$(git rev-parse HEAD)"
           echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >>"$GITHUB_ENV"
           git push origin HEAD:main
@@ -129,6 +130,6 @@ jobs:
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
           git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live.conf
-          cmp /tmp/live.conf /tmp/r55-latest.conf
-          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r55-postpublish-verified-2026-09-30"
-          echo R55_PUBLISH=PASS
+          cmp /tmp/live.conf /tmp/r56-latest.conf
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r56-postpublish-verified-2026-09-30"
+          echo R56_PUBLISH=PASS
