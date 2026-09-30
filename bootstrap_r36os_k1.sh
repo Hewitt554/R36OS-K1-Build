@@ -30,7 +30,7 @@ src=Path(sys.argv[1]); dst=Path(sys.argv[2]); text=src.read_text()
 old='''echo "CLOUD8=PASS patched bootstrap syntax verified"\necho "CLOUD8=INFO executing CP04P-CLOUD8"\nexec bash "$PATCHED_BOOTSTRAP"\n'''
 if text.count(old)!=1:
     raise SystemExit(f"ERROR: CLOUD9 outer exec anchor count != 1: {text.count(old)}")
-new=r'''echo "CLOUD8=PASS patched bootstrap syntax verified"
+new=r"""echo "CLOUD8=PASS patched bootstrap syntax verified"
 
 # CLOUD9 patches the already-verified CLOUD8-generated bootstrap.  The patch is
 # deliberately limited to Kconfig and post-olddefconfig validation; source,
@@ -102,7 +102,7 @@ bash -n "$PATCHED_BOOTSTRAP"
 echo "CLOUD9=PASS Wi-Fi-patched bootstrap syntax verified"
 echo "CLOUD9=INFO executing Run-11 lineage with RTL8188EU Wi-Fi delta"
 exec bash "$PATCHED_BOOTSTRAP"
-'''
+"""
 text=text.replace(old,new,1)
 dst.write_text(text)
 R36OS_CLOUD9_OUTER_PATCH
