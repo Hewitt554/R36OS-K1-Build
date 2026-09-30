@@ -28,16 +28,25 @@ jobs:
           gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' --dir inputs
           echo 'f059968b6f73acf52fe61527273fa74e34f4781ad96465ba9153b1d47d2460ee  inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd' | sha256sum -c -
 
-      - name: Install and verify LLVM 17 build toolchain
+      - name: Pin Swift LLVM 17 build environment
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang-17 lld-17 file >/dev/null
-          test -x /usr/bin/clang-17
-          test -x /usr/lib/llvm-17/bin/ld.lld
-          /usr/bin/clang-17 --version | head -1
-          /usr/lib/llvm-17/bin/ld.lld --version | head -1
-          echo R58_LLVM17_TOOLCHAIN=PASS
+          sudo apt-get install -y -qq file >/dev/null
+          IMAGE='swift@sha256:0e4716bd34384d22963a63afbdbc93be3129dfd0753185aa1ded27755abdcae8'
+          docker pull "$IMAGE" >/dev/null
+          docker run --rm "$IMAGE" bash -lc '
+            clang --version | head -1 | grep -F "clang version 17.0.0"
+            ld.lld --version | head -1 | grep -F "LLD 17.0.0"
+          '
+          cat >/tmp/r58-clang <<EOF
+          #!/bin/bash
+          exec docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD:$PWD" -w "$PWD" \
+            "$IMAGE" clang "\$@"
+          EOF
+          chmod +x /tmp/r58-clang
+          echo R58_PINNED_SWIFT_LLVM=PASS
 
       - name: Source audit
         run: |
@@ -46,7 +55,8 @@ jobs:
           python3 -m py_compile r58-release/*.py
           for p in 00 01 02 03 04; do test -s "r58-release/source/r36os_alpha5.c.gz.b64.part$p"; done
           grep -Fq 'BASE_SHA="25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd"' r58-release/transform_ui.py
-          grep -Fq 'PATCHED_SHA="c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687"' r58-release/transform_ui.py
+          grep -Fq 'PATCHED_SHA="657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a"' r58-release/transform_ui.py
+          python3 -m py_compile r58-release/elf_alloc_sha.py
           grep -Fq 'K1 split input: gpio-keys event' r58-release/transform_ui.py
           grep -Fq 'contains(name,"adc-joystick")' r58-release/transform_ui.py
           echo R58_SOURCE_AUDIT=PASS
@@ -55,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x r58-release/build_release.sh
-          export PATH=/usr/lib/llvm-17/bin:$PATH
-          export CLANG=/usr/bin/clang-17
+          export CLANG=/tmp/r58-clang
+          export RUNNER_TEMP="$PWD/.r58tmp"
           R57="$PWD/inputs/00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd"
           ./r58-release/build_release.sh "$R57" "$PWD/out-a" | tee r58-build-a.log
           ./r58-release/build_release.sh "$R57" "$PWD/out-b" | tee r58-build-b.log
@@ -71,9 +81,10 @@ jobs:
           diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
 
           grep -Fxq 'base_ui_source_sha256=25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd' out-a/RELEASE_REPORT.txt
-          grep -Fxq 'base_ui_binary_sha256=173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3' out-a/RELEASE_REPORT.txt
-          grep -Fxq 'patched_ui_source_sha256=c88a4c29dcd4760f8e3edb48c6a313528abcee6dfabb02bb67f39cc9520e3687' out-a/RELEASE_REPORT.txt
-          grep -Fxq 'patched_ui_binary_sha256=7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'base_ui_installed_reference_sha256=173ee8f602cc08a76711bc90b24f382c6f47d46de5c90049d21b92caad95a7b3' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'base_ui_runtime_alloc_sha256=ed987d7db036851e85b79218be8fd4ef86f8bdb9bc18a5e1544f50245fb297b0' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'patched_ui_source_sha256=657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'patched_ui_runtime_alloc_sha256=d50a057fa87e07c1a684778c0cb1d9b2e0e3072978431aec8557b8e063bb6f3e' out-a/RELEASE_REPORT.txt
 
           rm -rf pkg
           mkdir pkg
@@ -89,7 +100,10 @@ jobs:
           test "$(awk -F= '$1=="uinput_required"{print $2}' pkg/manifest.conf)" = no
           test "$(awk -F= '$1=="legacy_input_path_preserved"{print $2}' pkg/manifest.conf)" = yes
 
-          test "$(sha256sum pkg/payload/root/usr/local/bin/r36os-alpha5 | awk '{print $1}')" = 7ff47b7c2ef16f4f5b83d1ac6215541c7ac8d350334c59ff8450a7962edc4f5a
+          REPORT_UI_SHA="$(awk -F= '$1=="patched_ui_binary_sha256"{print $2}' out-a/RELEASE_REPORT.txt)"
+          test -n "$REPORT_UI_SHA"
+          test "$(sha256sum pkg/payload/root/usr/local/bin/r36os-alpha5 | awk '{print $1}')" = "$REPORT_UI_SHA"
+          test "$(python3 r58-release/elf_alloc_sha.py pkg/payload/root/usr/local/bin/r36os-alpha5)" = d50a057fa87e07c1a684778c0cb1d9b2e0e3072978431aec8557b8e063bb6f3e
           file pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Eq 'ARM aarch64|ARM64'
           file pkg/payload/root/usr/local/bin/r36os-alpha5 | grep -Fq 'statically linked'
 
@@ -103,7 +117,13 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/r58-src
           mkdir /tmp/r58-src
-          base64 -d r58-release/r36os_alpha5_r37.c.gz.b64 >/tmp/r58-src/base.c.gz
+          cat \
+            r58-release/source/r36os_alpha5.c.gz.b64.part00 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part01 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part02 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part03 \
+            r58-release/source/r36os_alpha5.c.gz.b64.part04 \
+            | base64 -d >/tmp/r58-src/base.c.gz
           gzip -dc /tmp/r58-src/base.c.gz >/tmp/r58-src/base.c
           python3 r58-release/transform_ui.py /tmp/r58-src/base.c /tmp/r58-src/r58.c
 
