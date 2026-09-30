@@ -191,12 +191,14 @@ if _r58_frag.read_text().count("CONFIG_INPUT_UINPUT=y") != 1:
 
 _r58_builder = root / "BUILD_K1_CHECKPOINT04.sh"
 _r58_text = _r58_builder.read_text()
-_r58_old = "  CHARGER_RK817 INPUT_RK805_PWRKEY PINCTRL_RK805 INPUT_EVDEV KEYBOARD_GPIO INPUT_JOYSTICK JOYSTICK_ADC ROCKCHIP_SARADC MUX_GPIO IIO_MUX\\n"
-_r58_new = "  CHARGER_RK817 INPUT_RK805_PWRKEY PINCTRL_RK805 INPUT_EVDEV INPUT_UINPUT KEYBOARD_GPIO INPUT_JOYSTICK JOYSTICK_ADC ROCKCHIP_SARADC MUX_GPIO IIO_MUX\\n"
+_r58_old = "INPUT_EVDEV KEYBOARD_GPIO INPUT_JOYSTICK"
+_r58_new = "INPUT_EVDEV INPUT_UINPUT KEYBOARD_GPIO INPUT_JOYSTICK"
 if _r58_text.count(_r58_old) != 1:
-    raise SystemExit(f"ERROR: R58 required_y anchor count={_r58_text.count(_r58_old)}")
+    raise SystemExit(f"ERROR: R58 required_y structural anchor count={_r58_text.count(_r58_old)}")
 _r58_text = _r58_text.replace(_r58_old, _r58_new, 1)
 _r58_builder.write_text(_r58_text)
+if "INPUT_EVDEV INPUT_UINPUT KEYBOARD_GPIO INPUT_JOYSTICK" not in _r58_builder.read_text():
+    raise SystemExit("ERROR: R58 INPUT_UINPUT required_y readback failed")
 print("R58U=PASS CONFIG_INPUT_UINPUT=y injected and required by CP04 validator")
 """
 
