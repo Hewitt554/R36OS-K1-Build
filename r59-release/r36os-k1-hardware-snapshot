@@ -6,103 +6,14 @@ K="${R36OS_UNAME_R:-$(uname -r 2>/dev/null)}"
 
 CMDLINE="${R36OS_CMDLINE_FILE:-/proc/cmdline}"
 K1CONF="${R36OS_K1_CONF:-/opt/r36os/kernel-next/K1/K1.conf}"
-cmdval(){ tr ' ' '\n' <"$CMDLINE" 2>/dev/null | awk -F= -v k="$1" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\""; }
-val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+cmdval(){ tr " " "\\n" <"$CMDLINE" 2>/dev/null | sed -n "s/^$1=//p" | head -n1; }
+val(){ sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1; }
 CID="$(cmdval r36os.kernel_candidate)"
 [ -n "$CID" ] || CID="$(val "$K1CONF" candidate_id)"
-echo "$CID" | grep -Eq '^[0-9a-f]{24}STATE="${R36OS_STATE_ROOT:-/r36state}"
-OUTDIR="$STATE/logs/kernel-next"
-OUT="$OUTDIR/K1-HARDWARE-$CID.conf"
-TMP="$OUT.tmp.$$"
-
-mkdir -p "$OUTDIR" /run 2>/dev/null || exit 0
-
-{
-  echo 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1'
-  echo "time=$(date -Is 2>/dev/null || date)"
-  echo "candidate_id=$CID"
-  echo "kernel=$K"
-  echo "uname=$(uname -a 2>/dev/null)"
-  echo "cmdline=$(cat /proc/cmdline 2>/dev/null)"
-
-  echo '--- input-proc-bus-begin ---'
-  cat /proc/bus/input/devices 2>/dev/null
-  echo '--- input-proc-bus-end ---'
-
-  echo '--- input-sysfs-begin ---'
-  for e in /sys/class/input/event*; do
-    [ -e "$e" ] || continue
-    n="$(basename "$e")"
-    echo "[$n]"
-    echo "name=$(cat "$e/device/name" 2>/dev/null)"
-    echo "phys=$(cat "$e/device/phys" 2>/dev/null)"
-    echo "uniq=$(cat "$e/device/uniq" 2>/dev/null)"
-    for c in ev key abs rel sw prop; do
-      [ -r "$e/device/capabilities/$c" ] && echo "cap_$c=$(cat "$e/device/capabilities/$c" 2>/dev/null)"
-    done
-    readlink -f "$e/device/driver" 2>/dev/null | sed 's/^/driver=/'
-    readlink -f "$e/device" 2>/dev/null | sed 's/^/device=/'
-  done
-  echo '--- input-sysfs-end ---'
-
-  echo '--- dev-input-begin ---'
-  ls -l /dev/input 2>/dev/null
-  echo '--- dev-input-end ---'
-
-  echo '--- power-supply-begin ---'
-  for p in /sys/class/power_supply/*; do
-    [ -d "$p" ] || continue
-    echo "[$p]"
-    for k in name type status capacity capacity_level present online voltage_now current_now charge_now charge_full energy_now energy_full temp health technology; do
-      [ -r "$p/$k" ] && echo "$k=$(cat "$p/$k" 2>/dev/null | tr -d '\r\n')"
-    done
-    [ -r "$p/uevent" ] && cat "$p/uevent" 2>/dev/null
-  done
-  echo '--- power-supply-end ---'
-
-  echo '--- leds-begin ---'
-  for l in /sys/class/leds/*; do
-    [ -e "$l" ] || continue
-    echo "[$l]"
-    echo "trigger=$(cat "$l/trigger" 2>/dev/null)"
-    echo "brightness=$(cat "$l/brightness" 2>/dev/null)"
-    echo "max_brightness=$(cat "$l/max_brightness" 2>/dev/null)"
-  done
-  echo '--- leds-end ---'
-
-  echo '--- likely-input-drivers-begin ---'
-  find /sys/bus/platform/drivers -maxdepth 2 -type l -printf '%p -> %l\n' 2>/dev/null | grep -Ei 'joy|game|adc|key|gpio' || true
-  echo '--- likely-input-drivers-end ---'
-
-  echo '--- modules-begin ---'
-  cat /proc/modules 2>/dev/null
-  echo '--- modules-end ---'
-
-  echo '--- systemd-journal-files-begin ---'
-  ls -l /lib/systemd/system/systemd-journald.service /lib/systemd/system/systemd-journald.socket /run/systemd/journal 2>&1
-  echo '--- systemd-journal-files-end ---'
-
-  echo '--- batt-led-status-begin ---'
-  systemctl status batt_led.service --no-pager 2>&1 || true
-  echo '--- batt-led-status-end ---'
-
-  echo '--- dmesg-input-power-begin ---'
-  dmesg 2>/dev/null | grep -Ei 'joy|gamepad|input:|adc|gpio.key|rk817|battery|charger|power_supply|led' | tail -400 || true
-  echo '--- dmesg-input-power-end ---'
-} >"$TMP" 2>/dev/null
-
-mv -f "$TMP" "$OUT" 2>/dev/null || { cp -f "$TMP" "$OUT" 2>/dev/null; rm -f "$TMP"; }
-sync "$OUT" 2>/dev/null || sync
-
-{
-  echo
-  echo 'R36OS-K1 hardware snapshot saved.'
-  echo 'Input devices detected:'
-  awk '/^N: Name=/{print "  " $0}' /proc/bus/input/devices 2>/dev/null
-} >/dev/tty1 2>/dev/null || true
-
-exit 0
- || CID='unknown'
+case "$CID" in
+  *[!0-9a-f]*|"") CID=unknown ;;
+  *) [ "${#CID}" -eq 24 ] || CID=unknown ;;
+esac
 STATE="${R36OS_STATE_ROOT:-/r36state}"
 OUTDIR="$STATE/logs/kernel-next"
 OUT="$OUTDIR/K1-HARDWARE-$CID.conf"
