@@ -85,151 +85,36 @@ jobs:
           test "$KREL_ACTUAL" = 6.12.94-r36os-k1
 
           python3 - "$K1/modules.tar.xz" rtlko <<'PY'
-import sys,tarfile,pathlib
-archive=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); out.mkdir(exist_ok=True)
-with tarfile.open(archive,'r:xz') as t:
-    files=[m for m in t.getmembers() if m.isfile()]
-    rtl=[m for m in files if m.name.lstrip('./').endswith('/rtl8xxxu.ko')]
-    aliases=[m for m in files if m.name.lstrip('./').endswith('/modules.alias')]
-    deps=[m for m in files if m.name.lstrip('./').endswith('/modules.dep')]
-    if len(rtl)!=1: raise SystemExit(f'expected one rtl8xxxu.ko, found {len(rtl)}')
-    if len(aliases)!=1: raise SystemExit(f'expected one modules.alias, found {len(aliases)}')
-    if len(deps)!=1: raise SystemExit(f'expected one modules.dep, found {len(deps)}')
-    alias_text=t.extractfile(aliases[0]).read().decode('utf-8','replace')
-    matches=[line for line in alias_text.splitlines()
-             if line.startswith('alias usb:v0BDAp0179') and line.rstrip().endswith(' rtl8xxxu')]
-    if len(matches)!=1: raise SystemExit(f'0bda:0179 modalias count={len(matches)} matches={matches}')
-    dep_bytes=t.extractfile(deps[0]).read()
-    if not dep_bytes: raise SystemExit('modules.dep is empty')
-    data=t.extractfile(rtl[0]).read()
-    (out/'rtl8xxxu.ko').write_bytes(data)
-    print('R59_ARCHIVE_STRUCTURE=PASS')
-PY
+          import sys,tarfile,pathlib
+          archive=pathlib.Path(sys.argv[1])
+          out=pathlib.Path(sys.argv[2])
+          out.mkdir(exist_ok=True)
+          with tarfile.open(archive,'r:xz') as t:
+              files=[m for m in t.getmembers() if m.isfile()]
+              rtl=[m for m in files if m.name.lstrip('./').endswith('/rtl8xxxu.ko')]
+              aliases=[m for m in files if m.name.lstrip('./').endswith('/modules.alias')]
+              deps=[m for m in files if m.name.lstrip('./').endswith('/modules.dep')]
+              if len(rtl)!=1:
+                  raise SystemExit(f'expected one rtl8xxxu.ko, found {len(rtl)}')
+              if len(aliases)!=1:
+                  raise SystemExit(f'expected one modules.alias, found {len(aliases)}')
+              if len(deps)!=1:
+                  raise SystemExit(f'expected one modules.dep, found {len(deps)}')
+              alias_text=t.extractfile(aliases[0]).read().decode('utf-8','replace')
+              matches=[line for line in alias_text.splitlines()
+                       if line.startswith('alias usb:v0BDAp0179') and line.rstrip().endswith(' rtl8xxxu')]
+              if len(matches)!=1:
+                  raise SystemExit(f'0bda:0179 modalias count={len(matches)} matches={matches}')
+              dep_bytes=t.extractfile(deps[0]).read()
+              if not dep_bytes:
+                  raise SystemExit('modules.dep is empty')
+              (out/'rtl8xxxu.ko').write_bytes(t.extractfile(rtl[0]).read())
+          print('R59_ARCHIVE_STRUCTURE=PASS')
+          PY
           file rtlko/rtl8xxxu.ko | grep -Eq 'ARM aarch64|ARM64'
           modinfo rtlko/rtl8xxxu.ko | tee rtl8xxxu.modinfo
           grep -Eq '^alias:[[:space:]]+usb:v0BDAp0179' rtl8xxxu.modinfo
-          grep -Eq '^firmware:[[:space:]]+rtlwifi/rtl8188eufw.bin
-
-      - name: Download exact published R58 and R54 bases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p inputs
-          gh release download alpha5r48 --repo "$REPO" --pattern "$R58_NAME" --dir inputs
-          gh release download alpha5r48 --repo "$REPO" --pattern "$R54_NAME" --dir inputs
-          echo '7d8b5483d1bf3d104072366b1879fedb08ba49dcd7be4d56ee411d332873983b  inputs/00-R36OS-Alpha5R58-DirectK1SplitInputUI-FromR57.r36upd' | sha256sum -c -
-          echo 'ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e  inputs/00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd' | sha256sum -c -
-
-      - name: Fetch pinned RTL8188EU firmware and licence
-        run: |
-          set -euo pipefail
-          CONF=r59-release/firmware-source.conf
-          repo="$(awk -F= '$1=="source_repo"{print $2}' "$CONF")"
-          commit="$(awk -F= '$1=="source_commit"{print $2}' "$CONF")"
-          path="$(awk -F= '$1=="source_path"{print $2}' "$CONF")"
-          lic="$(awk -F= '$1=="license_source_path"{print $2}' "$CONF")"
-          mkdir -p firmware
-          curl --fail --location --silent --show-error --retry 4 "https://raw.githubusercontent.com/$repo/$commit/$path" -o firmware/rtl8188eufw.bin
-          curl --fail --location --silent --show-error --retry 4 "https://raw.githubusercontent.com/$repo/$commit/$lic" -o firmware/LICENCE.rtlwifi_firmware.txt
-          test "$(stat -c %s firmware/rtl8188eufw.bin)" = 13904
-          test "$(stat -c %s firmware/LICENCE.rtlwifi_firmware.txt)" = 2115
-          echo R59_FIRMWARE_FETCH=PASS
-
-      - name: Source audit
-        run: |
-          set -euo pipefail
-          bash -n r59-release/build_release.sh
-          bash -n r59-release/r36os-k1-hardware-snapshot
-          python3 -m py_compile r59-release/*.py
-          grep -Fq "EXPECTED='06cfa9c0b3520268501f65844488752d48923f053223d8ebdee2d82b028ae414'" r59-release/transform_prepare.py
-          grep -Fq 'stage_new_modules(){' r59-release/transform_prepare.py
-          grep -Fq 'modules-backup-rename' r59-release/transform_prepare.py
-          grep -Fq 'modules-new-readback' r59-release/transform_prepare.py
-          grep -Fq 'mv "$OLD_MODDST" "$MODDST"' r59-release/transform_prepare.py
-          grep -Fq "OLD_HOOK_SHA='6b7fcb76bbd989c24c74da3b59523198c5310f6598a51c2d0d5c4646dee7de43'" r59-release/transform_hook_candidate.py
-          grep -Fq 'candidate_payload_change=modules-rtl8xxxu' r59-release/transform_hook_candidate.py
-          grep -Fq 'r36os.kernel_candidate' r59-release/r36os-k1-hardware-snapshot
-          test "$(grep -Fc 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' r59-release/r36os-k1-hardware-snapshot)" -eq 1
-          test "$(grep -Fc 'R36OS-K1 hardware snapshot saved.' r59-release/r36os-k1-hardware-snapshot)" -eq 1
-          echo R59_SOURCE_AUDIT=PASS
-
-      - name: Build R59 twice
-        run: |
-          set -euo pipefail
-          chmod +x r59-release/build_release.sh
-          R58="$PWD/inputs/$R58_NAME"
-          R54="$PWD/inputs/$R54_NAME"
-          ./r59-release/build_release.sh "$R58" "$R54" "$K1_DIR" "$PWD/firmware/rtl8188eufw.bin" "$PWD/firmware/LICENCE.rtlwifi_firmware.txt" "$PWD/out-a" | tee r59-build-a.log
-          ./r59-release/build_release.sh "$R58" "$R54" "$K1_DIR" "$PWD/firmware/rtl8188eufw.bin" "$PWD/firmware/LICENCE.rtlwifi_firmware.txt" "$PWD/out-b" | tee r59-build-b.log
-
-      - name: Audit deterministic R59 package
-        run: |
-          set -euo pipefail
-          A="out-a/$R59_NAME"
-          B="out-b/$R59_NAME"
-          cmp "$A" "$B"
-          diff -u out-a/latest.conf out-b/latest.conf
-          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
-
-          rm -rf pkg
-          mkdir pkg
-          tar -xzf "$A" -C pkg
-          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
-
-          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.59.0
-          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.58.0
-          test "$(awk -F= '$1=="candidate_id_change"{print $2}' pkg/manifest.conf)" = yes
-          test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = no
-          test "$(awk -F= '$1=="k1_dtb_change"{print $2}' pkg/manifest.conf)" = no
-          test "$(awk -F= '$1=="k1_uinitrd_change"{print $2}' pkg/manifest.conf)" = no
-          test "$(awk -F= '$1=="module_payload_change"{print $2}' pkg/manifest.conf)" = yes
-          test "$(awk -F= '$1=="module_payload_replace_safe"{print $2}' pkg/manifest.conf)" = yes
-          test "$(awk -F= '$1=="wifi_driver"{print $2}' pkg/manifest.conf)" = rtl8xxxu
-          test "$(awk -F= '$1=="wifi_usb_id"{print $2}' pkg/manifest.conf)" = 0bda:0179
-          test "$(awk -F= '$1=="native_ui_change"{print $2}' pkg/manifest.conf)" = no
-          test "$(awk -F= '$1=="direct_k1_split_input_preserved"{print $2}' pkg/manifest.conf)" = yes
-          test "$(awk -F= '$1=="r1_singleflight_preserved"{print $2}' pkg/manifest.conf)" = yes
-
-          CID="$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)"
-          echo "$CID" | grep -Eq '^[0-9a-f]{24}$'
-          test "$CID" != 4c70486f70ba16acf7437403
-
-          test ! -e pkg/payload/root/usr/local/bin/r36os-alpha5
-          test ! -e pkg/payload/root/usr/local/bin/r36os-session
-          test ! -e pkg/payload/root/etc/systemd/system/r36os.service.d/99-k1-input-wrapper.conf
-          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/Image
-          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/uInitrd
-          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1/rk3326-r36s-k1.dtb
-          test -s pkg/payload/root/opt/r36os/kernel-next/K1/modules.tar.xz
-          test -s pkg/payload/root/lib/firmware/rtlwifi/rtl8188eufw.bin
-
-          grep -Fq "$CID" pkg/payload/root/opt/r36os/kernel-next/hook.conf
-          grep -Fq "$CID" pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
-          grep -Fq 'candidate_payload_change=modules-rtl8xxxu' pkg/payload/root/opt/r36os/kernel-next/hook.conf
-          grep -Fq 'stage_new_modules(){' pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
-          grep -Fq 'duplicate-request-ignored-in-progress' pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
-          grep -Fq 'already-armed-duplicate-ignored' pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
-          grep -Fq 'r36os.kernel_candidate' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot
-          test "$(grep -Fc 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot)" -eq 1
-          test "$(grep -Fc 'R36OS-K1 hardware snapshot saved.' pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot)" -eq 1
-          echo R59_PACKAGE_AUDIT=PASS
-
-      - name: Upload exact validated R59 candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: R36OS-Alpha5R59-audited-validation-candidate
-          path: |
-            out-a/00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
-            out-a/00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd.sha256
-            out-a/latest.conf
-            out-a/RELEASE_REPORT.txt
-            r59-build-a.log
-            r59-build-b.log
-            rtl8xxxu.modinfo
-          if-no-files-found: error
-          retention-days: 30
- rtl8xxxu.modinfo
+          grep -Eq '^firmware:[[:space:]]+rtlwifi/rtl8188eufw.bin$' rtl8xxxu.modinfo
           echo R59_K1_CANDIDATE_AUDIT=PASS
 
       - name: Download exact published R58 and R54 bases
