@@ -35,8 +35,8 @@ done
 
 # Snapshot again after the bridge attempt so logs show both physical and virtual
 # input devices and the exact compatibility status.
-if [ -x /usr/local/bin/r36os-k1-hardware-snapshot ]; then
-  /usr/local/bin/r36os-k1-hardware-snapshot >/dev/null 2>&1 || true
+if [ -x "$SNAPSHOT_BIN" ]; then
+  "$SNAPSHOT_BIN" >/dev/null 2>&1 || true
 fi
 
 "$SESSION_BIN" "$@"
