@@ -1,0 +1,165 @@
+name: Validate R36OS Alpha 5R56
+
+on:
+  push:
+    branches:
+      - work/r56-k1-hardware-snapshot-r1-singleflight-2026-09-30
+    paths:
+      - 'r56-release/**'
+      - '.github/workflows/validate-r56.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact published R55
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs
+          gh release download alpha5r48 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd' --dir inputs
+          echo '09812b0f7a9e78f73fff42a6a1aafcacf16dbaebe0aa4e44d0a9d1f3b982ffad  inputs/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd' | sha256sum -c -
+
+      - name: Source audit
+        run: |
+          set -euo pipefail
+          bash -n r56-release/build_release.sh
+          bash -n r56-release/r36os-k1-hardware-snapshot
+          python3 -m py_compile r56-release/*.py
+          grep -Fq 'LOCKDIR=/run/r36os-k1-prepare.lock' r56-release/transform_prepare.py
+          grep -Fxq 'ConditionKernelCommandLine=!r36os.kernel_slot=next' r56-release/90-r36os-k1-skip.conf
+          echo R56_SOURCE_AUDIT=PASS
+
+      - name: Build R56 twice
+        run: |
+          set -euo pipefail
+          chmod +x r56-release/build_release.sh
+          R55="$PWD/inputs/00-R36OS-Alpha5R55-ModuleReuseRebind-FromR54.r36upd"
+          ./r56-release/build_release.sh "$R55" "$PWD/out-a" | tee r56-build-a.log
+          ./r56-release/build_release.sh "$R55" "$PWD/out-b" | tee r56-build-b.log
+
+      - name: Audit deterministic package
+        run: |
+          set -euo pipefail
+          A=out-a/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd
+          B=out-b/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.56.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.55.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)" = 4c70486f70ba16acf7437403
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="r1_singleflight"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="k1_hardware_snapshot"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="native_ui_change"{print $2}' pkg/manifest.conf)" = no
+
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/K1
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hooked-boot.ini
+          test ! -e pkg/payload/root/opt/r36os/kernel-next/hook.conf
+          test ! -e pkg/payload/root/r36state
+          echo R56_PACKAGE_AUDIT=PASS
+
+      - name: Test concurrent duplicate R1 suppression
+        run: |
+          set -euo pipefail
+          PREP=pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          chmod +x "$PREP"
+          rm -rf /run/r36os-k1-prepare.lock
+          mkdir /run/r36os-k1-prepare.lock
+          set +e
+          OUT="$("$PREP" arm-once 2>&1)"
+          RC=$?
+          set -e
+          rmdir /run/r36os-k1-prepare.lock
+          test "$RC" -eq 0
+          printf '%s\n' "$OUT" | grep -Fq 'duplicate-request-ignored-in-progress'
+          echo R56_CONCURRENT_R1_SUPPRESSION=PASS
+
+      - name: Test buffered already-armed R1 suppression
+        run: |
+          set -euo pipefail
+          PREP=pkg/payload/root/usr/local/bin/r36os-kernel-next-prepare
+          cat >/tmp/fake-slot <<'EOF'
+          #!/bin/sh
+          [ "$1" = status ] && { echo 'armed=yes'; echo 'consumed=no'; exit 0; }
+          exit 1
+          EOF
+          chmod +x /tmp/fake-slot
+          rm -rf /run/r36os-k1-prepare.lock
+          rm -f /run/r36os-kernel-next-prepare.result /tmp/r56-progress
+          R36OS_KERNEL_SLOT_HELPER=/tmp/fake-slot R36OS_K1_PROGRESS_FILE=/tmp/r56-progress "$PREP" arm-once >/tmp/r56-out
+          grep -Fq 'already-armed-duplicate-ignored' /tmp/r56-out
+          grep -Fxq 'detail=already-armed-duplicate-ignored' /run/r36os-kernel-next-prepare.result
+          grep -Fq 'Duplicate R1 press ignored' /tmp/r56-progress
+          test ! -d /run/r36os-k1-prepare.lock
+          echo R56_BUFFERED_R1_SUPPRESSION=PASS
+
+      - name: Test K1 hardware snapshot
+        run: |
+          set -euo pipefail
+          H=pkg/payload/root/usr/local/bin/r36os-k1-hardware-snapshot
+          chmod +x "$H"
+          rm -rf /tmp/r56-state
+          mkdir -p /tmp/r56-state
+          R36OS_UNAME_R=6.12.94-r36os-k1 R36OS_STATE_ROOT=/tmp/r56-state "$H"
+          F=/tmp/r56-state/logs/kernel-next/K1-HARDWARE-4c70486f70ba16acf7437403.conf
+          test -s "$F"
+          grep -Fxq 'format=R36OS_K1_HARDWARE_SNAPSHOT_V1' "$F"
+          grep -Fxq 'kernel=6.12.94-r36os-k1' "$F"
+          grep -Fq -- '--- input-proc-bus-begin ---' "$F"
+          grep -Fq -- '--- power-supply-begin ---' "$F"
+          grep -Fq -- '--- systemd-journal-files-begin ---' "$F"
+          grep -Fq -- '--- batt-led-status-begin ---' "$F"
+          echo R56_K1_HARDWARE_SNAPSHOT=PASS
+
+      - name: Verify K1-only battery LED guard
+        run: |
+          set -euo pipefail
+          grep -Fxq 'ConditionKernelCommandLine=!r36os.kernel_slot=next' pkg/payload/root/etc/systemd/system/batt_led.service.d/90-r36os-k1-skip.conf
+          grep -Fxq 'ExecStartPre=-/usr/local/bin/r36os-k1-hardware-snapshot' pkg/payload/root/etc/systemd/system/r36os.service.d/98-k1-hardware-snapshot.conf
+          echo R56_K1_SERVICE_GUARDS=PASS
+
+      - name: Verify cumulative core manifest
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/etc/r36os-core-manifest.sha256
+          for p in \
+            /usr/local/bin/r36os-kernel-next-prepare \
+            /usr/local/bin/r36os-kernel-slot \
+            /usr/local/bin/r36os-r36update-maint \
+            /usr/local/bin/r36os-k1-hardware-snapshot \
+            /etc/systemd/system/r36os.service.d/98-k1-hardware-snapshot.conf \
+            /etc/systemd/system/batt_led.service.d/90-r36os-k1-skip.conf; do
+            exp="$(awk -v p="$p" '$2==p{print $1}' "$M")"
+            got="$(sha256sum "pkg/payload/root$p" | awk '{print $1}')"
+            test -n "$exp" && test "$exp" = "$got"
+          done
+          echo R56_CORE_MANIFEST=PASS
+
+      - name: Upload exact validated R56 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R56-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd
+            out-a/00-R36OS-Alpha5R56-K1HardwareSnapshotR1SingleFlight-FromR55.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            r56-build-a.log
+            r56-build-b.log
+          if-no-files-found: error
+          retention-days: 30
