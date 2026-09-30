@@ -29,13 +29,36 @@ new='''stage_new_modules(){
   rm -rf "$STAGE_BASE"; mkdir -p "$STAGE_BASE" || fail 69 modules-stage-create
   tar -tJf "$DST/modules.tar.xz" >/run/r36os-k1-modules-list.$$ 2>/dev/null || { rm -rf "$STAGE_BASE"; fail 70 modules-list; }
   if grep -Eq '(^/|(^|/)\.\.(/|$))' /run/r36os-k1-modules-list.$$; then rm -rf "$STAGE_BASE" /run/r36os-k1-modules-list.$$; fail 71 modules-path; fi
-  if tar -tvJf "$DST/modules.tar.xz" 2>/dev/null | awk 'substr($1,1,1)=="l" || substr($1,1,1)=="h" {bad=1} END{exit bad?0:1}'; then rm -rf "$STAGE_BASE" /run/r36os-k1-modules-list.$$; fail 72 modules-link; fi
-  rm -f /run/r36os-k1-modules-list.$$
+  # modules_install normally emits top-level build/source symlinks. Permit
+  # only those two inert build-time links in the authenticated archive; reject
+  # every hardlink, unexpected symlink, unsafe path, or nested member below
+  # either link. Both allowed symlinks are removed before runtime validation.
+  if tar -tvJf "$DST/modules.tar.xz" 2>/dev/null | awk -v root="$MODROOTNAME" '
+    {
+      typ=substr($1,1,1)
+      if (typ=="h") { bad=1; next }
+      if (typ=="l") {
+        n=split($0,a," -> "); left=a[1]
+        gsub(/^ +| +$/,"",left)
+        n=split(left,f,/ +/); p=f[n]
+        sub(/^\.\//,"",p)
+        if (p!=root"/build" && p!=root"/source") bad=1
+      }
+    }
+    END{exit bad?0:1}
+  '; then rm -rf "$STAGE_BASE" /run/r36os-k1-modules-list.$; fail 72 modules-link; fi
+  if grep -Eq "^${MODROOTNAME}/(build|source)/" /run/r36os-k1-modules-list.$; then rm -rf "$STAGE_BASE" /run/r36os-k1-modules-list.$; fail 72 modules-link-child; fi
+  rm -f /run/r36os-k1-modules-list.$
   progress RUNNING 52 "Extracting K1 modules" "Changed Wi-Fi module payload is staged beside the current tree"
   tar -xJf "$DST/modules.tar.xz" -C "$STAGE_BASE" >/dev/null 2>&1 || { rm -rf "$STAGE_BASE"; fail 73 modules-extract; }
-  progress RUNNING 68 "Verifying staged modules" "Checking count, bytes, modules.dep and metadata before activation"
+  progress RUNNING 68 "Verifying staged modules" "Removing inert build links, then checking count, bytes, modules.dep and metadata"
   [ -d "$STAGED_MODDST" ] || { rm -rf "$STAGE_BASE"; fail 74 modules-extracted-root; }
   [ ! -L "$STAGED_MODDST" ] || { rm -rf "$STAGE_BASE"; fail 75 modules-extracted-link; }
+  for p in "$STAGED_MODDST/build" "$STAGED_MODDST/source"; do
+    if [ -L "$p" ]; then rm -f "$p" || { rm -rf "$STAGE_BASE"; fail 75 modules-build-link-remove; }
+    elif [ -e "$p" ]; then rm -rf "$STAGE_BASE"; fail 75 modules-build-link-type
+    fi
+  done
   [ "$(find "$STAGED_MODDST" -type l -print -quit 2>/dev/null)" = "" ] || { rm -rf "$STAGE_BASE"; fail 75 modules-extracted-link; }
   FC="$(find "$STAGED_MODDST" -type f | wc -l | tr -d ' ')"; [ "$FC" = "$MODFILES" ] || { rm -rf "$STAGE_BASE"; fail 76 modules-file-count; }
   BY="$(find "$STAGED_MODDST" -type f -printf '%s\\n' | awk '{s+=$1} END{printf "%.0f",s}')"; [ "$BY" = "$MODBYTES" ] || { rm -rf "$STAGE_BASE"; fail 77 modules-byte-count; }
