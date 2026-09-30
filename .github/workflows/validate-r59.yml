@@ -153,6 +153,10 @@ jobs:
           grep -Fq 'stage_new_modules(){' r59-release/transform_prepare.py
           grep -Fq 'modules-backup-rename' r59-release/transform_prepare.py
           grep -Fq 'modules-new-readback' r59-release/transform_prepare.py
+          grep -Fq 'modules-build-link-remove' r59-release/transform_prepare.py
+          grep -Fq 'modules-build-link-type' r59-release/transform_prepare.py
+          grep -Fq 'archive contains unexpected symlink' r59-release/build_release.sh
+          grep -Fq 'archive contains hardlink' r59-release/build_release.sh
           grep -Fq 'mv "$OLD_MODDST" "$MODDST"' r59-release/transform_prepare.py
           grep -Fq "OLD_HOOK_SHA='6b7fcb76bbd989c24c74da3b59523198c5310f6598a51c2d0d5c4646dee7de43'" r59-release/transform_hook_candidate.py
           grep -Fq 'candidate_payload_change=modules-rtl8xxxu' r59-release/transform_hook_candidate.py
