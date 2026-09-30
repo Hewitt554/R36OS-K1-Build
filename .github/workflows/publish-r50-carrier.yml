@@ -1,0 +1,136 @@
+name: Publish R36OS Alpha 5R57 via verified carrier
+
+on:
+  push:
+    branches:
+      - work/r57-k1-controller-capability-ui-2026-09-30
+    paths:
+      - '.github/workflows/publish-r50-carrier.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      VALIDATION_RUN: '36691870962'
+      VALIDATION_ARTIFACT_ID: '11086426021'
+      VALIDATED_HEAD_SHA: fdca038cf005f70690425ef16d566db100045dc5
+      PREPUBLISH_MAIN_SHA: 2902041d2e01f21c4c5825c1611b87714dd6f70a
+      CARRIER_TAG: alpha5r48
+      NAME: 00-R36OS-Alpha5R57-K1InputCompat-FromR56.r36upd
+      EXPECTED_SHA: f059968b6f73acf52fe61527273fa74e34f4781ad96465ba9153b1d47d2460ee
+      EXPECTED_SIZE: '293568'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove validation lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$VALIDATION_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$VALIDATED_HEAD_SHA"
+          ART="$(gh api "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R57-audited-validation-candidate
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+
+      - name: Download exact validated R57 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/actions/artifacts/$VALIDATION_ARTIFACT_ID/zip" >candidate.zip
+          mkdir candidate
+          unzip -q candidate.zip -d candidate
+          PKG="$(find candidate -type f -name "$NAME" -print)"
+          SHA_FILE="$(find candidate -type f -name "$NAME.sha256" -print)"
+          LATEST="$(find candidate -type f -name latest.conf -print)"
+          REPORT="$(find candidate -type f -name RELEASE_REPORT.txt -print)"
+          for v in PKG SHA_FILE LATEST REPORT; do
+            p="${!v}"
+            test -n "$p" && test -f "$p"
+            echo "$v=$p" >>"$GITHUB_ENV"
+          done
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "$SHA_FILE"
+          grep -Fxq 'version=0.5.57.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.56.0' "$REPORT"
+          grep -Fxq 'candidate_id=4c70486f70ba16acf7437403' "$REPORT"
+          grep -Fxq 'r56_source_sha256=f96d11043eb989f5ba22c5ea54d46e9ef4ac9d11f1f3f14d0101fb33306c5818' "$REPORT"
+          grep -Fxq 'k1_binary_change=no' "$REPORT"
+          grep -Fxq 'candidate_id_change=no' "$REPORT"
+          grep -Fxq 'native_ui_change=no' "$REPORT"
+          grep -Fxq 'original_session_change=no' "$REPORT"
+          grep -Fxq 'k1_input_compat=yes' "$REPORT"
+          grep -Fxq 'k1_key_translation=yes' "$REPORT"
+          grep -Fxq 'legacy_direct_exec=yes' "$REPORT"
+
+      - name: Upload exact R57 package to carrier release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$CARRIER_TAG" --repo "$REPO" >/dev/null
+          if gh api "repos/$REPO/releases/tags/$CARRIER_TAG" | jq -e --arg n "$NAME" '.assets[] | select(.name==$n)' >/dev/null; then
+            echo "R57 asset already exists; verify instead of clobbering"
+          else
+            cp "$REPORT" /tmp/R57_RELEASE_REPORT.txt
+            gh release upload "$CARRIER_TAG" "$PKG" "$SHA_FILE" /tmp/R57_RELEASE_REPORT.txt --repo "$REPO"
+          fi
+
+      - name: Verify published asset bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL="$(gh api "repos/$REPO/releases/tags/$CARRIER_TAG")"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          SIZE="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .size')"
+          test -n "$ASSET_ID"
+          test "$SIZE" = "$EXPECTED_SIZE"
+          gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$ASSET_ID" >/tmp/r57.r36upd
+          test "$(stat -c %s /tmp/r57.r36upd)" = "$EXPECTED_SIZE"
+          test "$(sha256sum /tmp/r57.r36upd | awk '{print $1}')" = "$EXPECTED_SHA"
+          echo R57_CARRIER_ASSET_VERIFY=PASS
+
+      - name: Advance live channel R56 to R57
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$PREPUBLISH_MAIN_SHA"
+          git checkout -B publish-r57-main origin/main
+          cp "$LATEST" /tmp/r57-latest.conf
+          sed -i 's#/releases/download/alpha5r57/#/releases/download/alpha5r48/#' /tmp/r57-latest.conf
+          grep -Fxq 'version=0.5.57.0' /tmp/r57-latest.conf
+          grep -Fxq 'base_version=0.5.56.0' /tmp/r57-latest.conf
+          grep -Fxq "sha256=$EXPECTED_SHA" /tmp/r57-latest.conf
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" /tmp/r57-latest.conf
+          grep -Fxq "url=https://github.com/$REPO/releases/download/$CARRIER_TAG/$NAME" /tmp/r57-latest.conf
+          cp /tmp/r57-latest.conf r36os-release-channel/latest.conf
+          git config user.name 'R36OS Release Bot'
+          git config user.email 'r36os-release-bot@users.noreply.github.com'
+          git add r36os-release-channel/latest.conf
+          git diff --cached --check
+          git commit -m 'Publish Alpha 5R57 update channel via verified carrier asset'
+          CHANNEL_COMMIT="$(git rev-parse HEAD)"
+          echo "CHANNEL_COMMIT=$CHANNEL_COMMIT" >>"$GITHUB_ENV"
+          git push origin HEAD:main
+
+      - name: Verify live channel and preserve backup
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CHANNEL_COMMIT"
+          git show "$CHANNEL_COMMIT:r36os-release-channel/latest.conf" >/tmp/live.conf
+          cmp /tmp/live.conf /tmp/r57-latest.conf
+          git push origin "$CHANNEL_COMMIT:refs/heads/backup/r57-postpublish-verified-2026-09-30"
+          echo R57_PUBLISH=PASS
