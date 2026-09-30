@@ -1,6 +1,11 @@
 name: Validate R36OS Alpha 5R59
 
 on:
+  push:
+    branches:
+      - work/r59-k1-rtl8188eu-wifi-2026-09-30
+    paths:
+      - '.github/workflows/validate-r59.yml'
   workflow_dispatch:
 
 permissions:
