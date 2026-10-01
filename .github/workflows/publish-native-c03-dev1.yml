@@ -1,0 +1,114 @@
+name: Publish Native C03 Dev1 prerelease
+
+on:
+  push:
+    branches:
+      - work/native-c03-dev-delivery-2026-10-01
+    paths:
+      - '.github/workflows/publish-native-c03-dev1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      SOURCE_RUN: '36904408982'
+      SOURCE_ARTIFACT: '11182474031'
+      SOURCE_HEAD: '3fa8e740c00f55349369d0e032a486c3f5af3d18'
+      TAG: native-c03-dev1
+      NAME: 00-R36OS-Alpha5R60-C03Dev1-FromR60.r36upd
+      EXPECTED_SHA: 905b55550aafbad7a91f7c82fd3d58710f1d44018f060c692cde46a47c005e67
+      EXPECTED_SIZE: '71635937'
+      PUBLIC_MAIN: c1f582edf876349269b4212aa6a78f1387aa7ecc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove validated source artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$SOURCE_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .status)" = completed
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$SOURCE_HEAD"
+
+          ART="$(gh api "repos/$REPO/actions/artifacts/$SOURCE_ARTIFACT")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R60-C03Dev1-private-update
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+
+          MAIN="$(gh api "repos/$REPO/branches/main" --jq .commit.sha)"
+          test "$MAIN" = "$PUBLIC_MAIN"
+
+      - name: Download and verify exact package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir artifact
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$SOURCE_ARTIFACT/zip" >artifact.zip
+          unzip -q artifact.zip -d artifact
+
+          PKG="artifact/$NAME"
+          test -s "$PKG"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "artifact/$NAME.sha256"
+
+          mkdir audit
+          tar -xzf "$PKG" -C audit
+          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
+          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.60.1
+          test "$(awk -F= '$1=="developer_only"{print $2}' audit/manifest.conf)" = yes
+          test "$(awk -F= '$1=="public_channel_change"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="auto_stage"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="auto_arm"{print $2}' audit/manifest.conf)" = no
+          test "$(awk -F= '$1=="auto_boot"{print $2}' audit/manifest.conf)" = no
+
+      - name: Publish or replace developer prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete-asset "$TAG" "$NAME" --repo "$REPO" -y 2>/dev/null || true
+            gh release delete-asset "$TAG" "$NAME.sha256" --repo "$REPO" -y 2>/dev/null || true
+            gh release delete-asset "$TAG" "C03DEV_DELIVERY_REPORT.txt" --repo "$REPO" -y 2>/dev/null || true
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --target "$SOURCE_HEAD" \
+              --title "Native R36OS C03 Dev1 — physical Boot Once test" \
+              --prerelease \
+              --notes "Developer-only physical test build. Base: Alpha 5R60 / 0.5.60.0. Target: 0.5.60.1. Native candidate: 8f8eaa3bae6ad4352b4e01ef. This release does not change the public latest.conf channel and does not automatically stage, arm, or boot the native root."
+          fi
+
+          gh release upload "$TAG" \
+            "artifact/$NAME" \
+            "artifact/$NAME.sha256" \
+            "artifact/C03DEV_DELIVERY_REPORT.txt" \
+            --repo "$REPO" --clobber
+
+      - name: Verify remote prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json isPrerelease,tagName,assets >release.json
+          test "$(jq -r .isPrerelease release.json)" = true
+          test "$(jq -r .tagName release.json)" = "$TAG"
+          jq -e --arg n "$NAME" '.assets[] | select(.name==$n)' release.json >/dev/null
+          jq -e --arg n "$NAME.sha256" '.assets[] | select(.name==$n)' release.json >/dev/null
+          jq -e --arg n "C03DEV_DELIVERY_REPORT.txt" '.assets[] | select(.name==$n)' release.json >/dev/null
+
+          MAIN="$(gh api "repos/$REPO/branches/main" --jq .commit.sha)"
+          test "$MAIN" = "$PUBLIC_MAIN"
+          echo C03DEV_PRERELEASE_PUBLISH=PASS
