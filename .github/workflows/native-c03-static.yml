@@ -1,0 +1,199 @@
+name: Validate Native R36OS Chapter 3 static safety
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - 'native-r36os/c03/**'
+      - '.github/workflows/native-c03-static.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      LINEAGE_ARTIFACT_ID: '11155008267'
+      CURRENT_HOOK_SHA: e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c
+      LEGACY_HOOK_SHA: b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e
+      R54_UINITRD_SHA: 023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
+      TEST_NID: 0123456789abcdef01234567
+      TEST_ROOTFS_SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static source checks
+        run: |
+          set -euo pipefail
+          bash -n native-r36os/c03/build_initramfs.sh
+          bash -n native-r36os/c03/build_c03_bundle.sh
+          bash -n native-r36os/c03/r36os-native-c03-install-hook
+          bash -n native-r36os/c03/r36os-native-c03-prepare
+          bash -n native-r36os/c03/overlay/usr/local/bin/r36os-native-c03-health
+          python3 -m py_compile \
+            native-r36os/c03/wrap_uinitrd.py \
+            native-r36os/c03/transform_hook.py \
+            native-r36os/c03/validate_boot_model.py
+
+          S=native-r36os/c03/r36os-native-c03-prepare
+          grep -Fq '"$K1PREP" stage-only' "$S"
+          grep -Fq 'verify_no_k1_pending || fail' "$S"
+          grep -Fq '"$MAINT" marker-open' "$S"
+          grep -Fq '"$MAINT" marker-close-unmounted' "$S"
+          grep -Fq '# The request is the FINAL boot-affecting write.' "$S"
+          grep -Fq 'mv -f "$REQ.tmp" "$REQ"' "$S"
+          grep -Fq '.rootfs.stage-' "$S"
+          grep -Fq '.rootfs.previous-' "$S"
+          grep -Fq 'rootfs-files.sha256' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)([;&|[:space:]]|$)' "$S"
+          ! grep -Fq 'R36OS_CP06_UNLOCK' "$S"
+
+          I=native-r36os/c03/src/native_init.c
+          grep -Fq 'r36os.kernel_attempt=' "$I"
+          grep -Fq 'NATIVE_C03' "$I"
+          grep -Fq 'r36os.native_rootfs_sha=' "$I"
+          grep -Fq 'staged rootfs SHA mismatch' "$I"
+          grep -Fq 'native root candidate mismatch' "$I"
+          grep -Fq 'Power-cycle to return to the untouched legacy boot path.' "$I"
+
+          ! grep -ERqi 'ArkOS|PortMaster|Crusty|Bifrost-r13p0|libMali' native-r36os/c03
+          echo C03_STATIC_SOURCE=PASS
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld cpio gzip u-boot-tools file binutils
+          clang --version | head -1
+          ld.lld --version | head -1
+
+      - name: Download exact proven lineage artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$LINEAGE_ARTIFACT_ID/zip" >lineage.zip
+          mkdir lineage
+          unzip -q lineage.zip -d lineage
+          test "$(sha256sum lineage/uInitrd | awk '{print $1}')" = "$R54_UINITRD_SHA"
+          test "$(sha256sum lineage/hooked-boot.ini | awk '{print $1}')" = "$CURRENT_HOOK_SHA"
+          echo C03_LINEAGE_INPUTS=PASS
+
+      - name: Build native initramfs twice
+        run: |
+          set -euo pipefail
+          bash native-r36os/c03/build_initramfs.sh lineage/uInitrd init-a
+          bash native-r36os/c03/build_initramfs.sh lineage/uInitrd init-b
+          cmp init-a/uInitrd init-b/uInitrd
+          cmp init-a/initramfs-root/init init-b/initramfs-root/init
+          file init-a/initramfs-root/init | tee init-file.txt
+          grep -Eq 'ARM aarch64|ARM64' init-file.txt
+          grep -Eq 'statically linked|static-pie linked' init-file.txt
+          dumpimage -l init-a/uInitrd | tee uinitrd-info.txt
+          grep -Fq 'Image Type:' uinitrd-info.txt
+          echo C03_INITRAMFS_REPRODUCIBLE=PASS
+
+      - name: Transform exact hook and validate state model
+        run: |
+          set -euo pipefail
+          python3 native-r36os/c03/transform_hook.py \
+            lineage/hooked-boot.ini "$TEST_NID" "$TEST_ROOTFS_SHA" \
+            generated-boot.ini generated-hook.conf
+
+          grep -Fxq "native_candidate=$TEST_NID" generated-hook.conf
+          grep -Fxq "rootfs_sha256=$TEST_ROOTFS_SHA" generated-hook.conf
+          grep -Fxq "previous_hook_sha256=$CURRENT_HOOK_SHA" generated-hook.conf
+
+          python3 native-r36os/c03/validate_boot_model.py \
+            lineage/hooked-boot.ini generated-boot.ini "$TEST_NID" "$TEST_ROOTFS_SHA"
+
+          cp lineage/hooked-boot.ini mutated-current.ini
+          printf '\n# drift\n' >>mutated-current.ini
+          if python3 native-r36os/c03/transform_hook.py \
+              mutated-current.ini "$TEST_NID" "$TEST_ROOTFS_SHA" /tmp/x /tmp/y; then
+            echo 'transform accepted drifted current hook' >&2
+            exit 30
+          fi
+          echo C03_HOOK_MODEL=PASS
+
+      - name: Transactionally test hook installer
+        run: |
+          set -euo pipefail
+          mkdir -p install-test/recovery
+          cp lineage/hooked-boot.ini install-test/boot.ini
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('lineage/hooked-boot.ini')
+          s=p.read_text()
+          a=s.index('# R36OS-K1-BOOT-ONCE-HOOK\n')
+          end='# R36OS-K1-BOOT-ONCE-HOOK-END\n'
+          b=s.index(end,a)+len(end)
+          while b < len(s) and s[b]=='\n':
+              b+=1
+          legacy=(s[:a]+s[b:]).encode()
+          h=hashlib.sha256(legacy).hexdigest()
+          assert h=='b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e', h
+          Path('install-test/recovery/boot.ini.legacy.'+h).write_bytes(legacy)
+          PY
+
+          R36OS_LEGACY_BOOT="$PWD/install-test/boot.ini" \
+          R36OS_KERNEL_RECOVERY_DIR="$PWD/install-test/recovery" \
+            bash native-r36os/c03/r36os-native-c03-install-hook \
+              "$PWD/generated-boot.ini" "$PWD/generated-hook.conf"
+
+          NEW_SHA="$(awk -F= '$1=="hooked_boot_sha256"{print $2}' generated-hook.conf)"
+          test "$(sha256sum install-test/boot.ini | awk '{print $1}')" = "$NEW_SHA"
+
+          R36OS_LEGACY_BOOT="$PWD/install-test/boot.ini" \
+          R36OS_KERNEL_RECOVERY_DIR="$PWD/install-test/recovery" \
+            bash native-r36os/c03/r36os-native-c03-install-hook \
+              "$PWD/generated-boot.ini" "$PWD/generated-hook.conf" \
+              | grep -Fq 'status=ALREADY_INSTALLED'
+
+          cp lineage/hooked-boot.ini install-test/unknown.ini
+          printf '# unknown drift\n' >>install-test/unknown.ini
+          if R36OS_LEGACY_BOOT="$PWD/install-test/unknown.ini" \
+             R36OS_KERNEL_RECOVERY_DIR="$PWD/install-test/recovery" \
+             bash native-r36os/c03/r36os-native-c03-install-hook \
+               "$PWD/generated-boot.ini" "$PWD/generated-hook.conf"; then
+            echo 'installer accepted unknown active boot.ini' >&2
+            exit 31
+          fi
+
+          rm -rf install-test/no-backup
+          mkdir -p install-test/no-backup
+          cp lineage/hooked-boot.ini install-test/no-backup/boot.ini
+          if R36OS_LEGACY_BOOT="$PWD/install-test/no-backup/boot.ini" \
+             R36OS_KERNEL_RECOVERY_DIR="$PWD/install-test/no-backup/recovery" \
+             bash native-r36os/c03/r36os-native-c03-install-hook \
+               "$PWD/generated-boot.ini" "$PWD/generated-hook.conf"; then
+            echo 'installer accepted missing legacy recovery copy' >&2
+            exit 32
+          fi
+          echo C03_HOOK_INSTALL_TRANSACTION=PASS
+
+      - name: Upload static evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C03-static-safety
+          path: |
+            generated-boot.ini
+            generated-hook.conf
+            init-a/uInitrd
+            init-a/SHA256SUMS.txt
+            init-a/VALIDATION.txt
+            uinitrd-info.txt
+          if-no-files-found: error
+          retention-days: 30
