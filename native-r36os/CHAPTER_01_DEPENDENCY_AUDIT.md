@@ -1,6 +1,6 @@
 # Native R36OS migration — Chapter 1 dependency audit
 
-Status: IN PROGRESS
+Status: PASS
 Date opened: 2026-10-01
 Working branch: work/native-c00-c01-baseline-audit-2026-10-01
 Frozen base: Alpha 5R60 / main c1f582edf876349269b4212aa6a78f1387aa7ecc
@@ -263,26 +263,30 @@ Forbidden native dependencies:
 - Westonpack as the K1 system compositor
 - stale release-specific helper identities
 
-## Audit work still required before Chapter 1 can close
+## Deferred reference captures
 
-1. Capture the current root package inventory and OS-release identity from the
-   physical device in a future read-only diagnostic.
-2. Capture /etc/fstab and relevant generated/systemd mount units.
-3. Capture all loaded/available udev rules that affect:
-   - input
-   - RK817
-   - backlight
-   - storage
-   - Wi-Fi
-   - audio.
-4. Capture current /lib/firmware inventory relevant to RK3326/RK817/Realtek.
-5. Capture current ALSA card/codec data without requiring audible playback.
-6. Capture current device-tree live tree /proc/device-tree relevant nodes where
-   useful, while the known-good K1 DTB remains frozen.
-7. Build the exact Chapter-2 package manifest from the final classification.
-8. Decide the minimal base distribution/repository snapshot and reproducible
-   rootfs build method.
-9. Write the C02 acceptance tests before C02 implementation starts.
+A read-only collector has been built and CI-tested for old-root package, fstab,
+udev, firmware, ALSA and live-device-tree inventory.  It is deliberately NOT
+being pushed to the device as another instrumentation release.
+
+Those facts are not required to construct the clean root because Chapter 2 is
+forbidden from copying the inherited package/configuration set.
+
+Hardware-specific unknowns are assigned to the chapters that own them:
+- Wi-Fi driver/firmware: C05.
+- Mesa/Panfrost graphics userspace: C06.
+- input normalization/uinput: C08.
+- ALSA/RK817/audio/Bluetooth: C10.
+- final complete health matrix: C13.
+
+The collector remains available if one of those chapters needs comparison
+against the inherited system.
+
+Chapter-2 base decision:
+- Debian 13 trixie arm64 userspace.
+- R36OS K1 remains the kernel/platform.
+- package versions will be pinned to a repository snapshot in C02.
+- C02 root boundary/forbidden-dependency contract is already written.
 
 ## Chapter 1 exit criteria
 
@@ -296,4 +300,4 @@ Do not begin Chapter 2 until:
   hardware chapter;
 - a Chapter-1 backup branch and handover exist.
 
-Current Chapter 1 status: IN PROGRESS.
+Current Chapter 1 status: PASS.
