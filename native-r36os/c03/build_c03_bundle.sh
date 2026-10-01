@@ -89,6 +89,10 @@ ROOTFS_BYTES="$(stat -c %s "$BUNDLE/rootfs.tar.zst")"
 ROOTFS_KB="$(du -sk "$ROOT" | awk '{print $1}')"
 
 cp "$WORK/init-a/uInitrd" "$BUNDLE/uInitrd"
+cp "$CURRENT_HOOK" "$BUNDLE/previous-hooked-boot.ini"
+cp "$HERE/r36os-native-c03-install-hook" "$BUNDLE/r36os-native-c03-install-hook"
+cp "$HERE/r36os-native-c03-prepare" "$BUNDLE/r36os-native-c03-prepare"
+chmod 0755 "$BUNDLE/r36os-native-c03-install-hook" "$BUNDLE/r36os-native-c03-prepare"
 python3 "$HERE/transform_hook.py" "$CURRENT_HOOK" "$NATIVE_ID" "$ROOTFS_SHA" \
   "$BUNDLE/hooked-boot.ini" "$BUNDLE/hook.conf"
 
@@ -106,6 +110,9 @@ rootfs_files_sha256=$(sha "$BUNDLE/rootfs-files.sha256")
 uinitrd_sha256=$UINITRD_SHA
 hooked_boot_sha256=$(sha "$BUNDLE/hooked-boot.ini")
 previous_hook_sha256=$CURRENT_HOOK_SHA
+previous_hook_file_sha256=$(sha "$BUNDLE/previous-hooked-boot.ini")
+prepare_sha256=$(sha "$BUNDLE/r36os-native-c03-prepare")
+install_hook_sha256=$(sha "$BUNDLE/r36os-native-c03-install-hook")
 native_request=R36OS-NativeNext/C03/boot-native.$NATIVE_ID.once
 native_consumed=R36N3.CNS
 EOF
@@ -113,7 +120,7 @@ EOF
 # Bundle manifest covers every production input.
 (
   cd "$BUNDLE"
-  sha256sum rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini hook.conf C03_READY.conf
+  sha256sum rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini previous-hooked-boot.ini hook.conf C03_READY.conf r36os-native-c03-install-hook r36os-native-c03-prepare
 ) >"$BUNDLE/MANIFEST.sha256"
 
 # Re-open and verify the root identity and health enablement.
@@ -123,6 +130,9 @@ grep -Fq 'R36OS_VERSION="Native Prototype C03"' "$WORK/verify/etc/r36os-release"
 grep -Fxq "native_candidate=$NATIVE_ID" "$WORK/verify/etc/r36os-native-c03.conf"
 test -L "$WORK/verify/etc/systemd/system/multi-user.target.wants/r36os-native-c03-health.service"
 bash -n "$WORK/verify/usr/local/bin/r36os-native-c03-health"
+bash -n "$BUNDLE/r36os-native-c03-install-hook"
+bash -n "$BUNDLE/r36os-native-c03-prepare"
+test "$(sha "$BUNDLE/previous-hooked-boot.ini")" = "$CURRENT_HOOK_SHA"
 (cd "$WORK/verify" && sha256sum -c "$BUNDLE/rootfs-files.sha256" >/dev/null)
 (cd "$BUNDLE" && sha256sum -c MANIFEST.sha256 >/dev/null)
 
