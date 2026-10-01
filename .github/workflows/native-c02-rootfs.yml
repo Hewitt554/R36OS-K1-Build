@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            mmdebstrap qemu-user-static binfmt-support debian-archive-keyring zstd
+            mmdebstrap qemu-user-static binfmt-support arch-test debian-archive-keyring zstd
           sudo update-binfmts --enable qemu-aarch64 || true
           mmdebstrap --version
           qemu-aarch64-static --version | head -1 || true
