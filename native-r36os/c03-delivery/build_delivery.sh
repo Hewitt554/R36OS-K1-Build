@@ -33,8 +33,8 @@ test "$(sha "$R60")" = "$R60_SHA" || fail r60-sha
 test "$(sha "$R58SRC")" = "$R58_SOURCE_SHA" || fail r58-source-sha
 tar -xzf "$R60" -C "$WORK/base"
 (cd "$WORK/base" && sha256sum -c checksums.sha256 >/dev/null)
-test "$(awk -F= '$1==\"version\"{print $2}' "$WORK/base/manifest.conf")" = 0.5.60.0 || fail r60-version
-test "$(awk -F= '$1==\"base_version\"{print $2}' "$WORK/base/manifest.conf")" = 0.5.59.0 || fail r60-base-version
+test "$(awk -F= '$1=="version"{print $2}' "$WORK/base/manifest.conf")" = 0.5.60.0 || fail r60-version
+test "$(awk -F= '$1=="base_version"{print $2}' "$WORK/base/manifest.conf")" = 0.5.59.0 || fail r60-base-version
 
 BASE="$WORK/base/payload/root"
 test -s "$BASE/etc/r36os-core-manifest.sha256" || fail missing-r60-core-manifest
@@ -107,10 +107,10 @@ bash -n "$C03/r36os-native-c03-prepare"
   sha256sum rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini previous-hooked-boot.ini hook.conf C03_READY.conf r36os-native-c03-install-hook r36os-native-c03-prepare >MANIFEST.sha256
   sha256sum -c MANIFEST.sha256 >/dev/null
 )
-test "$(awk -F= '$1==\"native_candidate\"{print $2}' "$C03/C03_READY.conf")" = "$C03_NID" || fail c03-candidate
-test "$(awk -F= '$1==\"k1_candidate\"{print $2}' "$C03/C03_READY.conf")" = "$K1_CID" || fail c03-k1-candidate
-test "$(awk -F= '$1==\"kernel_release\"{print $2}' "$C03/C03_READY.conf")" = "$KREL" || fail c03-krel
-test "$(awk -F= '$1==\"rootfs_sha256\"{print $2}' "$C03/C03_READY.conf")" = "$C03_ROOT_SHA" || fail c03-ready-root
+test "$(awk -F= '$1=="native_candidate"{print $2}' "$C03/C03_READY.conf")" = "$C03_NID" || fail c03-candidate
+test "$(awk -F= '$1=="k1_candidate"{print $2}' "$C03/C03_READY.conf")" = "$K1_CID" || fail c03-k1-candidate
+test "$(awk -F= '$1=="kernel_release"{print $2}' "$C03/C03_READY.conf")" = "$KREL" || fail c03-krel
+test "$(awk -F= '$1=="rootfs_sha256"{print $2}' "$C03/C03_READY.conf")" = "$C03_ROOT_SHA" || fail c03-ready-root
 grep -Fxq 'EXPECTED_VERSION=0.5.60.1' "$C03/r36os-native-c03-prepare" || fail c03-version-gate
 ! grep -Fq 'EXPECTED_VERSION=0.5.60.0' "$C03/r36os-native-c03-prepare" || fail c03-stale-version-gate
 
@@ -243,9 +243,9 @@ EOF
 rm -rf "$WORK/audit"; mkdir -p "$WORK/audit"
 tar -xzf "$OUT/$NAME" -C "$WORK/audit"
 (cd "$WORK/audit" && sha256sum -c checksums.sha256 >/dev/null)
-test "$(awk -F= '$1==\"version\"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.1
-test "$(awk -F= '$1==\"base_version\"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.0
-test "$(awk -F= '$1==\"auto_arm\"{print $2}' "$WORK/audit/manifest.conf")" = no
-test "$(awk -F= '$1==\"auto_boot\"{print $2}' "$WORK/audit/manifest.conf")" = no
+test "$(awk -F= '$1=="version"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.1
+test "$(awk -F= '$1=="base_version"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.0
+test "$(awk -F= '$1=="auto_arm"{print $2}' "$WORK/audit/manifest.conf")" = no
+test "$(awk -F= '$1=="auto_boot"{print $2}' "$WORK/audit/manifest.conf")" = no
 
 echo "C03DEV_DELIVERY_BUILD=PASS package=$NAME size=$PKG_SIZE sha256=$PKG_SHA ui_sha256=$(sha "$ROOT/usr/local/bin/r36os-alpha5")"
