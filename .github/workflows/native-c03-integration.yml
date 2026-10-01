@@ -1,0 +1,321 @@
+name: Validate Native R36OS Chapter 3 integration
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - '.github/workflows/native-c03-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      C02_RUN: '36853590230'
+      C02_ARTIFACT_ID: '11157737003'
+      C02_HEAD: 182f51989b457ff30cce26f4305f6785d3d1c70c
+      C02_SHA: 42eec8dc524fcd821d0919bb3d185a3a0894f5bbf48fa0bf36d0a3834b454fac
+      C02_SIZE: '71184225'
+      LINEAGE_RUN: '36850324460'
+      LINEAGE_ARTIFACT_ID: '11155008267'
+      LINEAGE_HEAD: ce7529433298274aa60a1ecdc0c909f529f7e131
+      STATIC_RUN: '36856092673'
+      STATIC_ARTIFACT_ID: '11157833187'
+      STATIC_HEAD: ae9e142f82343963df23e8f434b0720878977dca
+      CURRENT_HOOK_SHA: e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c
+      LEGACY_HOOK_SHA: b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e
+      R54_UINITRD_SHA: 023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
+      K1_CID: 9d7bd2334f315d98b482f850
+      KREL: 6.12.94-r36os-k1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove prerequisite validation lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prove_run(){
+            id="$1"; head="$2"
+            j="$(gh api "repos/$REPO/actions/runs/$id")"
+            test "$(printf '%s' "$j" | jq -r .status)" = completed
+            test "$(printf '%s' "$j" | jq -r .conclusion)" = success
+            test "$(printf '%s' "$j" | jq -r .head_sha)" = "$head"
+          }
+          prove_run "$C02_RUN" "$C02_HEAD"
+          prove_run "$LINEAGE_RUN" "$LINEAGE_HEAD"
+          prove_run "$STATIC_RUN" "$STATIC_HEAD"
+
+          test "$(gh api "repos/$REPO/actions/artifacts/$C02_ARTIFACT_ID" --jq .name)" = R36OS-Native-C02-rootfs
+          test "$(gh api "repos/$REPO/actions/artifacts/$LINEAGE_ARTIFACT_ID" --jq .name)" = R36OS-Native-C03-proven-lineage
+          test "$(gh api "repos/$REPO/actions/artifacts/$STATIC_ARTIFACT_ID" --jq .name)" = R36OS-Native-C03-static-safety
+
+          git diff --name-only "$STATIC_HEAD"...HEAD >/tmp/c03-post-static-files.txt
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            case "$p" in
+              .github/workflows/native-c03-integration.yml) ;;
+              *) echo "unexpected post-static source change: $p" >&2; exit 20;;
+            esac
+          done </tmp/c03-post-static-files.txt
+          echo C03_PREREQUISITE_LINEAGE=PASS
+
+      - name: Install integration build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld cpio gzip u-boot-tools file binutils zstd
+          echo C03_BUILD_TOOLS=PASS
+
+      - name: Download exact C02 and boot-lineage artifacts
+        env:
+          GH_TOKEN: __TOKEN__
+        run: |
+          set -euo pipefail
+          mkdir c02 lineage
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$C02_ARTIFACT_ID/zip" >c02.zip
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$LINEAGE_ARTIFACT_ID/zip" >lineage.zip
+          unzip -q c02.zip -d c02
+          unzip -q lineage.zip -d lineage
+
+          C02_ROOTFS="$(find c02 -type f -name r36os-native-c02-rootfs.tar.zst -print)"
+          C02_VALID="$(find c02 -type f -name C02_VALIDATION.conf -print)"
+          test "$(printf '%s\n' "$C02_ROOTFS" | sed '/^$/d' | wc -l)" -eq 1
+          test "$(printf '%s\n' "$C02_VALID" | sed '/^$/d' | wc -l)" -eq 1
+          test "$(sha256sum "$C02_ROOTFS" | awk '{print $1}')" = "$C02_SHA"
+          test "$(stat -c %s "$C02_ROOTFS")" = "$C02_SIZE"
+          grep -Fxq 'status=PASS' "$C02_VALID"
+          grep -Fxq "archive_sha256=$C02_SHA" "$C02_VALID"
+
+          test "$(sha256sum lineage/uInitrd | awk '{print $1}')" = "$R54_UINITRD_SHA"
+          test "$(sha256sum lineage/hooked-boot.ini | awk '{print $1}')" = "$CURRENT_HOOK_SHA"
+
+          echo "C02_ROOTFS=$C02_ROOTFS" >>"$GITHUB_ENV"
+          echo C03_EXACT_INPUTS=PASS
+
+      - name: Build complete C03 candidate twice
+        run: |
+          set -euo pipefail
+          sudo bash native-r36os/c03/build_c03_bundle.sh \
+            "$C02_ROOTFS" lineage/uInitrd lineage/hooked-boot.ini "$PWD/c03-a"
+          sudo chown -R "$USER:$USER" c03-a
+
+          sudo bash native-r36os/c03/build_c03_bundle.sh \
+            "$C02_ROOTFS" lineage/uInitrd lineage/hooked-boot.ini "$PWD/c03-b"
+          sudo chown -R "$USER:$USER" c03-b
+
+          diff -u c03-a/C03_BUILD.conf c03-b/C03_BUILD.conf
+          diff -qr c03-a/bundle c03-b/bundle
+          find c03-a/bundle -type f -printf '%P\n' | LC_ALL=C sort >/tmp/c03-files.txt
+          while IFS= read -r p; do
+            cmp "c03-a/bundle/$p" "c03-b/bundle/$p"
+          done </tmp/c03-files.txt
+          echo C03_DETERMINISTIC_BUILD=PASS
+
+      - name: Audit complete C03 bundle
+        run: |
+          set -euo pipefail
+          B=c03-a/bundle
+          (cd "$B" && sha256sum -c MANIFEST.sha256)
+
+          NID="$(awk -F= '$1=="native_candidate"{print $2}' "$B/C03_READY.conf")"
+          ROOTFS_SHA="$(awk -F= '$1=="rootfs_sha256"{print $2}' "$B/C03_READY.conf")"
+          UINITRD_SHA="$(awk -F= '$1=="uinitrd_sha256"{print $2}' "$B/C03_READY.conf")"
+          HOOK_SHA="$(awk -F= '$1=="hooked_boot_sha256"{print $2}' "$B/C03_READY.conf")"
+
+          echo "$NID" | grep -Eq '^[0-9a-f]{24}$'
+          echo "$ROOTFS_SHA" | grep -Eq '^[0-9a-f]{64}$'
+          echo "$UINITRD_SHA" | grep -Eq '^[0-9a-f]{64}$'
+          echo "$HOOK_SHA" | grep -Eq '^[0-9a-f]{64}$'
+
+          test "$(sha256sum "$B/rootfs.tar.zst" | awk '{print $1}')" = "$ROOTFS_SHA"
+          test "$(sha256sum "$B/uInitrd" | awk '{print $1}')" = "$UINITRD_SHA"
+          test "$(sha256sum "$B/hooked-boot.ini" | awk '{print $1}')" = "$HOOK_SHA"
+          test "$(sha256sum "$B/previous-hooked-boot.ini" | awk '{print $1}')" = "$CURRENT_HOOK_SHA"
+
+          grep -Fxq "native_candidate=$NID" "$B/hook.conf"
+          grep -Fxq "rootfs_sha256=$ROOTFS_SHA" "$B/hook.conf"
+          grep -Fxq "previous_hook_sha256=$CURRENT_HOOK_SHA" "$B/hook.conf"
+          grep -Fxq 'existing_k1_hook_preserved=yes' "$B/hook.conf"
+          grep -Fxq 'legacy_boot_preserved=yes' "$B/hook.conf"
+
+          test ! -e "$B/Image"
+          test ! -e "$B/rk3326-r36s-k1.dtb"
+          test ! -e "$B/modules.tar.xz"
+          test "$(find "$B" -maxdepth 1 \( -type f -o -type l \) \( -name '*.dtb' -o -name 'Image' -o -name 'modules.tar.xz' \) | wc -l)" -eq 0
+
+          bash -n "$B/r36os-native-c03-prepare"
+          bash -n "$B/r36os-native-c03-install-hook"
+          python3 native-r36os/c03/validate_prepare_model.py "$B/r36os-native-c03-prepare"
+          python3 native-r36os/c03/validate_boot_model.py \
+            "$B/previous-hooked-boot.ini" "$B/hooked-boot.ini" "$NID" "$ROOTFS_SHA"
+
+          echo "C03_NID=$NID" >>"$GITHUB_ENV"
+          echo "C03_ROOTFS_SHA=$ROOTFS_SHA" >>"$GITHUB_ENV"
+          echo "C03_UINITRD_SHA=$UINITRD_SHA" >>"$GITHUB_ENV"
+          echo "C03_HOOK_SHA=$HOOK_SHA" >>"$GITHUB_ENV"
+          echo C03_BUNDLE_AUDIT=PASS
+
+      - name: Audit native C03 rootfs contents
+        run: |
+          set -euo pipefail
+          B=c03-a/bundle
+          mkdir inspect
+          sudo tar --zstd -xf "$B/rootfs.tar.zst" -C inspect
+          sudo chown -R "$USER:$USER" inspect
+
+          file inspect/usr/lib/systemd/systemd | tee c03-systemd-file.txt
+          grep -Eq 'ARM aarch64|ARM64' c03-systemd-file.txt
+          test -e inspect/sbin/init
+          test -x inspect/usr/lib/systemd/systemd
+          test -x inspect/usr/bin/systemctl
+          test -x inspect/usr/bin/journalctl
+          test -x inspect/usr/bin/udevadm
+
+          grep -Fq 'R36OS_VERSION="Native Prototype C03"' inspect/etc/r36os-release
+          grep -Fxq "native_candidate=$C03_NID" inspect/etc/r36os-native-c03.conf
+          grep -Fxq "k1_candidate=$K1_CID" inspect/etc/r36os-native-c03.conf
+          grep -Fxq "kernel_release=$KREL" inspect/etc/r36os-native-c03.conf
+          test -L inspect/etc/systemd/system/multi-user.target.wants/r36os-native-c03-health.service
+          bash -n inspect/usr/local/bin/r36os-native-c03-health
+
+          dpkg-query --admindir="$PWD/inspect/var/lib/dpkg" -W \
+            -f='${binary:Package}\t${Version}\t${Architecture}\n' \
+            | LC_ALL=C sort >c03-packages.tsv
+          python3 native-r36os/c02/forbidden_scan.py inspect \
+            --packages c03-packages.tsv --report c03-forbidden-scan.txt
+          grep -Fxq 'R36OS_NATIVE_C02_FORBIDDEN_SCAN=PASS' c03-forbidden-scan.txt
+
+          test ! -e inspect/opt/system/Tools/PortMaster
+          test ! -e inspect/opt/tools/PortMaster
+          test ! -e inspect/roms/ports/PortMaster
+          test "$(find inspect \( -iname '*libMali*' -o -iname '*libcrusty*' \) | wc -l)" -eq 0
+          test "$(find inspect \( -name 'westonwrap.sh' -o -name 'weston_pkg.squashfs' \) | wc -l)" -eq 0
+          ! grep -Eqi '^(weston|xwayland|wine|wine64|wine32|box64|steam|emulationstation)\t' c03-packages.tsv
+
+          (cd inspect && sha256sum -c "$OLDPWD/$B/rootfs-files.sha256" >/dev/null)
+          echo C03_NATIVE_ROOT_AUDIT=PASS
+
+      - name: Unpack and audit C03 initramfs
+        run: |
+          set -euo pipefail
+          B=c03-a/bundle
+          mkdir initrd-audit
+          dumpimage -l "$B/uInitrd" | tee initrd-audit/dumpimage.txt
+          dumpimage -T ramdisk -p 0 -o initrd-audit/payload.gz "$B/uInitrd"
+          gzip -dc initrd-audit/payload.gz >initrd-audit/initramfs.cpio
+          mkdir initrd-audit/root
+          (
+            cd initrd-audit/root
+            cpio -idmu --no-absolute-filenames <../initramfs.cpio >/dev/null 2>&1
+          )
+          test -x initrd-audit/root/init
+          file initrd-audit/root/init | tee initrd-audit/init-file.txt
+          grep -Eq 'ARM aarch64|ARM64' initrd-audit/init-file.txt
+          grep -Eq 'statically linked|static-pie linked' initrd-audit/init-file.txt
+          INIT_SHA="$(sha256sum initrd-audit/root/init | awk '{print $1}')"
+          test "$INIT_SHA" = "$(awk -F= '$1=="init_sha256"{print $2}' c03-a/C03_BUILD.conf)"
+          strings initrd-audit/root/init | grep -Fq 'R36OS-NATIVE:'
+          strings initrd-audit/root/init | grep -Fq 'staged rootfs SHA mismatch'
+          strings initrd-audit/root/init | grep -Fq 'Power-cycle to return to the untouched legacy boot path.'
+          echo "C03_INIT_SHA=$INIT_SHA" >>"$GITHUB_ENV"
+          echo C03_INITRAMFS_AUDIT=PASS
+
+      - name: Re-test production hook installer
+        run: |
+          set -euo pipefail
+          B=c03-a/bundle
+          mkdir -p hook-test/recovery
+          cp "$B/previous-hooked-boot.ini" hook-test/boot.ini
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('c03-a/bundle/previous-hooked-boot.ini')
+          s=p.read_text()
+          begin='# R36OS-K1-BOOT-ONCE-HOOK\n'
+          end='# R36OS-K1-BOOT-ONCE-HOOK-END\n'
+          a=s.index(begin); b=s.index(end,a)+len(end)
+          while b < len(s) and s[b]=='\n': b+=1
+          legacy=(s[:a]+s[b:]).encode()
+          h=hashlib.sha256(legacy).hexdigest()
+          assert h=='b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e',h
+          Path('hook-test/recovery/boot.ini.legacy.'+h).write_bytes(legacy)
+          PY
+
+          R36OS_LEGACY_BOOT="$PWD/hook-test/boot.ini" \
+          R36OS_KERNEL_RECOVERY_DIR="$PWD/hook-test/recovery" \
+            bash "$B/r36os-native-c03-install-hook" \
+              "$PWD/$B/hooked-boot.ini" "$PWD/$B/hook.conf"
+
+          test "$(sha256sum hook-test/boot.ini | awk '{print $1}')" = "$C03_HOOK_SHA"
+          echo C03_PRODUCTION_HOOK_INSTALL=PASS
+
+      - name: Prove bundle corruption fails closed
+        run: |
+          set -euo pipefail
+          cp -a c03-a/bundle corrupt-bundle
+          printf X >>corrupt-bundle/rootfs.tar.zst
+          if (cd corrupt-bundle && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1); then
+            echo 'corrupted production bundle still passed manifest' >&2
+            exit 40
+          fi
+          echo C03_CORRUPTION_REJECTION=PASS
+
+      - name: Write final Chapter 3 validation record
+        run: |
+          set -euo pipefail
+          B=c03-a/bundle
+          {
+            echo 'format=R36OS_NATIVE_C03_VALIDATION_V1'
+            echo 'status=PASS'
+            echo 'readiness=READY_FOR_PHYSICAL_BOOT_ONCE_TEST'
+            echo "native_candidate=$C03_NID"
+            echo "base_c02_rootfs_sha256=$C02_SHA"
+            echo "rootfs_sha256=$C03_ROOTFS_SHA"
+            echo "rootfs_bytes=$(stat -c %s "$B/rootfs.tar.zst")"
+            echo "uinitrd_sha256=$C03_UINITRD_SHA"
+            echo "init_sha256=$C03_INIT_SHA"
+            echo "hooked_boot_sha256=$C03_HOOK_SHA"
+            echo "previous_hook_sha256=$CURRENT_HOOK_SHA"
+            echo "legacy_boot_sha256=$LEGACY_HOOK_SHA"
+            echo "k1_candidate=$K1_CID"
+            echo "kernel_release=$KREL"
+            echo "k1_image_change=no"
+            echo "k1_dtb_change=no"
+            echo "k1_modules_change=no"
+            echo "legacy_kernel_change=no"
+            echo "uboot_change=no"
+            echo "partition_change=no"
+            echo "physical_boot_tested=no"
+          } >c03-a/C03_VALIDATION.conf
+          cat c03-a/C03_VALIDATION.conf
+          echo C03_INTEGRATION_VALIDATION=PASS
+
+      - name: Upload exact Chapter 3 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C03-bootonce-candidate
+          path: |
+            c03-a/bundle/
+            c03-a/C03_BUILD.conf
+            c03-a/C03_VALIDATION.conf
+            c03-packages.tsv
+            c03-forbidden-scan.txt
+            initrd-audit/dumpimage.txt
+            initrd-audit/init-file.txt
+          if-no-files-found: error
+          retention-days: 30
