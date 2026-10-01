@@ -93,9 +93,43 @@ load_one() {
   return 1
 }
 
-load_one cfg80211 || finish FAIL cfg80211-load
-load_one mac80211 || finish FAIL mac80211-load
-load_one rtl8xxxu || finish FAIL rtl8xxxu-load
+insmod_one() {
+  m="$1"
+  if grep -q "^$m " /proc/modules 2>/dev/null; then
+    emit "module_$m=already-loaded"
+    return 0
+  fi
+  command -v insmod >/dev/null 2>&1 || {
+    emit "module_$m=insmod-missing"
+    return 1
+  }
+  path="$(find "$MODULE_ROOT" -type f -name "$m.ko" -print -quit 2>/dev/null)"
+  [ -n "$path" ] || {
+    emit "module_$m=ko-missing"
+    return 1
+  }
+  if insmod "$path" >/dev/null 2>&1; then
+    emit "module_$m=loaded-direct"
+    return 0
+  fi
+  emit "module_$m=direct-load-failed"
+  return 1
+}
+
+MODPROBE_STACK_OK=1
+for m in cfg80211 mac80211 rtl8xxxu; do
+  if ! load_one "$m"; then
+    MODPROBE_STACK_OK=0
+    break
+  fi
+done
+
+if [ "$MODPROBE_STACK_OK" -ne 1 ]; then
+  emit "module_stack=fallback-direct"
+  for m in rfkill libarc4 cfg80211 mac80211 rtl8xxxu; do
+    insmod_one "$m" || finish FAIL "direct-$m-load"
+  done
+fi
 
 # Driver registration normally probes an already-enumerated USB device.
 # Give it a short chance before using an exact-interface bind fallback.
