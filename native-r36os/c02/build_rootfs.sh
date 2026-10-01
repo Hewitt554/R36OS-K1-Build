@@ -3,14 +3,15 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-OUT="\${1:-$PWD/out}"
+OUT="${1:-$PWD/out}"
 
 SNAPSHOT=20260930T000000Z
 SOURCE_DATE_EPOCH=1790726400
 SUITE=trixie
 ARCH=arm64
 ROOTFS_NAME=r36os-native-c02-rootfs-arm64
-WORK="\${RUNNER_TEMP:-/tmp}/r36os-native-c02-$$"
+KEYRING="${R36_DEBIAN_KEYRING:-/usr/share/keyrings/debian-archive-keyring.gpg}"
+WORK="${RUNNER_TEMP:-/tmp}/r36os-native-c02-$$"
 ROOT="$WORK/rootfs"
 SOURCES="$WORK/sources.list"
 PACKAGE_CSV="$WORK/packages.csv"
@@ -26,7 +27,7 @@ mkdir -p "$OUT" "$WORK"
 for c in mmdebstrap qemu-aarch64-static dpkg-query python3 tar zstd sha256sum file; do
   command -v "$c" >/dev/null 2>&1 || fail "missing-host-tool-$c"
 done
-test -r /usr/share/keyrings/debian-archive-keyring.gpg || fail debian-keyring-missing
+test -r "$KEYRING" || fail debian-keyring-missing
 
 grep -Ev '^[[:space:]]*(#|$)' "$HERE/packages-base.txt" | LC_ALL=C sort -u >"$WORK/packages.txt"
 paste -sd, "$WORK/packages.txt" >"$PACKAGE_CSV"
@@ -53,7 +54,7 @@ sudo -E mmdebstrap \
   --aptopt='APT::Install-Suggests "false"' \
   --aptopt='Acquire::Check-Valid-Until "false"' \
   --aptopt='Acquire::Languages "none"' \
-  --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
+  --keyring="$KEYRING" \
   "$SUITE" \
   "$ROOT" \
   "$SOURCES"
@@ -138,7 +139,7 @@ done
 
 cp "$WORK/packages.txt" "$OUT/requested-packages.txt"
 sudo dpkg-query --admindir="$ROOT/var/lib/dpkg" \
-  -W -f='\${binary:Package}\t\${Version}\t\${Architecture}\t\${db:Status-Abbrev}\n' \
+  -W -f='${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Abbrev}\n' \
   | LC_ALL=C sort >"$OUT/resolved-packages.tsv"
 
 grep -Eq $'\tarm64\t' "$OUT/resolved-packages.tsv" || fail no-arm64-packages
