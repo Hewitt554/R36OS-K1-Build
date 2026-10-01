@@ -40,7 +40,8 @@ jobs:
           python3 -m py_compile \
             native-r36os/c03/wrap_uinitrd.py \
             native-r36os/c03/transform_hook.py \
-            native-r36os/c03/validate_boot_model.py
+            native-r36os/c03/validate_boot_model.py \
+            native-r36os/c03/validate_prepare_model.py
 
           S=native-r36os/c03/r36os-native-c03-prepare
           grep -Fq '"$K1PREP" stage-only' "$S"
@@ -55,6 +56,7 @@ jobs:
           ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
           ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)([;&|[:space:]]|$)' "$S"
           ! grep -Fq 'R36OS_CP06_UNLOCK' "$S"
+          python3 native-r36os/c03/validate_prepare_model.py "$S"
 
           I=native-r36os/c03/src/native_init.c
           grep -Fq 'r36os.kernel_attempt=' "$I"
