@@ -34,6 +34,8 @@ jobs:
       R54_UINITRD_SHA: 023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
       K1_CID: 9d7bd2334f315d98b482f850
       KREL: 6.12.94-r36os-k1
+      R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
+      R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
 
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +107,26 @@ jobs:
 
           echo "C02_ROOTFS=$C02_ROOTFS" >>"$GITHUB_ENV"
           echo C03_EXACT_INPUTS=PASS
+
+      - name: Prove K1 can mount native state without initramfs modules
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir k1-release k1-pkg
+          gh release download alpha5r48 --repo "$REPO" --pattern "$R59_NAME" --dir k1-release
+          R59="k1-release/$R59_NAME"
+          test -f "$R59"
+          test "$(sha256sum "$R59" | awk '{print $1}')" = "$R59_SHA"
+          tar -xzf "$R59" -C k1-pkg
+          MODARCH="$(find k1-pkg -type f -name modules.tar.xz -print)"
+          test "$(printf '%s\n' "$MODARCH" | sed '/^$/d' | wc -l)" -eq 1
+          tar -xJOf "$MODARCH" --wildcards '*/modules.builtin' >/tmp/k1-modules.builtin
+          for p in             kernel/fs/ext4/ext4.ko             kernel/drivers/mmc/core/mmc_core.ko             kernel/drivers/mmc/core/mmc_block.ko             kernel/drivers/mmc/host/dw_mmc.ko             kernel/drivers/mmc/host/dw_mmc-pltfm.ko             kernel/drivers/mmc/host/dw_mmc-rockchip.ko; do
+            grep -Fxq "$p" /tmp/k1-modules.builtin
+          done
+          grep -Fxq 'kernel/drivers/gpu/drm/panfrost/panfrost.ko' /tmp/k1-modules.builtin
+          echo C03_K1_BUILTIN_STORAGE=PASS
 
       - name: Build complete C03 candidate twice
         run: |
