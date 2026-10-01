@@ -1,0 +1,14 @@
+[Unit]
+Description=R36OS Native C03 one-shot health gate
+After=local-fs.target systemd-udevd.service systemd-journald.service
+Wants=systemd-udevd.service systemd-journald.service
+ConditionKernelCommandLine=r36os.kernel_attempt=NATIVE_C03
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/r36os-native-c03-health
+RemainAfterExit=yes
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target
