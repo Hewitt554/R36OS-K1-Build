@@ -3,8 +3,9 @@
 # Never auto-run.
 set -u
 
+SYS_ROOT="${R36_C04_SYS_ROOT:-/sys}"
 B=
-for p in /sys/class/backlight/*; do
+for p in "$SYS_ROOT"/class/backlight/*; do
   [ -d "$p" ] || continue
   [ -r "$p/brightness" ] || continue
   [ -w "$p/brightness" ] || continue
