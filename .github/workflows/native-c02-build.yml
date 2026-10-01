@@ -1,0 +1,173 @@
+name: Native R36OS C02 rootfs build
+
+on:
+  push:
+    branches:
+      - work/native-c02-rootfs-2026-10-01
+    paths:
+      - 'native-r36os/c02/**'
+      - '.github/workflows/native-c02-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      KEYRING_DEB_SHA256: 9ea7778e443144ca490668737a8ab22dd3e748bb99e805e22ec055abeb3c7fac
+      KEYRING_DEB_URL: https://snapshot.debian.org/archive/debian/20260930T000000Z/pool/main/d/debian-archive-keyring/debian-archive-keyring_2025.1_all.deb
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Chapter scope guard
+        run: |
+          set -euo pipefail
+          BASE=e2aac56c2d6057cc0b73dd25a303f071ff4916aa
+          git cat-file -e "$BASE^{commit}"
+          git diff --name-only "$BASE"...HEAD | tee /tmp/c02-files.txt
+          test -s /tmp/c02-files.txt
+          while IFS= read -r p; do
+            case "$p" in
+              native-r36os/c02/*|.github/workflows/native-c02-build.yml) ;;
+              *)
+                echo "C02 changed forbidden path: $p" >&2
+                exit 20
+                ;;
+            esac
+          done </tmp/c02-files.txt
+          echo NATIVE_C02_SCOPE=PASS
+
+      - name: Static build-source audit
+        run: |
+          set -euo pipefail
+          bash -n native-r36os/c02/build_rootfs.sh
+          python3 -m py_compile native-r36os/c02/make_rootfs_manifest.py
+          dash -n native-r36os/c02/overlay/usr/local/libexec/r36os-native-inventory
+
+          test "$(grep -Ev '^[[:space:]]*(#|$)' native-r36os/c02/packages-base.txt | sort | uniq -d | wc -l)" -eq 0
+          grep -Fxq systemd native-r36os/c02/packages-base.txt
+          grep -Fxq systemd-sysv native-r36os/c02/packages-base.txt
+          grep -Fxq udev native-r36os/c02/packages-base.txt
+          grep -Fxq network-manager native-r36os/c02/packages-base.txt
+          grep -Fxq kmod native-r36os/c02/packages-base.txt
+          grep -Fxq usbutils native-r36os/c02/packages-base.txt
+
+          ! grep -Eqi '(^|/)(ArkOS|PortMaster|weston_pkg|westonwrap|Crusty|Bifrost|r13p0)' native-r36os/c02/overlay/etc/r36os-release
+          ! grep -Eq 'linux-image|grub|emulationstation|weston|xwayland|mesa|box64|wine|steam' native-r36os/c02/packages-base.txt
+          grep -Fq '20260930T000000Z' native-r36os/c02/build_rootfs.sh
+          grep -Fq 'SOURCE_DATE_EPOCH=1790726400' native-r36os/c02/build_rootfs.sh
+          grep -Fq 'snapshot.debian.org' native-r36os/c02/build_rootfs.sh
+          echo NATIVE_C02_STATIC=PASS
+
+      - name: Install host build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mmdebstrap qemu-user-static binfmt-support arch-test zstd acl attr curl
+          sudo update-binfmts --enable qemu-aarch64 || true
+          qemu-aarch64-static --version | head -1
+          mmdebstrap --version | head -1
+
+      - name: Bootstrap pinned Debian archive keyring
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 --output /tmp/debian-archive-keyring.deb "$KEYRING_DEB_URL"
+          echo "$KEYRING_DEB_SHA256  /tmp/debian-archive-keyring.deb" | sha256sum -c -
+          rm -rf /tmp/debian-keyring
+          mkdir /tmp/debian-keyring
+          dpkg-deb -x /tmp/debian-archive-keyring.deb /tmp/debian-keyring
+          KEY=/tmp/debian-keyring/usr/share/keyrings/debian-archive-keyring.gpg
+          test -s "$KEY"
+          echo "R36_DEBIAN_KEYRING=$KEY" >>"$GITHUB_ENV"
+          echo NATIVE_C02_KEYRING=PASS
+
+      - name: Build native root twice
+        run: |
+          set -euo pipefail
+          chmod +x native-r36os/c02/build_rootfs.sh
+          native-r36os/c02/build_rootfs.sh "$PWD/out-a" | tee build-a.log
+          native-r36os/c02/build_rootfs.sh "$PWD/out-b" | tee build-b.log
+
+      - name: Deterministic comparison
+        run: |
+          set -euo pipefail
+          NAME=r36os-native-c02-rootfs-arm64.tar.zst
+          for f in requested-packages.txt resolved-packages.tsv rootfs-manifest.tsv overlay.sha256 sources.list BUILD_INFO.txt AUDIT.conf "$NAME" "$NAME.sha256"; do
+            test -s "out-a/$f"
+            test -s "out-b/$f"
+            cmp "out-a/$f" "out-b/$f"
+          done
+          SHA="$(sha256sum "out-a/$NAME" | awk '{print $1}')"
+          SIZE="$(stat -c %s "out-a/$NAME")"
+          echo "ROOTFS_SHA=$SHA" >>"$GITHUB_ENV"
+          echo "ROOTFS_SIZE=$SIZE" >>"$GITHUB_ENV"
+          echo "NATIVE_C02_DETERMINISTIC=PASS sha256=$SHA size=$SIZE"
+
+      - name: Extract and audit validated root
+        run: |
+          set -euo pipefail
+          NAME=r36os-native-c02-rootfs-arm64.tar.zst
+          sudo rm -rf /tmp/c02-root
+          sudo mkdir /tmp/c02-root
+          sudo tar --zstd --acls --xattrs -xf "out-a/$NAME" -C /tmp/c02-root
+
+          test -x /tmp/c02-root/lib/systemd/systemd
+          file /tmp/c02-root/lib/systemd/systemd | grep -Eq 'ARM aarch64|ARM64'
+          test -x /tmp/c02-root/usr/bin/journalctl
+          test -x /tmp/c02-root/usr/bin/udevadm
+          test -x /tmp/c02-root/usr/bin/nmcli
+          test -x /tmp/c02-root/usr/bin/iw
+          test -x /tmp/c02-root/usr/bin/lsusb
+          test -s /tmp/c02-root/etc/r36os-release
+          grep -Fq 'R36OS_VERSION="Native C02"' /tmp/c02-root/etc/r36os-release
+
+          if find /tmp/c02-root/boot -type f -print -quit 2>/dev/null | grep -q .; then
+            echo "unexpected /boot payload" >&2
+            exit 30
+          fi
+          test ! -e /tmp/c02-root/opt/system/Tools/PortMaster
+          test ! -e /tmp/c02-root/opt/tools/PortMaster
+          test ! -e /tmp/c02-root/roms/ports/PortMaster
+
+          for d in /tmp/c02-root/etc /tmp/c02-root/opt /tmp/c02-root/usr/local /tmp/c02-root/usr/lib/systemd /tmp/c02-root/lib/systemd; do
+            [ -e "$d" ] || continue
+            if grep -RniE \
+              'ArkOS|AeUX|PortMaster|weston_pkg\.squashfs|westonwrap\.sh|CrustyGBM|libcrusty|crusty_glx_gl4es|Bifrost-r13p0|GO-Super/Gamepad|networkwatchdaemon|play-video\.service|351mp\.service' \
+              "$d" >/tmp/c02-forbidden.txt 2>/dev/null; then
+              cat /tmp/c02-forbidden.txt >&2
+              exit 31
+            fi
+          done
+
+          grep -Fxq 'status=PASS' out-a/AUDIT.conf
+          grep -Fxq 'legacy_scan_empty=yes' out-a/AUDIT.conf
+          grep -Fxq 'kernel_payload_present=no' out-a/AUDIT.conf
+          grep -Fxq 'architecture=arm64' out-a/AUDIT.conf
+          grep -Fxq 'init=systemd' out-a/AUDIT.conf
+          echo NATIVE_C02_ROOT_AUDIT=PASS
+
+      - name: Upload C02 validated rootfs
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C02-rootfs-arm64
+          path: |
+            out-a/r36os-native-c02-rootfs-arm64.tar.zst
+            out-a/r36os-native-c02-rootfs-arm64.tar.zst.sha256
+            out-a/requested-packages.txt
+            out-a/resolved-packages.tsv
+            out-a/rootfs-manifest.tsv
+            out-a/overlay.sha256
+            out-a/sources.list
+            out-a/BUILD_INFO.txt
+            out-a/AUDIT.conf
+            build-a.log
+            build-b.log
+          if-no-files-found: error
+          retention-days: 30
