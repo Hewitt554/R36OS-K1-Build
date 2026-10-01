@@ -6,6 +6,7 @@ on:
       - work/native-c04-hardware-baseline-prep-2026-10-01
     paths:
       - 'native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md'
+      - 'native-r36os/C04_*.md'
       - 'native-r36os/c04/**'
       - '.github/workflows/native-c04-prep.yml'
   workflow_dispatch:
@@ -32,7 +33,7 @@ jobs:
           git diff --name-only "$C03_PARENT"...HEAD | tee /tmp/c04-files.txt
           while IFS= read -r p; do
             case "$p" in
-              native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md|native-r36os/c04/*|.github/workflows/native-c04-prep.yml|.github/workflows/native-c04-k1-contract.yml) ;;
+              native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md|native-r36os/C04_*.md|native-r36os/c04/*|.github/workflows/native-c04-prep.yml|.github/workflows/native-c04-k1-contract.yml) ;;
               *)
                 echo "C04 preparation changed forbidden path: $p" >&2
                 exit 20
