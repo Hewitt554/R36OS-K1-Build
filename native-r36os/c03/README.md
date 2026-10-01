@@ -67,6 +67,8 @@ previous R60 K1/legacy boot script.
     armed.
 16. C03 carries the exact pre-C03 R60 hook bytes as recovery evidence.
 17. No U-Boot environment is saved by the native hook.
+18. The native root does not receive a recursive/full R36STATE bind; only logs,
+    C03_READY.conf and the K1 module tree are exposed.
 
 ## Native root handoff
 
@@ -79,7 +81,7 @@ The freestanding AArch64 /init:
 - validates the native root candidate identity;
 - verifies the existing K1 module tree is present;
 - bind-mounts the native root;
-- bind-mounts R36STATE and the K1 module tree into it;
+- bind-mounts only R36STATE/logs, the authenticated C03 ready marker, and the K1 module tree into it;
 - writes C03_EARLY.conf;
 - moves /dev, /proc and /sys;
 - switch-roots into the native Debian userspace;
@@ -97,7 +99,7 @@ The native systemd root is considered C03-healthy only if:
 - K1 and native candidate identities match;
 - exact rootfs SHA matches the staged ready marker;
 - PID 1 is systemd;
-- R36STATE is mounted;
+- the persistent R36STATE log bind is mounted;
 - K1 modules are visible;
 - native R36OS release identity is present;
 - systemd-journald is active;
