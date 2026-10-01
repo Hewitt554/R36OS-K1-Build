@@ -1,0 +1,35 @@
+#!/bin/bash
+# R36OS Native C04 explicit storage write/read/delete test.
+# Never auto-run. Only tests /r36state or /roms2 selected by the user.
+set -u
+
+TARGET="${1:-}"
+case "$TARGET" in
+  /r36state|/roms2) ;;
+  *) echo "usage: $0 /r36state|/roms2" >&2; exit 2;;
+esac
+
+mountpoint -q "$TARGET" || { echo "C04_STORAGE_ACTIVE=FAIL detail=not-mounted target=$TARGET"; exit 20; }
+[ -w "$TARGET" ] || { echo "C04_STORAGE_ACTIVE=FAIL detail=not-writable target=$TARGET"; exit 21; }
+
+D="$TARGET/logs/native-hardware"
+[ "$TARGET" = /roms2 ] && D="$TARGET/.r36os-native-hardware"
+mkdir -p "$D" || exit 22
+F="$D/c04-storage-test.$"
+
+cleanup(){ rm -f "$F" "$F.sha256" 2>/dev/null || true; sync >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
+
+printf 'R36OS_NATIVE_C04_STORAGE_TEST_V1\n0123456789abcdef\n' >"$F" || exit 23
+sync "$F" 2>/dev/null || sync 2>/dev/null || true
+ACTUAL="$(sha256sum "$F" | awk '{print $1}')"
+CANON="$(printf 'R36OS_NATIVE_C04_STORAGE_TEST_V1\n0123456789abcdef\n' | sha256sum | awk '{print $1}')"
+[ "$CANON" = "$ACTUAL" ] || { echo "C04_STORAGE_ACTIVE=FAIL detail=readback-hash target=$TARGET"; exit 24; }
+
+printf '%s  %s\n' "$ACTUAL" "$F" >"$F.sha256"
+sha256sum -c "$F.sha256" >/dev/null 2>&1 || { echo "C04_STORAGE_ACTIVE=FAIL detail=sha-check target=$TARGET"; exit 25; }
+
+rm -f "$F" "$F.sha256" || exit 26
+sync 2>/dev/null || true
+trap - EXIT INT TERM
+echo "C04_STORAGE_ACTIVE=PASS target=$TARGET sha256=$ACTUAL"
