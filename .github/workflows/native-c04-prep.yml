@@ -1,0 +1,213 @@
+name: Native R36OS C04 preparation validation
+
+on:
+  push:
+    branches:
+      - work/native-c04-hardware-baseline-prep-2026-10-01
+    paths:
+      - 'native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md'
+      - 'native-r36os/c04/**'
+      - '.github/workflows/native-c04-prep.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      C03_PARENT: 9bf1c2930130d0b7d5eaca0bead20f4ec3a6fe12
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove preparation-only branch scope
+        run: |
+          set -euo pipefail
+          git cat-file -e "$C03_PARENT^{commit}"
+          git diff --name-only "$C03_PARENT"...HEAD | tee /tmp/c04-files.txt
+          while IFS= read -r p; do
+            case "$p" in
+              native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md|native-r36os/c04/*|.github/workflows/native-c04-prep.yml) ;;
+              *)
+                echo "C04 preparation changed forbidden path: $p" >&2
+                exit 20
+                ;;
+            esac
+          done </tmp/c04-files.txt
+          ! grep -Eq '(^|/)r36os-release-channel/|(^|/)boot|kernel-next|r36os-release$' /tmp/c04-files.txt
+          echo C04_PREP_SCOPE=PASS
+
+      - name: Static probe safety
+        run: |
+          set -euo pipefail
+          P=native-r36os/c04/r36os-native-c04-baseline
+          S=native-r36os/c04/r36os-native-c04-storage-test
+          bash -n "$P"
+          bash -n "$S"
+
+          grep -Fq 'format=R36OS_NATIVE_C04_BASELINE_V1' "$P"
+          grep -Fq 'usb-0bda-0179-missing' "$P"
+          grep -Fq 'adc-joystick-missing' "$P"
+          grep -Fq 'gpio-keys-missing' "$P"
+          grep -Fq 'chapter-05' "$P"
+          grep -Fq 'chapter-06' "$P"
+          grep -Fq 'chapter-10' "$P"
+
+          ! grep -Eq 'systemctl[[:space:]]+(start|stop|restart|enable|disable|mask|unmask)' "$P"
+          ! grep -Eq '(^|[;&|[:space:]])(modprobe|insmod|rmmod)[[:space:]]' "$P"
+          ! grep -Eq '(^|[;&|[:space:]])(mount|umount|mkfs|fdisk|sfdisk|parted)[[:space:]]' "$P"
+          ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)[[:space:]]' "$P"
+          ! grep -Eq '>[[:space:]]*/sys/|>[[:space:]]*/proc/|>[[:space:]]*/boot/' "$P"
+
+          grep -Fq '/r36state|/roms2' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)[[:space:]]' "$S"
+          echo C04_PREP_STATIC=PASS
+
+      - name: Build healthy synthetic hardware fixture
+        run: |
+          set -euo pipefail
+          F=/tmp/c04-good
+          mkdir -p \
+            "$F/proc/1" \
+            "$F/sys/class/input/event0/device" \
+            "$F/sys/class/input/event1/device" \
+            "$F/sys/class/input/event2/device" \
+            "$F/sys/class/input/event3/device" \
+            "$F/sys/class/backlight/backlight" \
+            "$F/sys/class/power_supply/battery" \
+            "$F/sys/class/power_supply/usb" \
+            "$F/sys/class/thermal/thermal_zone0" \
+            "$F/sys/devices/system/cpu/cpufreq/policy0" \
+            "$F/sys/bus/usb/devices/1-1:1.0" \
+            "$F/sys/bus/usb/drivers/rtl8xxxu" \
+            "$F/root/usr/lib/modules/6.12.94-r36os-k1" \
+            "$F/dev/dri" \
+            "$F/state/logs/native-hardware" \
+            "$F/roms" \
+            "$F/bin"
+
+          printf 'systemd\n' >"$F/proc/1/comm"
+          printf '/dev/mmcblk0p4 %s ext4 rw 0 0\n' "$F/state" >"$F/proc/mounts"
+          printf '/dev/mmcblk1p1 %s exfat rw 0 0\n' "$F/roms" >>"$F/proc/mounts"
+
+          printf 'rk805 pwrkey\n' >"$F/sys/class/input/event0/device/name"
+          printf 'rk817_int Headphones\n' >"$F/sys/class/input/event1/device/name"
+          printf 'adc-joystick\n' >"$F/sys/class/input/event2/device/name"
+          printf 'gpio-keys\n' >"$F/sys/class/input/event3/device/name"
+
+          printf '70\n' >"$F/sys/class/backlight/backlight/brightness"
+          printf '100\n' >"$F/sys/class/backlight/backlight/max_brightness"
+
+          printf 'Battery\n' >"$F/sys/class/power_supply/battery/type"
+          printf '82\n' >"$F/sys/class/power_supply/battery/capacity"
+          printf 'Discharging\n' >"$F/sys/class/power_supply/battery/status"
+          printf 'USB\n' >"$F/sys/class/power_supply/usb/type"
+
+          printf '44500\n' >"$F/sys/class/thermal/thermal_zone0/temp"
+          printf '1296000\n' >"$F/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq"
+
+          mkdir -p "$F/sys/bus/usb/devices/1-1"
+          printf '0bda\n' >"$F/sys/bus/usb/devices/1-1/idVendor"
+          printf '0179\n' >"$F/sys/bus/usb/devices/1-1/idProduct"
+          ln -s "$F/sys/bus/usb/drivers/rtl8xxxu" "$F/sys/bus/usb/devices/1-1:1.0/driver"
+
+          : >"$F/root/usr/lib/modules/6.12.94-r36os-k1/modules.dep"
+          printf 'kernel/drivers/dummy.ko:\n' >"$F/root/usr/lib/modules/6.12.94-r36os-k1/modules.dep"
+          : >"$F/dev/dri/card0"
+          : >"$F/dev/dri/renderD128"
+
+          cat >"$F/bin/systemctl" <<'EOF'
+          #!/bin/sh
+          [ "$1" = is-active ] || exit 2
+          case "$3" in systemd-journald.service|systemd-udevd.service) exit 0;; *) exit 3;; esac
+          EOF
+          chmod +x "$F/bin/systemctl"
+
+      - name: Healthy fixture must pass
+        run: |
+          set -euo pipefail
+          F=/tmp/c04-good
+          OUT="$F/out"
+          mkdir -p "$OUT"
+          R36_C04_PROC_ROOT="$F/proc" \
+          R36_C04_SYS_ROOT="$F/sys" \
+          R36_C04_DEV_ROOT="$F/dev" \
+          R36_C04_ROOTFS="$F/root" \
+          R36_C04_STATE_ROOT="$F/state" \
+          R36_C04_ROMS_ROOT="$F/roms" \
+          R36_C04_OUTDIR="$OUT" \
+          R36_C04_KERNEL_RELEASE=6.12.94-r36os-k1 \
+          R36_C04_PID1=systemd \
+          R36_C04_SYSTEMCTL="$F/bin/systemctl" \
+            bash native-r36os/c04/r36os-native-c04-baseline
+
+          R="$OUT/C04_BASELINE.conf"
+          grep -Fxq 'overall=PASS' "$R"
+          grep -Fxq 'input_adc=PASS' "$R"
+          grep -Fxq 'input_gpio=PASS' "$R"
+          grep -Fxq 'backlight=PASS' "$R"
+          grep -Fxq 'battery=PASS' "$R"
+          grep -Fxq 'thermal=PASS' "$R"
+          grep -Fxq 'cpufreq=PASS' "$R"
+          grep -Fxq 'usb_realtek=PASS' "$R"
+          grep -Fxq 'sd2_mount=PASS' "$R"
+          grep -Fxq 'wifi_functional=DEFERRED' "$R"
+          grep -Fxq 'gpu_render=DEFERRED' "$R"
+          grep -Fxq 'shutdown_active=UNTESTED' "$R"
+          echo C04_GOOD_FIXTURE=PASS
+
+      - name: Broken required hardware must fail
+        run: |
+          set -euo pipefail
+          cp -a /tmp/c04-good /tmp/c04-bad
+          rm -rf /tmp/c04-bad/sys/class/input/event3
+          rm -rf /tmp/c04-bad/sys/class/power_supply/battery
+          OUT=/tmp/c04-bad/out2
+          mkdir -p "$OUT"
+          set +e
+          R36_C04_PROC_ROOT=/tmp/c04-bad/proc \
+          R36_C04_SYS_ROOT=/tmp/c04-bad/sys \
+          R36_C04_DEV_ROOT=/tmp/c04-bad/dev \
+          R36_C04_ROOTFS=/tmp/c04-bad/root \
+          R36_C04_STATE_ROOT=/tmp/c04-bad/state \
+          R36_C04_ROMS_ROOT=/tmp/c04-bad/roms \
+          R36_C04_OUTDIR="$OUT" \
+          R36_C04_KERNEL_RELEASE=6.12.94-r36os-k1 \
+          R36_C04_PID1=systemd \
+          R36_C04_SYSTEMCTL=/tmp/c04-bad/bin/systemctl \
+            bash native-r36os/c04/r36os-native-c04-baseline
+          RC=$?
+          set -e
+          test "$RC" -ne 0
+          grep -Fxq 'overall=FAIL' "$OUT/C04_BASELINE.conf"
+          grep -Fxq 'input_gpio=FAIL' "$OUT/C04_BASELINE.conf"
+          grep -Fxq 'battery=FAIL' "$OUT/C04_BASELINE.conf"
+          echo C04_BAD_FIXTURE=PASS
+
+      - name: Manual storage helper contract
+        run: |
+          set -euo pipefail
+          S=native-r36os/c04/r36os-native-c04-storage-test
+          set +e
+          bash "$S" /tmp >/tmp/c04-invalid-storage.txt 2>&1
+          RC=$?
+          set -e
+          test "$RC" -eq 2
+          grep -Fq 'usage:' /tmp/c04-invalid-storage.txt
+
+          sudo mkdir -p /r36state /tmp/c04-storage-state
+          sudo mount --bind /tmp/c04-storage-state /r36state
+          cleanup(){ sudo umount /r36state 2>/dev/null || true; sudo rmdir /r36state 2>/dev/null || true; }
+          trap cleanup EXIT
+          sudo bash "$S" /r36state | tee /tmp/c04-storage-pass.txt
+          grep -Fq 'C04_STORAGE_ACTIVE=PASS target=/r36state' /tmp/c04-storage-pass.txt
+          test -z "$(find /tmp/c04-storage-state -type f -name 'c04-storage-test*' -print -quit)"
+          cleanup
+          trap - EXIT
+          echo C04_STORAGE_HELPER=PASS
