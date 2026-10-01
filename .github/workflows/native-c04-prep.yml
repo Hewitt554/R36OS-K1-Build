@@ -51,6 +51,8 @@ jobs:
           bash -n "$P"
           bash -n "$S"
           bash -n native-r36os/c04/r36os-native-c04-brightness-test
+          bash -n native-r36os/c04/r36os-native-c04-storage-discover
+          ! grep -Eq '(^|[;&|[:space:]])(mount|umount|mkfs|fdisk|sfdisk|parted)[[:space:]]' native-r36os/c04/r36os-native-c04-storage-discover
           bash -n native-r36os/c04/r36os-native-c04-snapshot
           ! grep -Eq 'systemctl[[:space:]]+(start|stop|restart|enable|disable|mask|unmask)' native-r36os/c04/r36os-native-c04-snapshot
           ! grep -Eq '(^|[;&|[:space:]])(modprobe|insmod|rmmod)[[:space:]]' native-r36os/c04/r36os-native-c04-snapshot
@@ -285,3 +287,69 @@ jobs:
           grep -Fq 'C04_BRIGHTNESS_ACTIVE=PASS' /tmp/c04-brightness.txt
           test "$(cat "$F/class/backlight/backlight/brightness")" = 50
           echo C04_BRIGHTNESS_HELPER=PASS
+
+      - name: SD2 discovery is UUID-based and fail-closed
+        run: |
+          set -euo pipefail
+          D=/tmp/c04-storage-discovery
+          mkdir -p "$D/bin" "$D/out"
+
+          cat >"$D/bin/findmnt" <<'EOF'
+          #!/bin/sh
+          printf '/dev/mmcblk0p4\n'
+          EOF
+
+          cat >"$D/bin/lsblk" <<'EOF'
+          #!/bin/sh
+          if [ "$1" = "-n" ] && [ "$2" = "-o" ] && [ "$3" = "PKNAME" ]; then
+            printf 'mmcblk0\n'
+            exit 0
+          fi
+          case "one" in
+            one)
+              printf '/dev/mmcblk0p1 part vfat mmcblk0\n'
+              printf '/dev/mmcblk0p4 part ext4 mmcblk0\n'
+              printf '/dev/mmcblk1p1 part exfat mmcblk1\n'
+              ;;
+            multiple)
+              printf '/dev/mmcblk0p4 part ext4 mmcblk0\n'
+              printf '/dev/mmcblk1p1 part exfat mmcblk1\n'
+              printf '/dev/mmcblk2p1 part exfat mmcblk2\n'
+              ;;
+          esac
+          EOF
+
+          cat >"$D/bin/blkid" <<'EOF'
+          #!/bin/sh
+          case "$*" in
+            *mmcblk1p1*) printf 'GAME-UUID-ONE\n';;
+            *mmcblk2p1*) printf 'GAME-UUID-TWO\n';;
+          esac
+          EOF
+          chmod +x "$D/bin/"*
+
+          OUT="$D/out/one.conf"
+          R36_C04_STORAGE_DISCOVERY_OUT="$OUT" \
+          R36_C04_FINDMNT="$D/bin/findmnt" \
+          R36_C04_LSBLK="$D/bin/lsblk" \
+          R36_C04_BLKID="$D/bin/blkid" \
+            bash native-r36os/c04/r36os-native-c04-storage-discover
+          grep -Fxq 'status=PASS' "$OUT"
+          grep -Fxq 'candidate_count=1' "$OUT"
+          grep -Fxq 'candidate_device=/dev/mmcblk1p1' "$OUT"
+          grep -Fxq 'candidate_fstype=exfat' "$OUT"
+          grep -Fxq 'candidate_parent=mmcblk1' "$OUT"
+          grep -Fxq 'candidate_uuid=GAME-UUID-ONE' "$OUT"
+          grep -Fxq 'adopted=no' "$OUT"
+
+          sed -i 's/case "one"/case "multiple"/' "$D/bin/lsblk"
+          OUT2="$D/out/multiple.conf"
+          R36_C04_STORAGE_DISCOVERY_OUT="$OUT2" \
+          R36_C04_FINDMNT="$D/bin/findmnt" \
+          R36_C04_LSBLK="$D/bin/lsblk" \
+          R36_C04_BLKID="$D/bin/blkid" \
+            bash native-r36os/c04/r36os-native-c04-storage-discover
+          grep -Fxq 'status=WARN' "$OUT2"
+          grep -Fxq 'candidate_count=2' "$OUT2"
+          grep -Fxq 'detail=multiple-exfat-candidates-require-selection' "$OUT2"
+          echo C04_SD2_DISCOVERY=PASS
