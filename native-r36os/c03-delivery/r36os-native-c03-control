@@ -1,0 +1,37 @@
+#!/bin/bash
+# R36OS Native C03 developer-control wrapper.
+# No action is automatic. Stage/arm/disarm happen only when explicitly requested.
+set +e
+
+CMD="${1:-status}"
+PREP=/opt/r36os/native-next/C03/r36os-native-c03-prepare
+STATUS=/run/r36os-native-c03-status
+LOGDIR=/r36state/logs/native-boot
+LOG="$LOGDIR/C03_CONTROL.log"
+TMP="/run/r36os-native-c03-control.$$"
+
+case "$CMD" in
+  status|stage-only|arm-once|disarm) ;;
+  *) echo "usage: status|stage-only|arm-once|disarm" >&2; exit 2;;
+esac
+
+mkdir -p "$LOGDIR" 2>/dev/null || true
+if [ ! -x "$PREP" ]; then
+  printf 'status=FAIL\ncode=127\ndetail=c03-prepare-missing\naction=%s\n' "$CMD" >"$STATUS"
+  exit 127
+fi
+
+"$PREP" "$CMD" >"$TMP" 2>&1
+RC=$?
+{
+  cat "$TMP"
+  echo "action=$CMD"
+  echo "control_rc=$RC"
+} >"$STATUS"
+{
+  printf '%s action=%s rc=%s\n' "$(date -Is 2>/dev/null || date)" "$CMD" "$RC"
+  sed -n '1,80p' "$TMP"
+} >>"$LOG" 2>/dev/null || true
+rm -f "$TMP"
+sync >/dev/null 2>&1 || true
+exit "$RC"
