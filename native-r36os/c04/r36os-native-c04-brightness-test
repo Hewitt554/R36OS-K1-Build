@@ -1,0 +1,39 @@
+#!/bin/bash
+# R36OS Native C04 explicit bounded backlight write/restore test.
+# Never auto-run.
+set -u
+
+B=
+for p in /sys/class/backlight/*; do
+  [ -d "$p" ] || continue
+  [ -r "$p/brightness" ] || continue
+  [ -w "$p/brightness" ] || continue
+  [ -r "$p/max_brightness" ] || continue
+  B="$p"
+  break
+done
+[ -n "$B" ] || { echo 'C04_BRIGHTNESS_ACTIVE=FAIL detail=no-writable-backlight'; exit 20; }
+
+ORIG="$(tr -d '\r\n' <"$B/brightness")"
+MAX="$(tr -d '\r\n' <"$B/max_brightness")"
+case "$ORIG:$MAX" in *[!0-9:]*|:|*:) echo 'C04_BRIGHTNESS_ACTIVE=FAIL detail=invalid-values'; exit 21;; esac
+[ "$MAX" -gt 0 ] || { echo 'C04_BRIGHTNESS_ACTIVE=FAIL detail=max-zero'; exit 22; }
+
+if [ "$ORIG" -lt "$MAX" ]; then TEST=$((ORIG+1))
+elif [ "$ORIG" -gt 0 ]; then TEST=$((ORIG-1))
+else echo 'C04_BRIGHTNESS_ACTIVE=FAIL detail=no-safe-alternate-value'; exit 23
+fi
+
+restore(){ printf '%s\n' "$ORIG" >"$B/brightness" 2>/dev/null || true; sync 2>/dev/null || true; }
+trap restore EXIT INT TERM
+
+printf '%s\n' "$TEST" >"$B/brightness" || exit 24
+sleep 1
+NOW="$(tr -d '\r\n' <"$B/brightness")"
+[ "$NOW" = "$TEST" ] || { echo "C04_BRIGHTNESS_ACTIVE=FAIL detail=write-readback expected=$TEST got=$NOW"; exit 25; }
+
+restore
+AFTER="$(tr -d '\r\n' <"$B/brightness")"
+[ "$AFTER" = "$ORIG" ] || { echo "C04_BRIGHTNESS_ACTIVE=FAIL detail=restore expected=$ORIG got=$AFTER"; exit 26; }
+trap - EXIT INT TERM
+echo "C04_BRIGHTNESS_ACTIVE=PASS device=$(basename "$B") original=$ORIG test=$TEST restored=$AFTER"
