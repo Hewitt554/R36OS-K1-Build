@@ -65,7 +65,7 @@ jobs:
           diff -u out-a/meta/ROOTFS.conf out-b/meta/ROOTFS.conf
           diff -u out-a/meta/forbidden-scan.txt out-b/meta/forbidden-scan.txt
           cmp out-a/r36os-native-c02-rootfs.tar.zst out-b/r36os-native-c02-rootfs.tar.zst
-          cmp out-a/r36os-native-c02-rootfs.tar.zst.sha256 out-b/r36os-native-c02-rootfs.tar.zst.sha256
+          test "$(awk '{print $1}' out-a/r36os-native-c02-rootfs.tar.zst.sha256)" = "$(awk '{print $1}' out-b/r36os-native-c02-rootfs.tar.zst.sha256)"
           echo C02_DETERMINISTIC=PASS
 
       - name: Audit built ARM64 root
