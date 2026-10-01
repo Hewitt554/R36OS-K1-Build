@@ -1,0 +1,51 @@
+name: Native R36OS C02 Debian snapshot probe
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - '.github/workflows/native-c02-snapshot-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Query Debian snapshot timestamps
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, urllib.request
+          urls=[
+            'https://snapshot.debian.org/mr/timestamp/?archive=debian&year=2026&month=09&day=30',
+            'https://snapshot.debian.org/mr/timestamp/?archive=debian&year=2026&month=10&day=01',
+          ]
+          all_rows=[]
+          for u in urls:
+              print('QUERY',u)
+              with urllib.request.urlopen(u, timeout=30) as r:
+                  data=json.load(r)
+              rows=data.get('result') or data.get('results') or []
+              print(json.dumps(rows[-10:] if isinstance(rows,list) else rows, indent=2))
+              if isinstance(rows,list):
+                  all_rows.extend(rows)
+          vals=[]
+          for row in all_rows:
+              if isinstance(row,str):
+                  vals.append(row)
+              elif isinstance(row,dict):
+                  for k in ('timestamp','time','date'):
+                      if row.get(k):
+                          vals.append(str(row[k]))
+                          break
+          if not vals:
+              raise SystemExit('no Debian snapshot timestamps returned')
+          vals=sorted(set(vals))
+          chosen=vals[-1]
+          print('C02_SNAPSHOT_CHOSEN='+chosen)
+          PY
