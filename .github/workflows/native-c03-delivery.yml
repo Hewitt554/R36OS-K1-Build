@@ -170,7 +170,7 @@ jobs:
           file "$ROOT/usr/local/bin/r36os-alpha5" | grep -Eq 'ARM aarch64|ARM64'
           file "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'statically linked'
           strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'Native C03 developer controls'
-          strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'Arm Native Boot Once'
+          strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'arm-once'
           strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'K1 split input: gpio-keys event'
 
           test "$(find "$ROOT" -type l -print -quit)" = ""
