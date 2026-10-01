@@ -49,7 +49,7 @@ finish_pass(){
 cleanup_lock(){ rmdir "$LOCKDIR" 2>/dev/null || true; }
 
 verify_bundle(){
-  for f in rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini hook.conf C03_READY.conf MANIFEST.sha256 r36os-native-c03-install-hook; do
+  for f in rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini previous-hooked-boot.ini hook.conf C03_READY.conf MANIFEST.sha256 r36os-native-c03-install-hook r36os-native-c03-prepare; do
     [ -s "$PKGROOT/$f" ] || return 10
   done
   (cd "$PKGROOT" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1) || return 11
@@ -69,6 +69,8 @@ verify_bundle(){
   [ "$(val "$PKGROOT/hook.conf" native_candidate)" = "$NID" ] || return 21
   [ "$(val "$PKGROOT/hook.conf" rootfs_sha256)" = "$ROOTFS_SHA" ] || return 22
   [ "$(val "$PKGROOT/hook.conf" hooked_boot_sha256)" = "$HOOK_SHA" ] || return 23
+  [ "$(sha "$PKGROOT/previous-hooked-boot.ini")" = "$(val "$PKGROOT/hook.conf" previous_hook_sha256)" ] || return 24
+  [ "$(val "$PKGROOT/hook.conf" previous_hook_sha256)" = e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c ] || return 25
   return 0
 }
 
