@@ -72,7 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir inspect
-          tar --zstd -xf out-a/r36os-native-c02-rootfs.tar.zst -C inspect
+          sudo tar --zstd -xf out-a/r36os-native-c02-rootfs.tar.zst -C inspect
+          sudo chown -R "$USER:$USER" inspect
 
           file inspect/usr/lib/systemd/systemd | tee systemd-file.txt
           grep -Eq 'ARM aarch64|ARM64' systemd-file.txt
