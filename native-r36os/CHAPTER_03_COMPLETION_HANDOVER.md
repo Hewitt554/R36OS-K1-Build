@@ -1,59 +1,85 @@
-# Native R36OS Chapter 3 — completion handover
+# Native R36OS Chapter 3 — definitive completion handover
 
 Date: 2026-10-01
 Status: PASS
 Readiness: READY_FOR_PHYSICAL_BOOT_ONCE_TEST
 
-Chapter 3 is complete as a software/build/safety milestone. It has NOT yet
-been physically booted on the R36S and has NOT been published to the live R60
-update channel.
+Chapter 3 is complete as a software/build/safety milestone.
+It has NOT yet been physically booted on the R36S and has NOT been published
+to the live R60 update channel.
 
-## Frozen validation lineage
+## Definitive frozen source state
 
-Chapter 2 prerequisite:
-- validation run: 36853590230
+Working branch:
+- work/native-c02-c03-rootfs-bootonce-2026-10-01
+
+Definitive Chapter-3 validated source head:
+- e0eafefcab9c00de271790ae503a20fe700a74cc
+
+Final static source validation:
+- run: 36886675777
+- artifact: 11173519890 / R36OS-Native-C03-static-safety
+- source head: 7bc37d0680e54c2c22cab6dccdb94c191d9c9bf9
+- result: PASS
+
+Only the integration workflow changed after the pinned static source head.
+The definitive integration workflow proves no C03 implementation source
+changed after that static validation.
+
+Definitive full integration validation:
+- run: 36886819015
+- job: 110452130034
+- validated head: e0eafefcab9c00de271790ae503a20fe700a74cc
+- artifact: 11175525608 / R36OS-Native-C03-bootonce-candidate
+- artifact zip size: 71490469 bytes
+- artifact zip SHA-256:
+  6c580cceb0fc3bdbef96b77a30f33282775a92bb4b92396a4f30856b3d8ace2f
+- result: PASS
+
+Independent K1 built-in storage proof:
+- run: 36884764632
+- result: PASS
+- ext4/MMC/dw_mmc/dw_mmc-rockchip are built into the exact K1 Image used by
+  R59/R60, so the C03 initramfs can reach R36STATE before external modules
+  are available.
+
+## Frozen Chapter-2 prerequisite
+
+Chapter-2 validation:
+- run: 36853590230
 - artifact: 11157737003 / R36OS-Native-C02-rootfs
-- validated head: 182f51989b457ff30cce26f4305f6785d3d1c70c
-- C02 rootfs SHA-256:
+- source head: 182f51989b457ff30cce26f4305f6785d3d1c70c
+
+C02 rootfs:
+- SHA-256:
   42eec8dc524fcd821d0919bb3d185a3a0894f5bbf48fa0bf36d0a3834b454fac
+- compressed bytes: 71184225
+- resolved ARM64 package count: 180
+- package-manifest SHA-256:
+  04df91501f801e3af2149167230e25a68f9c68ab33582389dfe52f22cff9a600
+- file-manifest SHA-256:
+  c6fc6f8f9eb3a7bc2dcfdbdd54f8ec56fc3ab7fbf55bcf43d7cfa82618f45305
+
+## Proven current boot lineage
 
 Proven boot-lineage probe:
 - run: 36850324460
 - artifact: 11155008267 / R36OS-Native-C03-proven-lineage
-- proven R54 uInitrd SHA-256:
-  023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
-- proven current R60/K1 hook SHA-256:
-  e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c
-- frozen legacy boot.ini SHA-256:
-  b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e
 
-Final C03 static source validation:
-- run: 36883632489
-- artifact: 11173625563 / R36OS-Native-C03-static-safety
-- source head: eb8656312f8d4f4232794b7d002f639e7bb3f5bf
+Physically proven R54 uInitrd SHA-256:
+- 023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
 
-Full tightened-source integration validation:
-- run: 36883843370
-- artifact: 11173811337 / R36OS-Native-C03-bootonce-candidate
-- integration head: 854eba731ddedf5ff41ae4ec2d78b5891986090c
-- result: PASS
-- readiness recorded by CI: READY_FOR_PHYSICAL_BOOT_ONCE_TEST
+Current R60/K1 hook SHA-256:
+- e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c
 
-Independent K1 built-in storage proof:
-- run: 36884764632
-- artifact: 11174150534 / R36OS-Native-C03-K1-builtins
-- proof head: 7ff82d63b3a725b2600008dd29dcf16f2630291e
-- result: PASS
+Frozen legacy boot.ini SHA-256:
+- b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e
 
-Permanent Chapter-3 recovery branch:
-- backup/native-c03-complete-green-2026-10-01
+Existing K1 candidate reused:
+- 9d7bd2334f315d98b482f850
+- kernel: 6.12.94-r36os-k1
 
-Additional recovery branches:
-- backup/native-c02-rootfs-green-2026-10-01
-- backup/native-c03-static-green-2026-10-01
-- backup/native-c03-integration-green-2026-10-01
-
-## Frozen C03 candidate identity
+## Definitive C03 candidate identity
 
 Native candidate:
 - 8f8eaa3bae6ad4352b4e01ef
@@ -62,81 +88,32 @@ Native C03 rootfs:
 - SHA-256:
   08214b18d833b8abed0ab86c0140774a0759f075e4d8ea454d85567590b53ec4
 - compressed bytes: 71167554
-- unpacked size recorded by bundle: 324652 KiB
+- deterministic unpacked logical size: 303322 KiB
+- regular-file manifest SHA-256:
+  0e85850b239d7621e64a371f74dee5071e5a37a6aa93811ee336fbd070773649
 
 Native C03 uInitrd:
 - SHA-256:
   be567cd71bc95c35cfdaf7100ee0846517df5cd78538e4f3da6157a7fa61d694
 
-Freestanding AArch64 /init:
+Freestanding ARM64 init:
 - SHA-256:
   9433ff746d17e08ca957325d1668c80c9be0b18076918d3937e6d05ed8f2ef33
 
-Generated boot.ini hook:
+Generated boot hook:
 - SHA-256:
   087c8a523154e32a4bd617c683d5c4ba19d6240f591b8979658ca62ca3652b65
 
-Existing K1 candidate reused unchanged:
-- candidate: 9d7bd2334f315d98b482f850
-- kernel: 6.12.94-r36os-k1
-- Image change: NO
-- Panel-4 DTB change: NO
-- K1 module tree change: NO
-- U-Boot binary change: NO
-- partition change: NO
-- legacy 4.4 kernel change: NO
+Prepare helper:
+- SHA-256:
+  a214a3fb799103cb7286b9e7b3b9fca1c93cbbccb057444aa0cdadaa8dd1273c
 
-## What Chapter 3 built
+Install-hook helper:
+- SHA-256:
+  05b83091b5172f8ad9ceb8dd6f4dfcabbf9f101394924bdf9b34fa687ab1b179
 
-### 1. Candidate-bound native root
-
-The exact C02 Debian ARM64 root is extended only with:
-- R36OS Native C03 identity;
-- one systemd health service;
-- one health helper;
-- a runtime bind target for the externally authenticated C03_READY.conf.
-
-The root remains free of the legacy components prohibited by Chapter 2:
-- ArkOS runtime dependencies;
-- PortMaster;
-- Weston/Westonpack;
-- Xwayland;
-- Wine;
-- Box64;
-- Steam;
-- proprietary libMali/Bifrost userspace;
-- CrustyGBM/libcrusty.
-
-### 2. Tiny native initramfs
-
-A deterministic freestanding AArch64 /init is linked without libc or a dynamic
-loader.
-
-It:
-- validates r36os.kernel_slot=next;
-- requires r36os.kernel_attempt=NATIVE_C03;
-- verifies exact K1 candidate identity;
-- verifies exact native candidate identity;
-- verifies exact R36STATE UUID;
-- verifies the expected rootfs SHA supplied by the boot hook;
-- discovers R36STATE by ext4 UUID rather than hard-coded device numbering;
-- checks C03_READY.conf and native-root identity before switch-root;
-- checks the existing K1 module tree exists;
-- bind-mounts the native root;
-- exposes only:
-  - R36STATE/logs,
-  - the authenticated C03 ready marker,
-  - the exact K1 module directory;
-- moves /dev, /proc and /sys into the native root;
-- switch-roots and execs native /sbin/init.
-
-On an initramfs failure it does not reformat, repartition or retry. It displays
-a failure and waits for a power cycle; the already-consumed one-shot guard
-prevents another native attempt next boot.
-
-### 3. Separate native Boot Once namespace
-
-Native C03 does not reuse the normal K1 request marker.
+R36STATE UUID:
+- a25488c6-742d-4555-82d1-e28ffc848af3
 
 Native request:
 - R36OS-NativeNext/C03/boot-native.8f8eaa3bae6ad4352b4e01ef.once
@@ -144,131 +121,114 @@ Native request:
 Native consumed marker:
 - R36N3.CNS
 
-The U-Boot sequence is:
-1. detect exact native request;
-2. refuse a previously consumed attempt;
-3. write consumed marker BEFORE Linux;
-4. read the consumed marker back;
-5. verify marker size;
-6. load the existing K1 Image;
-7. load the C03 native uInitrd;
-8. load the existing Panel-4 K1 DTB;
-9. append candidate/rootfs identities to bootargs;
-10. booti.
+## What Chapter 3 built
 
-If any payload load fails after consumption, U-Boot falls through to the
-existing K1/legacy path. The next power cycle also sees consumed state and will
-not automatically try C03 again.
+1. Candidate-bound native root
+- exact validated C02 Debian ARM64 root plus only C03 identity/health pieces;
+- no ArkOS, PortMaster, Westonpack, Xwayland, Wine, Box64, Steam,
+  libMali/Bifrost or CrustyGBM dependencies.
 
-### 4. Transactional staging and arming
+2. Tiny fail-closed native initramfs
+- freestanding ARM64 /init with no libc/dynamic-loader dependency;
+- validates kernel attempt, K1 candidate, native candidate, R36STATE UUID,
+  staged root identity and exact rootfs SHA before switch-root;
+- discovers R36STATE by UUID;
+- verifies K1 module tree availability;
+- exposes only persistent logs, authenticated ready marker and exact K1
+  module directory;
+- moves /dev, /proc and /sys;
+- switch-roots into native /sbin/init.
 
-r36os-native-c03-prepare:
-- runs only from the expected R60 / legacy-4.4 host environment;
-- verifies exact R60 version;
-- verifies exact R36STATE UUID;
-- refuses a pending normal K1 one-shot;
-- reuses the existing audited K1 stage-only path;
-- verifies the complete C03 bundle before writes;
-- checks R36STATE free space;
-- extracts beside the active native root;
-- verifies every regular-file hash;
-- activates with same-filesystem rename + rollback;
-- installs the boot hook transactionally;
-- opens R36UPDATE only through the existing R60 private maintenance window;
-- verifies the existing K1 payload on FAT;
-- stages the native uInitrd;
-- writes the native request as the FINAL boot-affecting write;
-- closes/unmounts the private write window before reporting success.
+3. Separate Native Boot Once namespace
+- does not reuse ordinary K1 request marker;
+- consumed marker is written/read back before Linux;
+- existing K1 Image and Panel-4 DTB are reused unchanged;
+- only the C03 uInitrd is new;
+- exact candidate/rootfs identities are appended to bootargs;
+- no U-Boot environment save.
 
-A marker-close failure removes the request/consumed marker and aborts the
-private write window, returning to safe normal boot state.
+4. Transactional staging/arming
+- requires exact expected R60/legacy host state;
+- refuses pending normal K1 one-shot;
+- verifies bundle before writes;
+- stages beside active root and verifies every regular-file hash;
+- same-filesystem rename activation with rollback;
+- hook install refuses unknown/drifted boot.ini;
+- frozen legacy recovery copy is mandatory;
+- existing private R36UPDATE maintenance window is reused;
+- native request is the final boot-affecting write.
 
-### 5. Native health gate
-
-C03 is considered healthy only if the native system reaches:
+5. Native systemd health gate
+PASS requires:
 - exact K1 kernel;
-- exact K1/native candidate identities;
+- exact K1/native candidate IDs;
 - exact rootfs identity;
 - PID 1 = systemd;
-- persistent R36STATE log bind available;
+- persistent log bind;
 - K1 modules visible;
-- R36OS Native C03 release identity present;
+- native release identity;
 - systemd-journald active;
 - systemd-udevd active;
-- externally authenticated ready marker matches the booted candidate/rootfs.
+- authenticated ready marker matches booted candidate/root.
 
 Persistent evidence:
 - /r36state/logs/native-boot/C03_EARLY.conf
 - /r36state/logs/native-boot/C03_HEALTH.conf
 
-## K1 module-free-initramfs prerequisite proved
+## Final automated coverage
 
-The exact published/physically tested R59 K1 package was independently audited.
+The definitive integration run passed:
+- prerequisite validation lineage;
+- exact C02 artifact/hash/size;
+- exact proven R54 uInitrd;
+- exact current R60 K1 hook;
+- K1 ext4/MMC built-in prerequisite;
+- two complete C03 builds with identical bundle files;
+- bundle manifest verification;
+- deterministic staged-root size check;
+- ARM64 native-root audit;
+- forbidden legacy dependency scan;
+- ARM64 static initramfs audit;
+- transactional production hook installation;
+- rejection of unknown/drifted boot.ini;
+- rejection of missing legacy recovery copy;
+- rejection of corrupted production bundle;
+- prepare failure/rollback model;
+- native Boot Once state model;
+- proof C03 contains no replacement Image, DTB or modules.
 
-The following are built into the K1 Image rather than requiring initramfs
-module loading:
-- ext4;
-- mmc_core;
-- mmc_block;
-- dw_mmc;
-- dw_mmc-pltfm;
-- dw_mmc-rockchip.
+## Explicit unchanged areas
 
-Panfrost is also listed in modules.builtin.
+Chapter 3 does NOT change:
+- legacy Linux 4.4 kernel;
+- K1 Image;
+- Panel-4 DTB;
+- K1 module tree;
+- U-Boot binary;
+- partition table;
+- live R60 update channel;
+- current R60 installation on the handheld.
 
-This is important because the C03 initramfs needs MMC + ext4 before it can
-mount R36STATE and reach the external K1 module tree.
+## Device impact
 
-## Validation coverage
+NONE so far.
 
-Automated validation covers:
-- deterministic C02 root build;
-- exact boot-lineage hashes;
-- deterministic C03 initramfs;
-- deterministic C03 root/bundle generation;
-- ARM64 architecture checks;
-- legacy/PortMaster/proprietary-Mali exclusion scan;
-- boot-hook byte preservation;
-- legacy boot reconstruction/hash proof;
-- one-shot state-machine model;
-- staging/arming failure model;
-- transactional hook installation;
-- fail-closed rejection of unknown/drifted boot.ini;
-- fail-closed rejection of missing legacy recovery copy;
-- fail-closed rejection of corrupted C03 bundle;
-- no replacement Image/DTB/modules in C03;
-- K1 ext4/MMC built-in prerequisite.
-
-## Device impact as of Chapter-3 completion
-
-NONE.
-
-The following remain true:
-- main/live updater is still Alpha 5R60 / 0.5.60.0;
-- current R60 SHA is unchanged;
-- no C03 files have been installed on the handheld;
-- current /boot/boot.ini has not been changed by this work;
-- K1 remains Boot Next Once;
-- ArkOS/legacy root remains intact;
-- no partitions were changed;
-- no U-Boot binary was written.
+No C03 payload has been installed on the physical R36S.
 
 ## Chapter boundary
 
-Chapter 3 ends here.
-
-The next action is NOT Chapter 4 yet.
-
-First, if the user chooses to proceed, package the frozen C03 candidate into a
-controlled developer-delivery update and perform ONE physical Native Boot Once
-test. The physical result determines whether Chapter 4 can begin.
-
-Until that physical test succeeds, the correct statement is:
+Chapter 3 ends at:
 
 READY_FOR_PHYSICAL_BOOT_ONCE_TEST
 
-not:
+It does NOT claim:
 
 NATIVE_OS_PROVEN
+
+Prepared physical plan:
+- native-r36os/C03_PHYSICAL_BOOT_ONCE_TEST.md
+
+The first physical test must be one controlled Boot Once attempt.
+Chapter 4 must not begin until that result is reviewed.
 
 Chapter 3 status: PASS.
