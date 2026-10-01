@@ -6,7 +6,7 @@ mkdir -p /r36state/logs/native-boot 2>/dev/null || true
 
 val(){
   key="$1"
-  sed -n "s/.*${key}=\\([^ ]*\\).*/\\1/p" /proc/cmdline 2>/dev/null | head -n1
+  tr ' ' '\\n' </proc/cmdline 2>/dev/null | awk -F= -v k="$key" '$1==k{print substr($0,index($0,"=")+1);exit}' | tr -d "'\\\""
 }
 write_result(){
   status="$1"; detail="$2"
