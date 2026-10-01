@@ -1,0 +1,65 @@
+name: R60 CP02 Wi-Fi static validation
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - 'r60-cp02-wifi/**'
+      - '.github/workflows/static-r60-cp02.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax
+        run: |
+          set -euo pipefail
+          dash -n r60-cp02-wifi/r36os-k1-wifi-bind
+          test -s r60-cp02-wifi/r36os-k1-wifi-bind.service
+
+      - name: Safety and scope invariants
+        run: |
+          set -euo pipefail
+          S=r60-cp02-wifi/r36os-k1-wifi-bind
+          U=r60-cp02-wifi/r36os-k1-wifi-bind.service
+          grep -Fq '6.12.94-r36os-k1' "$S"
+          grep -Fq 'VID=0bda' "$S"
+          grep -Fq 'PID=0179' "$S"
+          grep -Fq 'DRIVER=rtl8xxxu' "$S"
+          grep -Fq 'modprobe -d /usr "$m"' "$S"
+          grep -Fq 'module_cfg80211' "$S" || grep -Fq 'load_one cfg80211' "$S"
+          grep -Fq 'load_one mac80211' "$S"
+          grep -Fq 'load_one rtl8xxxu' "$S"
+          grep -Fq '/sys/bus/usb/drivers/$DRIVER/bind' "$S"
+          grep -Fq 'wireless_netdev=' "$S"
+          grep -Fq 'ConditionKernelCommandLine=r36os.kernel_attempt=K1' "$U"
+          grep -Fq 'Before=NetworkManager.service wpa_supplicant.service' "$U"
+          ! grep -Eqi 'nmcli .*connection|ssid|psk|password|802-11-wireless\.ssid' "$S"
+          ! grep -Eqi 'reboot|shutdown|systemctl restart.*r36os|systemctl restart.*NetworkManager' "$S"
+          echo R60_CP02_SCOPE=PASS
+
+      - name: Legacy/non-K1 no-op execution
+        run: |
+          set -euo pipefail
+          sudo rm -f /run/r36os-k1-wifi-bind.status
+          sudo sh r60-cp02-wifi/r36os-k1-wifi-bind
+          sudo test -s /run/r36os-k1-wifi-bind.status
+          sudo grep -Fxq 'status=SKIP' /run/r36os-k1-wifi-bind.status
+          sudo grep -Fxq 'detail=legacy-or-other-kernel' /run/r36os-k1-wifi-bind.status
+          echo R60_CP02_LEGACY_NOOP=PASS
+
+      - name: Unit metadata
+        run: |
+          set -euo pipefail
+          grep -Fxq 'Type=oneshot' r60-cp02-wifi/r36os-k1-wifi-bind.service
+          grep -Fxq 'ExecStart=/usr/local/bin/r36os-k1-wifi-bind' r60-cp02-wifi/r36os-k1-wifi-bind.service
+          grep -Fxq 'WantedBy=multi-user.target' r60-cp02-wifi/r36os-k1-wifi-bind.service
+          echo R60_CP02_STATIC=PASS
