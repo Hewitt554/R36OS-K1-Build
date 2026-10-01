@@ -75,7 +75,7 @@ verify_bundle(){
 verify_host(){
   [ "$(id -u)" = 0 ] || return 30
   [ -x "$VERSION" ] || return 31
-  [ "__D($VERSION version 2>/dev/null)" = "$EXPECTED_VERSION" ] || return 32
+  [ "$("$VERSION" version 2>/dev/null)" = "$EXPECTED_VERSION" ] || return 32
   case "$(uname -r 2>/dev/null)" in 4.4.*) ;; *) return 33;; esac
   if grep -Eq '(^| )r36os\.kernel_attempt=' /proc/cmdline 2>/dev/null; then return 34; fi
   mountpoint -q "$STATE" 2>/dev/null || return 35
@@ -90,7 +90,7 @@ verify_host(){
 }
 
 verify_no_k1_pending(){
-  st="__D($K1SLOT status 2>/dev/null || true)"
+  st="$("$K1SLOT" status 2>/dev/null || true)"
   printf '%s\n' "$st" | grep -Fxq 'armed=yes' && return 1
   printf '%s\n' "$st" | grep -Fxq 'consumed=yes' && return 1
   return 0
