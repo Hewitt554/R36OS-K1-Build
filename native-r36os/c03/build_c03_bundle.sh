@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 [ "$#" -eq 4 ] || { echo "usage: build_c03_bundle.sh <C02-rootfs.tar.zst> <R54-uInitrd> <R59-hooked-boot.ini> <out-dir>" >&2; exit 2; }
+[ "$(id -u)" -eq 0 ] || { echo "build_c03_bundle.sh must run as root because the rootfs contains device nodes" >&2; exit 3; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 C02="$1"
 BASE_UINITRD="$2"
