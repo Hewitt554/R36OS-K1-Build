@@ -124,6 +124,11 @@ static int valid_candidate_id(const char*s){
     for(int i=0;i<24;i++){char c=s[i];if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return 0;}
     return 1;
 }
+static int valid_sha256(const char*s){
+    if(slen(s)!=64)return 0;
+    for(int i=0;i<64;i++){char c=s[i];if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return 0;}
+    return 1;
+}
 static int ext4_uuid_matches(const char*dev,const u8 expected[16]){
     u8 sb[2048];int f=(int)openf(dev,O_RDONLY,0);if(f<0)return 0;
     if(sc3(SYS_lseek,f,1024,SEEK_SET)<0){cls(f);return 0;}
@@ -178,12 +183,13 @@ int k1_main(void){
     if(sc5(SYS_mount,(long)"sysfs",(long)"/sys",(long)"sysfs",0,0)<0)fail_forever("mount sysfs failed");
     msg("stage=native-initramfs-start\n");
 
-    char slot[16],attempt[32],kcid[32],nid[32],state_uuid[64];
+    char slot[16],attempt[32],kcid[32],nid[32],state_uuid[64],rootfs_sha[80];
     if(!cmdline_value("r36os.kernel_slot=",slot,sizeof(slot))||!streq(slot,"next"))fail_forever("missing r36os.kernel_slot=next");
     if(!cmdline_value("r36os.kernel_attempt=",attempt,sizeof(attempt))||!streq(attempt,"NATIVE_C03"))fail_forever("missing r36os.kernel_attempt=NATIVE_C03");
     if(!cmdline_value("r36os.kernel_candidate=",kcid,sizeof(kcid))||!streq(kcid,EXPECTED_K1_CID))fail_forever("wrong K1 candidate identity");
     if(!cmdline_value("r36os.native_candidate=",nid,sizeof(nid))||!valid_candidate_id(nid))fail_forever("invalid native candidate identity");
     if(!cmdline_value("r36os.native_state_uuid=",state_uuid,sizeof(state_uuid))||!streq(state_uuid,EXPECTED_STATE_UUID))fail_forever("wrong R36STATE identity");
+    if(!cmdline_value("r36os.native_rootfs_sha=",rootfs_sha,sizeof(rootfs_sha))||!valid_sha256(rootfs_sha))fail_forever("invalid native rootfs SHA identity");
 
     u8 want[16];if(!uuid_parse(EXPECTED_STATE_UUID,want))fail_forever("compiled R36STATE UUID invalid");
     char statedev[64];msg("stage=state-discovery\n");
@@ -191,10 +197,12 @@ int k1_main(void){
     if(sc5(SYS_mount,(long)statedev,(long)"/state",(long)"ext4",MS_NOATIME,(long)"errors=remount-ro")<0)fail_forever("mount R36STATE failed");
     msg("stage=state-mounted\n");
 
-    char staged_nid[32],staged_krel[64],staged_kcid[32];
+    char staged_nid[32],staged_krel[64],staged_kcid[32],staged_rootfs_sha[80],root_nid[32];
     if(!read_key("/state/r36os-next/C03_READY.conf","native_candidate",staged_nid,sizeof(staged_nid))||!streq(staged_nid,nid))fail_forever("staged native candidate mismatch");
     if(!read_key("/state/r36os-next/C03_READY.conf","kernel_release",staged_krel,sizeof(staged_krel))||!streq(staged_krel,EXPECTED_KREL))fail_forever("staged kernel release mismatch");
     if(!read_key("/state/r36os-next/C03_READY.conf","k1_candidate",staged_kcid,sizeof(staged_kcid))||!streq(staged_kcid,EXPECTED_K1_CID))fail_forever("staged K1 candidate mismatch");
+    if(!read_key("/state/r36os-next/C03_READY.conf","rootfs_sha256",staged_rootfs_sha,sizeof(staged_rootfs_sha))||!streq(staged_rootfs_sha,rootfs_sha))fail_forever("staged rootfs SHA mismatch");
+    if(!read_key("/state/r36os-next/rootfs/etc/r36os-native-c03.conf","native_candidate",root_nid,sizeof(root_nid))||!streq(root_nid,nid))fail_forever("native root candidate mismatch");
     if(!exists_readable("/state/r36os-next/rootfs/sbin/init"))fail_forever("native /sbin/init missing");
     if(!exists_readable("/state/r36os-next/rootfs/etc/r36os-release"))fail_forever("native release identity missing");
     if(!exists_readable("/state/kernel-next/modules/6.12.94-r36os-k1/modules.dep"))fail_forever("K1 module tree missing from R36STATE");
