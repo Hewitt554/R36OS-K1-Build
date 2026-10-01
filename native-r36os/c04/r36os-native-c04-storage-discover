@@ -1,0 +1,76 @@
+#!/bin/bash
+# R36OS Native C04 read-only SD2/user-data discovery.
+set -u
+
+OUT="${R36_C04_STORAGE_DISCOVERY_OUT:-/r36state/logs/native-hardware/C04_STORAGE_DISCOVERY.conf}"
+FINDMNT="${R36_C04_FINDMNT:-findmnt}"
+LSBLK="${R36_C04_LSBLK:-lsblk}"
+BLKID="${R36_C04_BLKID:-blkid}"
+
+mkdir -p "$(dirname "$OUT")" 2>/dev/null || exit 20
+: >"$OUT" || exit 21
+emit(){ printf '%s\n' "$*" >>"$OUT"; }
+
+emit 'format=R36OS_NATIVE_C04_STORAGE_DISCOVERY_V1'
+
+STATE_SRC="$("$FINDMNT" -n -o SOURCE /r36state 2>/dev/null | head -1)"
+if [ -z "$STATE_SRC" ]; then
+  emit 'status=FAIL'
+  emit 'detail=r36state-source-not-found'
+  exit 22
+fi
+STATE_REAL="$(readlink -f "$STATE_SRC" 2>/dev/null || printf '%s' "$STATE_SRC")"
+STATE_PARENT="$("$LSBLK" -n -o PKNAME "$STATE_REAL" 2>/dev/null | head -1 | tr -d ' ')"
+if [ -z "$STATE_PARENT" ]; then
+  emit 'status=FAIL'
+  emit 'detail=r36state-parent-not-found'
+  emit "state_source=$STATE_REAL"
+  exit 23
+fi
+
+emit "state_source=$STATE_REAL"
+emit "state_parent=$STATE_PARENT"
+
+TMP="$OUT.candidates.$"
+trap 'rm -f "$TMP" 2>/dev/null || true' EXIT INT TERM
+: >"$TMP"
+
+"$LSBLK" -nrpo NAME,TYPE,FSTYPE,PKNAME 2>/dev/null | while read -r NAME TYPE FSTYPE PKNAME; do
+  [ "$TYPE" = part ] || continue
+  case "$FSTYPE" in exfat|EXFAT) ;; *) continue;; esac
+  [ "$PKNAME" = "$STATE_PARENT" ] && continue
+  UUID="$("$BLKID" -s UUID -o value "$NAME" 2>/dev/null | head -1)"
+  printf '%s\t%s\t%s\t%s\n' "$NAME" "$FSTYPE" "$PKNAME" "$UUID" >>"$TMP"
+done
+
+COUNT="$(wc -l <"$TMP" | tr -d ' ')"
+emit "candidate_count=$COUNT"
+
+if [ "$COUNT" -eq 0 ]; then
+  emit 'status=WARN'
+  emit 'detail=no-exfat-candidate-outside-state-disk'
+  exit 0
+fi
+if [ "$COUNT" -gt 1 ]; then
+  emit 'status=WARN'
+  emit 'detail=multiple-exfat-candidates-require-selection'
+  n=0
+  while IFS="$(printf '\t')" read -r DEV FS PARENT UUID; do
+    n=$((n+1))
+    emit "candidate_$n=$DEV"
+    emit "candidate_${n}_fstype=$FS"
+    emit "candidate_${n}_parent=$PARENT"
+    emit "candidate_${n}_uuid=$UUID"
+  done <"$TMP"
+  exit 0
+fi
+
+IFS="$(printf '\t')" read -r DEV FS PARENT UUID <"$TMP"
+emit 'status=PASS'
+emit 'detail=unique-unadopted-games-card-candidate'
+emit "candidate_device=$DEV"
+emit "candidate_fstype=$FS"
+emit "candidate_parent=$PARENT"
+emit "candidate_uuid=$UUID"
+emit 'adopted=no'
+echo "R36OS_NATIVE_C04_STORAGE_DISCOVERY=PASS device=$DEV uuid=$UUID"
