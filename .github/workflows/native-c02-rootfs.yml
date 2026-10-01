@@ -1,0 +1,143 @@
+name: Validate Native R36OS Chapter 2 rootfs
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - 'native-r36os/c02/**'
+      - '.github/workflows/native-c02-rootfs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static Chapter 2 scope and source checks
+        run: |
+          set -euo pipefail
+          bash -n native-r36os/c02/build_rootfs.sh
+          python3 -m py_compile native-r36os/c02/forbidden_scan.py
+          grep -Fxq 'snapshot=20261001T082322Z' native-r36os/c02/build.conf
+          grep -Fxq 'architecture=arm64' native-r36os/c02/build.conf
+          grep -Fxq 'suite=trixie' native-r36os/c02/build.conf
+          grep -Fxq 'systemd' native-r36os/c02/packages.txt
+          grep -Fxq 'udev' native-r36os/c02/packages.txt
+          grep -Fxq 'network-manager' native-r36os/c02/packages.txt
+          grep -Fxq 'busybox-static' native-r36os/c02/packages.txt
+          ! grep -Eqi '^(weston|xwayland|wine|box64|steam|emulationstation)$' native-r36os/c02/packages.txt
+          echo C02_STATIC=PASS
+
+      - name: Install bootstrap tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mmdebstrap qemu-user-static binfmt-support debian-archive-keyring zstd
+          sudo update-binfmts --enable qemu-aarch64 || true
+          mmdebstrap --version
+          qemu-aarch64-static --version | head -1 || true
+
+      - name: Build clean rootfs A
+        run: |
+          set -euo pipefail
+          sudo bash native-r36os/c02/build_rootfs.sh "$PWD/out-a"
+          sudo chown -R "$USER:$USER" out-a
+
+      - name: Build clean rootfs B
+        run: |
+          set -euo pipefail
+          sudo bash native-r36os/c02/build_rootfs.sh "$PWD/out-b"
+          sudo chown -R "$USER:$USER" out-b
+
+      - name: Compare deterministic outputs
+        run: |
+          set -euo pipefail
+          diff -u out-a/meta/requested-packages.txt out-b/meta/requested-packages.txt
+          diff -u out-a/meta/packages.tsv out-b/meta/packages.tsv
+          diff -u out-a/meta/files.tsv out-b/meta/files.tsv
+          diff -u out-a/meta/ROOTFS.conf out-b/meta/ROOTFS.conf
+          diff -u out-a/meta/forbidden-scan.txt out-b/meta/forbidden-scan.txt
+          cmp out-a/r36os-native-c02-rootfs.tar.zst out-b/r36os-native-c02-rootfs.tar.zst
+          cmp out-a/r36os-native-c02-rootfs.tar.zst.sha256 out-b/r36os-native-c02-rootfs.tar.zst.sha256
+          echo C02_DETERMINISTIC=PASS
+
+      - name: Audit built ARM64 root
+        run: |
+          set -euo pipefail
+          mkdir inspect
+          tar --zstd -xf out-a/r36os-native-c02-rootfs.tar.zst -C inspect
+
+          file inspect/usr/lib/systemd/systemd | tee systemd-file.txt
+          grep -Eq 'ARM aarch64|ARM64' systemd-file.txt
+
+          test -e inspect/sbin/init
+          test -x inspect/usr/lib/systemd/systemd
+          test -x inspect/usr/bin/systemctl
+          test -x inspect/usr/bin/journalctl
+          test -x inspect/usr/bin/udevadm
+          test -x inspect/usr/sbin/modprobe
+          test -x inspect/usr/bin/nmcli
+          test -x inspect/usr/sbin/iw
+          test -x inspect/usr/sbin/rfkill || test -x inspect/usr/bin/rfkill
+          test -x inspect/usr/bin/lsusb
+          test -x inspect/bin/busybox || test -x inspect/usr/bin/busybox
+
+          test -s inspect/etc/r36os-release
+          grep -Fq 'R36OS_VERSION="Native Prototype C02"' inspect/etc/r36os-release
+          grep -Fq 'R36OS_DEBIAN_SNAPSHOT="20261001T082322Z"' inspect/etc/r36os-release
+          test ! -s inspect/etc/machine-id
+          test "$(readlink inspect/etc/resolv.conf)" = /run/NetworkManager/resolv.conf
+
+          grep -Fxq 'R36OS_NATIVE_C02_FORBIDDEN_SCAN=PASS' out-a/meta/forbidden-scan.txt
+          ! grep -Eqi '(^|:)(weston|xwayland|wine|box64|steam|emulationstation)(:|\t)' out-a/meta/packages.tsv
+          ! find inspect -iname '*libMali*' -o -iname '*libcrusty*' | grep -q .
+          ! find inspect -name 'westonwrap.sh' -o -name 'weston_pkg.squashfs' | grep -q .
+          test ! -e inspect/opt/system/Tools/PortMaster
+          test ! -e inspect/opt/tools/PortMaster
+          test ! -e inspect/roms/ports/PortMaster
+
+          grep -Fxq 'forbidden_scan=PASS' out-a/meta/ROOTFS.conf
+          grep -Fxq 'architecture=arm64' out-a/meta/ROOTFS.conf
+          grep -Fxq 'snapshot=20261001T082322Z' out-a/meta/ROOTFS.conf
+          sha256sum -c out-a/r36os-native-c02-rootfs.tar.zst.sha256
+          echo C02_ROOTFS_AUDIT=PASS
+
+      - name: Package Chapter 2 evidence
+        run: |
+          set -euo pipefail
+          cp native-r36os/c02/build.conf out-a/meta/source-build.conf
+          cp native-r36os/c02/packages.txt out-a/meta/source-packages.txt
+          sha256sum \
+            native-r36os/c02/build_rootfs.sh \
+            native-r36os/c02/forbidden_scan.py \
+            native-r36os/c02/build.conf \
+            native-r36os/c02/packages.txt \
+            >out-a/meta/source.sha256
+          {
+            echo 'format=R36OS_NATIVE_C02_VALIDATION_V1'
+            echo 'status=PASS'
+            echo "archive_sha256=$(awk '{print $1}' out-a/r36os-native-c02-rootfs.tar.zst.sha256)"
+            echo "archive_size=$(stat -c %s out-a/r36os-native-c02-rootfs.tar.zst)"
+            echo "package_count=$(wc -l <out-a/meta/packages.tsv | tr -d ' ')"
+            echo "file_manifest_sha256=$(sha256sum out-a/meta/files.tsv | awk '{print $1}')"
+          } >out-a/C02_VALIDATION.conf
+          echo C02_VALIDATION=PASS
+
+      - name: Upload exact Chapter 2 rootfs
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C02-rootfs
+          path: |
+            out-a/r36os-native-c02-rootfs.tar.zst
+            out-a/r36os-native-c02-rootfs.tar.zst.sha256
+            out-a/C02_VALIDATION.conf
+            out-a/meta/
+          if-no-files-found: error
+          retention-days: 30
