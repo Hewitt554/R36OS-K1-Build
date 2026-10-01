@@ -208,9 +208,10 @@ int k1_main(void){
     if(!exists_readable("/state/kernel-next/modules/6.12.94-r36os-k1/modules.dep"))fail_forever("K1 module tree missing from R36STATE");
 
     if(sc5(SYS_mount,(long)"/state/r36os-next/rootfs",(long)"/newroot",0,MS_BIND,0)<0)fail_forever("bind native root failed");
-    mkdirp1("/newroot/r36state");mkdirp1("/newroot/dev");mkdirp1("/newroot/proc");mkdirp1("/newroot/sys");
+    mkdirp1("/newroot/r36state");mkdirp1("/newroot/r36state/logs");mkdirp1("/newroot/dev");mkdirp1("/newroot/proc");mkdirp1("/newroot/sys");
     mkdirp1("/newroot/usr/lib/modules/6.12.94-r36os-k1");
-    if(sc5(SYS_mount,(long)"/state",(long)"/newroot/r36state",0,MS_BIND,0)<0)fail_forever("bind R36STATE into native root failed");
+    if(sc5(SYS_mount,(long)"/state/logs",(long)"/newroot/r36state/logs",0,MS_BIND,0)<0)fail_forever("bind R36STATE logs into native root failed");
+    if(sc5(SYS_mount,(long)"/state/r36os-next/C03_READY.conf",(long)"/newroot/etc/r36os-c03-staged-ready.conf",0,MS_BIND,0)<0)fail_forever("bind C03 ready marker into native root failed");
     if(sc5(SYS_mount,(long)"/state/kernel-next/modules/6.12.94-r36os-k1",(long)"/newroot/usr/lib/modules/6.12.94-r36os-k1",0,MS_BIND,0)<0)fail_forever("bind K1 modules into native root failed");
 
     write_early_marker(statedev,nid);
