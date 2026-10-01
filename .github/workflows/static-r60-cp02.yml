@@ -30,6 +30,7 @@ jobs:
           set -euo pipefail
           S=r60-cp02-wifi/r36os-k1-wifi-bind
           U=r60-cp02-wifi/r36os-k1-wifi-bind.service
+          N=r60-cp02-wifi/20-r36os-k1-wifi-bind.conf
           grep -Fq '6.12.94-r36os-k1' "$S"
           grep -Fq 'VID=0bda' "$S"
           grep -Fq 'PID=0179' "$S"
@@ -42,6 +43,8 @@ jobs:
           grep -Fq 'wireless_netdev=' "$S"
           grep -Fq 'ConditionKernelCommandLine=r36os.kernel_attempt=K1' "$U"
           grep -Fq 'Before=NetworkManager.service wpa_supplicant.service' "$U"
+          grep -Fxq 'Wants=r36os-k1-wifi-bind.service' "$N"
+          grep -Fxq 'After=r36os-k1-wifi-bind.service' "$N"
           ! grep -Eqi 'nmcli .*connection|ssid|psk|password|802-11-wireless\.ssid' "$S"
           ! grep -Eqi 'reboot|shutdown|systemctl restart.*r36os|systemctl restart.*NetworkManager' "$S"
           echo R60_CP02_SCOPE=PASS
@@ -62,4 +65,6 @@ jobs:
           grep -Fxq 'Type=oneshot' r60-cp02-wifi/r36os-k1-wifi-bind.service
           grep -Fxq 'ExecStart=/usr/local/bin/r36os-k1-wifi-bind' r60-cp02-wifi/r36os-k1-wifi-bind.service
           grep -Fxq 'WantedBy=multi-user.target' r60-cp02-wifi/r36os-k1-wifi-bind.service
+          grep -Fxq 'Wants=r36os-k1-wifi-bind.service' r60-cp02-wifi/20-r36os-k1-wifi-bind.conf
+          grep -Fxq 'After=r36os-k1-wifi-bind.service' r60-cp02-wifi/20-r36os-k1-wifi-bind.conf
           echo R60_CP02_STATIC=PASS
