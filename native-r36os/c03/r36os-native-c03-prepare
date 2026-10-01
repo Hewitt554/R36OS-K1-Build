@@ -1,0 +1,290 @@
+#!/bin/bash
+# R36OS Native C03 staging / one-shot arm transaction.
+# This is development-path source only until Chapter 3 validation is complete.
+set +e
+
+CMD="${1:-status}"
+PKGROOT="${R36OS_NATIVE_C03_PACKAGED_ROOT:-/opt/r36os/native-next/C03}"
+STATE="${R36OS_STATE_ROOT:-/r36state}"
+NEXT="$STATE/r36os-next"
+ROOTDST="$NEXT/rootfs"
+READYDST="$NEXT/C03_READY.conf"
+UPDATE="${R36OS_UPDATE_MOUNT:-/r36update}"
+PRIVATE="${R36OS_R36UPDATE_PRIVATE_RW:-/run/r36os-r36update-rw}"
+MAINT="${R36OS_R36UPDATE_MAINT:-/usr/local/bin/r36os-r36update-maint}"
+POLICY="${R36OS_R36UPDATE_POLICY:-/usr/local/bin/r36os-r36update-policy}"
+K1PREP="${R36OS_K1_PREPARE:-/usr/local/bin/r36os-kernel-next-prepare}"
+K1SLOT="${R36OS_K1_SLOT:-/usr/local/bin/r36os-kernel-slot}"
+VERSION="${R36OS_VERSION_HELPER:-/usr/local/bin/r36os-version}"
+HOOK_INSTALL="${R36OS_NATIVE_C03_HOOK_INSTALL:-$PKGROOT/r36os-native-c03-install-hook}"
+RESULT="${R36OS_NATIVE_C03_RESULT:-/run/r36os-native-c03-prepare.result}"
+LOCKDIR="${R36OS_NATIVE_C03_LOCKDIR:-/run/r36os-native-c03-prepare.lock}"
+
+EXPECTED_VERSION=0.5.60.0
+EXPECTED_STATE_UUID=a25488c6-742d-4555-82d1-e28ffc848af3
+EXPECTED_UPDATE_UUID=C49E-0225
+EXPECTED_KREL=6.12.94-r36os-k1
+EXPECTED_K1_CID=9d7bd2334f315d98b482f850
+C02_SHA=42eec8dc524fcd821d0919bb3d185a3a0894f5bbf48fa0bf36d0a3834b454fac
+MARKER_OPEN=0
+
+sha(){ sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1" 2>/dev/null; }
+fail(){
+  code="$1"; detail="$2"
+  if [ "$MARKER_OPEN" = 1 ]; then
+    "$MAINT" marker-abort-ro >/dev/null 2>&1 || true
+    MARKER_OPEN=0
+  fi
+  printf 'status=FAIL\ncode=%s\ndetail=%s\n' "$code" "$detail" >"$RESULT" 2>/dev/null || true
+  echo "status=FAIL code=$code detail=$detail"
+  exit "$code"
+}
+finish_pass(){
+  detail="$1"
+  printf 'status=PASS\ncode=0\ndetail=%s\n' "$detail" >"$RESULT" 2>/dev/null || true
+  echo "status=PASS code=0 detail=$detail"
+  exit 0
+}
+cleanup_lock(){ rmdir "$LOCKDIR" 2>/dev/null || true; }
+
+verify_bundle(){
+  for f in rootfs.tar.zst rootfs-files.sha256 uInitrd hooked-boot.ini hook.conf C03_READY.conf MANIFEST.sha256 r36os-native-c03-install-hook; do
+    [ -s "$PKGROOT/$f" ] || return 10
+  done
+  (cd "$PKGROOT" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1) || return 11
+  [ "$(val "$PKGROOT/C03_READY.conf" format)" = R36OS_NATIVE_C03_READY_V1 ] || return 12
+  NID="$(val "$PKGROOT/C03_READY.conf" native_candidate)"
+  echo "$NID" | grep -Eq '^[0-9a-f]{24}$' || return 13
+  [ "$(val "$PKGROOT/C03_READY.conf" k1_candidate)" = "$EXPECTED_K1_CID" ] || return 14
+  [ "$(val "$PKGROOT/C03_READY.conf" kernel_release)" = "$EXPECTED_KREL" ] || return 15
+  [ "$(val "$PKGROOT/C03_READY.conf" state_uuid)" = "$EXPECTED_STATE_UUID" ] || return 16
+  [ "$(val "$PKGROOT/C03_READY.conf" base_c02_rootfs_sha256)" = "$C02_SHA" ] || return 17
+  ROOTFS_SHA="$(val "$PKGROOT/C03_READY.conf" rootfs_sha256)"
+  UINITRD_SHA="$(val "$PKGROOT/C03_READY.conf" uinitrd_sha256)"
+  HOOK_SHA="$(val "$PKGROOT/C03_READY.conf" hooked_boot_sha256)"
+  [ "$(sha "$PKGROOT/rootfs.tar.zst")" = "$ROOTFS_SHA" ] || return 18
+  [ "$(sha "$PKGROOT/uInitrd")" = "$UINITRD_SHA" ] || return 19
+  [ "$(sha "$PKGROOT/hooked-boot.ini")" = "$HOOK_SHA" ] || return 20
+  [ "$(val "$PKGROOT/hook.conf" native_candidate)" = "$NID" ] || return 21
+  [ "$(val "$PKGROOT/hook.conf" rootfs_sha256)" = "$ROOTFS_SHA" ] || return 22
+  [ "$(val "$PKGROOT/hook.conf" hooked_boot_sha256)" = "$HOOK_SHA" ] || return 23
+  return 0
+}
+
+verify_host(){
+  [ "$(id -u)" = 0 ] || return 30
+  [ -x "$VERSION" ] || return 31
+  [ "__D($VERSION version 2>/dev/null)" = "$EXPECTED_VERSION" ] || return 32
+  case "$(uname -r 2>/dev/null)" in 4.4.*) ;; *) return 33;; esac
+  if grep -Eq '(^| )r36os\.kernel_attempt=' /proc/cmdline 2>/dev/null; then return 34; fi
+  mountpoint -q "$STATE" 2>/dev/null || return 35
+  SDEV="$(findmnt -n -o SOURCE "$STATE" 2>/dev/null | head -1)"
+  [ -n "$SDEV" ] || return 36
+  SUUID="$(blkid -s UUID -o value "$SDEV" 2>/dev/null | tr 'A-F' 'a-f')"
+  [ "$SUUID" = "$EXPECTED_STATE_UUID" ] || return 37
+  [ -w "$STATE" ] || return 38
+  for x in "$MAINT" "$POLICY" "$K1PREP" "$K1SLOT" "$HOOK_INSTALL"; do [ -x "$x" ] || return 39; done
+  [ -s "$STATE/kernel-next/modules/$EXPECTED_KREL/modules.dep" ] || return 40
+  return 0
+}
+
+verify_no_k1_pending(){
+  st="__D($K1SLOT status 2>/dev/null || true)"
+  printf '%s\n' "$st" | grep -Fxq 'armed=yes' && return 1
+  printf '%s\n' "$st" | grep -Fxq 'consumed=yes' && return 1
+  return 0
+}
+
+verify_extracted_root(){
+  root="$1"
+  [ -d "$root" ] || return 1
+  [ ! -L "$root" ] || return 1
+  [ -s "$root/sbin/init" ] || return 1
+  [ -s "$root/etc/r36os-release" ] || return 1
+  [ "$(val "$root/etc/r36os-native-c03.conf" native_candidate)" = "$NID" ] || return 1
+  [ "$(val "$root/etc/r36os-native-c03.conf" k1_candidate)" = "$EXPECTED_K1_CID" ] || return 1
+  [ "$(val "$root/etc/r36os-native-c03.conf" kernel_release)" = "$EXPECTED_KREL" ] || return 1
+  (cd "$root" && sha256sum -c "$PKGROOT/rootfs-files.sha256" >/dev/null 2>&1) || return 1
+  return 0
+}
+
+stage_root(){
+  mkdir -p "$NEXT" || fail 50 state-next-create
+  if verify_extracted_root "$ROOTDST"; then
+    ROOT_REUSED=yes
+  else
+    ROOT_REUSED=no
+    NEED_KB="$(val "$PKGROOT/C03_READY.conf" rootfs_unpacked_kb)"
+    echo "$NEED_KB" | grep -Eq '^[0-9]+$' || fail 51 rootfs-size-invalid
+    AVAIL_KB="$(df -Pk "$STATE" 2>/dev/null | awk 'NR>1{v=$4} END{print v}')"
+    echo "$AVAIL_KB" | grep -Eq '^[0-9]+$' || fail 52 state-space-measure
+    TOTAL_KB=$((NEED_KB + 524288))
+    [ "$AVAIL_KB" -ge "$TOTAL_KB" ] || fail 53 state-space
+
+    TMP="$NEXT/.rootfs.stage-$NID-$$"
+    OLD="$NEXT/.rootfs.previous-$NID-$$"
+    rm -rf "$TMP" "$OLD"
+    mkdir -p "$TMP" || fail 54 rootfs-stage-create
+    tar --zstd -tf "$PKGROOT/rootfs.tar.zst" >"$NEXT/.rootfs.list-$$" 2>/dev/null || fail 55 rootfs-list
+    if grep -Eq '(^/|(^|/)\.\.(/|$))' "$NEXT/.rootfs.list-$$"; then fail 56 rootfs-unsafe-path; fi
+    rm -f "$NEXT/.rootfs.list-$$"
+    tar --zstd --numeric-owner -xf "$PKGROOT/rootfs.tar.zst" -C "$TMP" || fail 57 rootfs-extract
+    verify_extracted_root "$TMP" || { rm -rf "$TMP"; fail 58 rootfs-stage-verify; }
+    sync
+
+    if [ -e "$ROOTDST" ]; then
+      mv "$ROOTDST" "$OLD" || { rm -rf "$TMP"; fail 59 rootfs-backup-rename; }
+      sync
+    fi
+    if ! mv "$TMP" "$ROOTDST"; then
+      [ -d "$OLD" ] && mv "$OLD" "$ROOTDST" 2>/dev/null || true
+      sync
+      fail 60 rootfs-activate
+    fi
+    sync
+    if ! verify_extracted_root "$ROOTDST"; then
+      BROKEN="$NEXT/.rootfs.failed-$NID-$$"
+      mv "$ROOTDST" "$BROKEN" 2>/dev/null || true
+      [ -d "$OLD" ] && mv "$OLD" "$ROOTDST" 2>/dev/null || true
+      sync
+      rm -rf "$BROKEN" 2>/dev/null || true
+      fail 61 rootfs-activate-readback
+    fi
+    [ -d "$OLD" ] && rm -rf "$OLD"
+  fi
+
+  cp -f "$PKGROOT/C03_READY.conf" "$READYDST.tmp" || fail 62 ready-copy
+  sync
+  mv -f "$READYDST.tmp" "$READYDST" || fail 63 ready-activate
+  [ "$(val "$READYDST" native_candidate)" = "$NID" ] || fail 64 ready-readback
+  [ "$(val "$READYDST" rootfs_sha256)" = "$ROOTFS_SHA" ] || fail 65 ready-rootfs-readback
+  sync
+}
+
+verify_private_k1(){
+  K1="$PRIVATE/R36OS-KernelNext/K1"
+  [ -d "$K1" ] || return 1
+  [ "$(val "$K1/K1.conf" candidate_id)" = "$EXPECTED_K1_CID" ] || return 1
+  [ "$(val "$K1/K1.conf" kernel_release)" = "$EXPECTED_KREL" ] || return 1
+  [ -s "$K1/Image" ] && [ -s "$K1/rk3326-r36s-k1.dtb" ] && [ -s "$K1/MANIFEST.sha256" ] || return 1
+  (cd "$K1" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1) || return 1
+  return 0
+}
+
+stage_fat_and_arm(){
+  "$HOOK_INSTALL" "$PKGROOT/hooked-boot.ini" "$PKGROOT/hook.conf" >/run/r36os-native-c03-hook-install.result 2>&1 || fail 70 hook-install
+
+  "$MAINT" marker-open >/run/r36os-native-c03-marker-open.result 2>&1 || fail 71 marker-open
+  MARKER_OPEN=1
+  verify_private_k1 || fail 72 private-k1-verification
+
+  NROOT="$PRIVATE/R36OS-NativeNext"
+  DST="$NROOT/C03"
+  STAGE="$NROOT/.C03.stage-$NID-$$"
+  OLD="$NROOT/.C03.previous-$NID-$$"
+  mkdir -p "$NROOT" || fail 73 native-fat-root
+  rm -rf "$STAGE" "$OLD"
+  mkdir -p "$STAGE" || fail 74 native-fat-stage
+  cp -f "$PKGROOT/uInitrd" "$STAGE/uInitrd" || fail 75 native-initrd-copy
+  cp -f "$PKGROOT/hook.conf" "$STAGE/hook.conf" || fail 76 native-hookmeta-copy
+  cp -f "$PKGROOT/C03_READY.conf" "$STAGE/C03_READY.conf" || fail 77 native-ready-copy
+  sync
+  [ "$(sha "$STAGE/uInitrd")" = "$UINITRD_SHA" ] || fail 78 native-initrd-readback
+  [ "$(val "$STAGE/C03_READY.conf" rootfs_sha256)" = "$ROOTFS_SHA" ] || fail 79 native-ready-readback
+
+  if [ -e "$DST" ]; then mv "$DST" "$OLD" || fail 80 native-fat-backup; sync; fi
+  if ! mv "$STAGE" "$DST"; then
+    [ -d "$OLD" ] && mv "$OLD" "$DST" 2>/dev/null || true
+    fail 81 native-fat-activate
+  fi
+  sync
+  [ "$(sha "$DST/uInitrd")" = "$UINITRD_SHA" ] || fail 82 native-fat-activate-readback
+  [ -d "$OLD" ] && rm -rf "$OLD"
+
+  # The request is the FINAL boot-affecting write.
+  rm -f "$PRIVATE/R36N3.CNS" "$DST"/boot-native.*.once "$DST"/boot-native.*.once.tmp
+  sync
+  K1REQ="$PRIVATE/R36OS-KernelNext/boot-next.$EXPECTED_K1_CID.once"
+  [ ! -s "$K1REQ" ] || fail 83 k1-request-became-pending
+
+  REQ="$DST/boot-native.$NID.once"
+  {
+    echo 'format=R36OS_NATIVE_C03_BOOT_REQUEST_V1'
+    echo "native_candidate=$NID"
+    echo "rootfs_sha256=$ROOTFS_SHA"
+    echo "uinitrd_sha256=$UINITRD_SHA"
+    echo "hooked_boot_sha256=$HOOK_SHA"
+    echo "k1_candidate=$EXPECTED_K1_CID"
+    echo "kernel_release=$EXPECTED_KREL"
+  } >"$REQ.tmp" || fail 84 request-write
+  sync
+  mv -f "$REQ.tmp" "$REQ" || fail 85 request-activate
+  sync
+  [ "$(val "$REQ" native_candidate)" = "$NID" ] || fail 86 request-candidate-readback
+  [ "$(val "$REQ" rootfs_sha256)" = "$ROOTFS_SHA" ] || fail 87 request-rootfs-readback
+
+  if ! "$MAINT" marker-close-unmounted >/run/r36os-native-c03-marker-close.result 2>&1; then
+    rm -f "$REQ" "$PRIVATE/R36N3.CNS" 2>/dev/null || true
+    sync
+    "$MAINT" marker-abort-ro >/dev/null 2>&1 || true
+    MARKER_OPEN=0
+    fail 88 marker-close
+  fi
+  MARKER_OPEN=0
+  mountpoint -q "$UPDATE" 2>/dev/null && fail 89 update-still-mounted
+  mountpoint -q "$PRIVATE" 2>/dev/null && fail 90 private-still-mounted
+}
+
+disarm(){
+  verify_bundle || fail 100 bundle-verification
+  verify_host || fail 101 host-verification
+  "$MAINT" marker-open >/run/r36os-native-c03-disarm-open.result 2>&1 || fail 102 disarm-marker-open
+  MARKER_OPEN=1
+  DST="$PRIVATE/R36OS-NativeNext/C03"
+  rm -f "$PRIVATE/R36N3.CNS" "$DST"/boot-native.*.once "$DST"/boot-native.*.once.tmp
+  sync
+  "$MAINT" marker-close-unmounted >/run/r36os-native-c03-disarm-close.result 2>&1 || fail 103 disarm-marker-close
+  MARKER_OPEN=0
+  "$POLICY" finish-ro >/dev/null 2>&1 || fail 104 disarm-restore-ro
+  finish_pass disarmed
+}
+
+status(){
+  verify_bundle >/dev/null 2>&1; B="$?"
+  echo "bundle_verify_code=$B"
+  if [ "$B" -eq 0 ]; then
+    echo "native_candidate=$NID"
+    echo "rootfs_sha256=$ROOTFS_SHA"
+    echo "root_staged=$(verify_extracted_root "$ROOTDST" && echo yes || echo no)"
+    echo "ready_staged=$([ -s "$READYDST" ] && echo yes || echo no)"
+  fi
+  echo "active_boot_sha256=$(sha /boot/boot.ini)"
+  echo "update_mounted=$(mountpoint -q "$UPDATE" 2>/dev/null && echo yes || echo no)"
+  exit "$B"
+}
+
+case "$CMD" in
+  status) status;;
+  disarm)
+    mkdir "$LOCKDIR" 2>/dev/null || { echo 'status=PASS code=0 detail=duplicate-request-ignored'; exit 0; }
+    trap cleanup_lock EXIT INT TERM
+    disarm
+    ;;
+  stage-only|arm-once)
+    mkdir "$LOCKDIR" 2>/dev/null || { echo 'status=PASS code=0 detail=duplicate-request-ignored'; exit 0; }
+    trap cleanup_lock EXIT INT TERM
+    verify_bundle || fail 110 bundle-verification
+    verify_host || fail 111 host-verification
+    verify_no_k1_pending || fail 112 k1-one-shot-pending
+    "$K1PREP" stage-only >/run/r36os-native-c03-k1-stage.result 2>&1 || fail 113 k1-stage-only
+    stage_root
+    if [ "$CMD" = stage-only ]; then
+      "$POLICY" finish-ro >/dev/null 2>&1 || fail 114 stage-only-restore-ro
+      finish_pass "native-root-staged root_reused=$ROOT_REUSED candidate=$NID"
+    fi
+    stage_fat_and_arm
+    finish_pass "armed-once candidate=$NID rootfs_sha256=$ROOTFS_SHA"
+    ;;
+  *) echo 'usage: status|stage-only|arm-once|disarm' >&2; exit 2;;
+esac
