@@ -17,28 +17,50 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Recover historical source bundles
+
+      - name: Recover intact R39 source bundles
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin main
-          mkdir -p recovered/r38 recovered/r39-inputs recovered/r39-overrides recovered/r39-final targets
-          git show origin/main:r38-release/release-inputs.tar.gz.b64 | base64 -d >recovered/r38.tar.gz
-          git show origin/main:r39-release/release-inputs.tar.gz.b64 | base64 -d >recovered/r39-inputs.tar.gz
-          git show origin/main:r39-release/final-source-overrides.tar.gz.b64 | base64 -d >recovered/r39-overrides.tar.gz
+          mkdir -p recovered/r39-overrides recovered/r39-final targets
+
+          git show origin/main:r39-release/final-source-overrides.tar.gz.b64 >recovered/overrides.b64
+          base64 -d recovered/overrides.b64 >recovered/overrides.tar.gz
+          tar -xzf recovered/overrides.tar.gz -C recovered/r39-overrides
+
           {
             git show origin/main:r39-release/final-source.b64.part00
             git show origin/main:r39-release/final-source.b64.part01
             git show origin/main:r39-release/final-source.b64.part02
-          } | base64 -d >recovered/r39-final.bin
-          tar -xzf recovered/r38.tar.gz -C recovered/r38
-          tar -xzf recovered/r39-inputs.tar.gz -C recovered/r39-inputs
-          tar -xzf recovered/r39-overrides.tar.gz -C recovered/r39-overrides
-          file recovered/r39-final.bin | tee recovered/r39-final-type.txt
-          if tar -tzf recovered/r39-final.bin >/dev/null 2>&1; then tar -xzf recovered/r39-final.bin -C recovered/r39-final; fi
-          find recovered -type f -printf '%p %s\n' | sort >recovered/inventory.txt
-          cat recovered/inventory.txt
+          } | tr -d '\r\n\t ' >recovered/final.b64
 
-      - name: Find exact runtime scripts by name and hash
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+          p=Path('recovered/final.b64')
+          s=p.read_text()
+          bad=sorted(set(s)-set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='))
+          if bad:
+              raise SystemExit(f'non-base64 characters in final source: {bad}')
+          # The historical split omitted final transport padding only. Padding
+          # does not encode source bytes; restore only the RFC4648 padding.
+          s += '=' * ((-len(s)) % 4)
+          Path('recovered/r39-final.bin').write_bytes(base64.b64decode(s, validate=True))
+          PY
+
+          file recovered/r39-final.bin | tee recovered/r39-final-type.txt
+          if unzip -t recovered/r39-final.bin >/dev/null 2>&1; then
+            unzip -q recovered/r39-final.bin -d recovered/r39-final
+          elif tar -tzf recovered/r39-final.bin >/dev/null 2>&1; then
+            tar -xzf recovered/r39-final.bin -C recovered/r39-final
+          else
+            echo 'R39 final source is not a recognized archive' >&2
+            exit 20
+          fi
+
+          find recovered/r39-overrides recovered/r39-final -type f -printf '%p %s\n' | sort | tee recovered/inventory.txt
+
+      - name: Find exact runtime scripts by pinned R58 core hashes
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -49,7 +71,7 @@ jobs:
             'r36os-graphics-test-inner':'4004f64a65d25671bfa57db9b28f741bf7bcef813f391b267cf5ca636df4e9c6',
             'r36os-input-supervisor':'7a3e941160d8bc4efbac1b607dab47f17ebd21239a482a7683fe28702923ab45',
           }
-          roots=[Path('recovered/r38'),Path('recovered/r39-inputs'),Path('recovered/r39-overrides'),Path('recovered/r39-final')]
+          roots=[Path('recovered/r39-overrides'),Path('recovered/r39-final')]
           report=[]
           found={}
           for root in roots:
@@ -68,6 +90,8 @@ jobs:
                   shutil.copy2(found[name],Path('targets')/name)
           Path('recovered/target-report.txt').write_text('\n'.join(report)+'\n')
           print('\n'.join(report))
+          if len(found) != len(wanted):
+              raise SystemExit(f'only recovered {len(found)}/{len(wanted)} exact scripts')
           PY
 
       - name: Extract readiness logic
@@ -76,7 +100,7 @@ jobs:
           for f in targets/*; do
             echo "===== $f ====="
             sha256sum "$f"
-            grep -nEi 'ready|input|supervisor|event|gamepad|gpio|adc|weston|handoff|graphics|FAIL|timeout' "$f" | head -400 || true
+            grep -nEi 'ready|input|supervisor|event|gamepad|gpio|adc|weston|handoff|graphics|FAIL|timeout' "$f" | head -500 || true
           done | tee recovered/readiness-excerpts.txt
 
       - name: Upload runtime evidence
