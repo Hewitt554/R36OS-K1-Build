@@ -1,0 +1,60 @@
+name: R60 CP03 Graphics Lab static validation
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - 'r60-cp03-graphics/**'
+      - '.github/workflows/static-r60-cp03.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct exact CP03 payload
+        run: |
+          set -euo pipefail
+          mkdir -p decoded
+          cat r60-cp03-graphics/payload/r36os-graphics-test-session.b64.part{00,01,02,03}             | base64 -d >decoded/r36os-graphics-test-session
+          test "$(sha256sum decoded/r36os-graphics-test-session | awk '{print $1}')" =             9830642ae3b67397d74358718cae260fc228f497b9ae9aacec0ec452ac695291
+          bash -n decoded/r36os-graphics-test-session
+          echo R60_CP03_PAYLOAD=PASS
+
+      - name: Scope and safety invariants
+        run: |
+          set -euo pipefail
+          S=decoded/r36os-graphics-test-session
+          grep -Fq 'r36_graphics_external_begin_k1_noinput(){' "$S"
+          grep -Fq 'r36_graphics_is_k1(){' "$S"
+          grep -Fq "6.12.94-r36os-k1" "$S"
+          grep -Fq 'r36os\.kernel_attempt=K1' "$S"
+          grep -Fq 'ready=SKIPPED_K1_GRAPHICS_NO_UINPUT' "$S"
+          grep -Fq 'if r36_graphics_is_k1; then' "$S"
+          grep -Fq 'r36_graphics_external_begin_k1_noinput "$LOG" "graphics-lab-$TS"' "$S"
+          grep -Fq 'r36_external_begin "$LOG" "graphics-lab-$TS"' "$S"
+          test "$(grep -Fc 'r36_external_begin "$LOG" "graphics-lab-$TS"' "$S")" -eq 1
+          grep -Fq 'START="$(date +%s' "$S"
+          grep -Fq 'NOW-START' "$S"
+          grep -Fq '42' "$S"
+          grep -Fq 'KERNEL_DRIVER_FAULT' "$S"
+          grep -Fq 'd_state_graphics_process=1' "$S"
+          ! grep -Fq '/usr/local/bin/r36os-input-supervisor' "$S"
+          test ! -e r60-cp03-graphics/r36os-input-supervisor
+          test ! -e r60-cp03-graphics/r36os-win-common
+          echo R60_CP03_SCOPE=PASS
+
+      - name: Checkpoint provenance
+        run: |
+          set -euo pipefail
+          grep -Fq '764fe5cb26da8ba66701c1154fbef8e3f944f9fe2330180cd97829c20aa88393' r60-cp03-graphics/README.md
+          grep -Fq '7a3e941160d8bc4efbac1b607dab47f17ebd21239a482a7683fe28702923ab45' r60-cp03-graphics/README.md
+          grep -Fq '9830642ae3b67397d74358718cae260fc228f497b9ae9aacec0ec452ac695291' r60-cp03-graphics/README.md
+          echo R60_CP03_STATIC=PASS
