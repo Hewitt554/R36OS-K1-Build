@@ -109,7 +109,7 @@ test -x "$ROOT/usr/bin/udevadm" || fail udevadm-missing
 test -x "$ROOT/usr/sbin/modprobe" || test -x "$ROOT/sbin/modprobe" || fail modprobe-missing
 test -x "$ROOT/usr/bin/nmcli" || fail nmcli-missing
 test -x "$ROOT/usr/sbin/NetworkManager" || fail networkmanager-missing
-test -x "$ROOT/usr/bin/iw" || fail iw-missing
+test -x "$ROOT/usr/sbin/iw" || test -x "$ROOT/usr/bin/iw" || fail iw-missing
 test -x "$ROOT/usr/sbin/rfkill" || test -x "$ROOT/usr/bin/rfkill" || fail rfkill-missing
 test -x "$ROOT/usr/bin/lsusb" || fail lsusb-missing
 
