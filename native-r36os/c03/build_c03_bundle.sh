@@ -72,6 +72,10 @@ base_c02_rootfs_sha256=$C02_SHA_EXPECTED
 native_uinitrd_sha256=$UINITRD_SHA
 EOF
 
+# Runtime bind target for the externally authenticated C03_READY.conf.
+# /init bind-mounts the staged marker over this regular file before systemd.
+printf '%s\n' '# R36OS Native C03 runtime ready-marker bind target' >"$ROOT/etc/r36os-c03-staged-ready.conf"
+
 # Normalize C03 overlay mtimes too.
 find "$ROOT" -xdev -exec touch -h -d "@$EPOCH" {} +
 
