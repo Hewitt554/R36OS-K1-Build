@@ -110,3 +110,21 @@ jobs:
           ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
           ! grep -Eq '>[[:space:]]*/(boot|etc|usr|lib)/' "$S"
           echo NATIVE_C01_CAPTURE_STATIC=PASS
+
+      - name: Execute physical capture in disposable CI sandbox
+        env:
+          R36_NATIVE_AUDIT_ROOT: /tmp/r36-native-audit
+        run: |
+          set -euo pipefail
+          chmod +x native-r36os/tools/capture_c01_physical_dependencies.sh
+          native-r36os/tools/capture_c01_physical_dependencies.sh
+          test -d /tmp/r36-native-audit
+          test -d /tmp/r36-native-audit/exports
+          test "$(find /tmp/r36-native-audit/exports -maxdepth 1 -type f -name 'R36OS-native-c01-audit-*.tar.gz' | wc -l)" -eq 1
+          A="$(find /tmp/r36-native-audit/exports -maxdepth 1 -type f -name 'R36OS-native-c01-audit-*.tar.gz' -print -quit)"
+          test -s "$A"
+          test -s "$A.sha256"
+          sha256sum -c "$A.sha256"
+          tar -tzf "$A" | grep -q '/MANIFEST.sha256
+          tar -tzf "$A" | grep -q '/tool-availability.tsv
+          echo NATIVE_C01_CAPTURE_EXECUTION=PASS
