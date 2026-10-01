@@ -1,0 +1,74 @@
+name: R60 CP03 recover exact R58 UI source
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - '.github/workflows/r60-cp03-source-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Recover exact verified R58 UI source lineage
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin work/r58-direct-split-input-ui-2026-09-30
+          mkdir recovered
+          for n in 00 01 02 03 04; do
+            git show FETCH_HEAD:r58-release/source/r36os_alpha5.c.gz.b64.part$n >>recovered/base.c.gz.b64
+          done
+          base64 -d recovered/base.c.gz.b64 >recovered/base.c.gz
+          gzip -dc recovered/base.c.gz >recovered/base.c
+          git show FETCH_HEAD:r58-release/transform_ui.py >recovered/transform_ui.py
+          test "$(sha256sum recovered/base.c | awk '{print $1}')" = 25e2de1b49b31033176e45f9106d4509d715c31371ac2dee1b95e6edbb6c71bd
+          python3 recovered/transform_ui.py recovered/base.c recovered/r58.c
+          test "$(sha256sum recovered/r58.c | awk '{print $1}')" = 657803bb2b4f60414d85775f86dae8d01d3cb46d631cfe2309e682dffd93289a
+          echo R60_CP03_SOURCE_RECOVERY=PASS
+
+      - name: Extract Graphics Lab and input-supervisor evidence
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('recovered/r58.c').read_text()
+          needles=[
+              'input_supervisor','Graphics Lab','graphics_lab','weston',
+              'external_session','ready=no','ready=yes','input supervisor',
+              'FAIL | ARM64','safe Weston','graphics-test'
+          ]
+          out=[]
+          for needle in needles:
+              start=0
+              while True:
+                  i=s.find(needle,start)
+                  if i<0: break
+                  a=max(0,i-2200); b=min(len(s),i+5000)
+                  out.append(f'===== NEEDLE {needle!r} OFFSET {i} =====\n{s[a:b]}\n')
+                  start=i+len(needle)
+          Path('recovered/graphics-excerpts.txt').write_text('\n'.join(out))
+          print('matches',len(out))
+          PY
+          grep -nEi 'input_supervisor|graphics lab|graphics_lab|weston|ready=no|ready=yes|FAIL \| ARM64|graphics-test' recovered/r58.c | head -300 || true
+
+      - name: Upload recovered source
+        uses: actions/upload-artifact@v4
+        with:
+          name: R60-CP03-exact-R58-UI-source
+          path: |
+            recovered/base.c
+            recovered/r58.c
+            recovered/transform_ui.py
+            recovered/graphics-excerpts.txt
+          if-no-files-found: error
+          retention-days: 30
