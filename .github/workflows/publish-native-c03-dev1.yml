@@ -57,13 +57,13 @@ jobs:
             "repos/$REPO/actions/artifacts/$SOURCE_ARTIFACT/zip" >artifact.zip
           unzip -q artifact.zip -d artifact
 
-          PKG="artifact/$NAME"
+          PKG="artifact/out-a/$NAME"
           test -s "$PKG"
           test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
           test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
-          grep -Fxq "$EXPECTED_SHA  $NAME" "artifact/$NAME.sha256"
+          grep -Fxq "$EXPECTED_SHA  $NAME" "artifact/out-a/$NAME.sha256"
 
-          test -s artifact/C03DEV_DELIVERY_REPORT.txt
+          test -s artifact/out-a/C03DEV_DELIVERY_REPORT.txt
           echo C03DEV_EXACT_ARTIFACT_VERIFIED
 
       - name: Publish or replace developer prerelease assets
@@ -86,8 +86,8 @@ jobs:
 
           gh release upload "$TAG" \
             "artifact/$NAME" \
-            "artifact/$NAME.sha256" \
-            "artifact/C03DEV_DELIVERY_REPORT.txt" \
+            "artifact/out-a/$NAME.sha256" \
+            "artifact/out-a/C03DEV_DELIVERY_REPORT.txt" \
             --repo "$REPO" --clobber
 
       - name: Verify remote prerelease
