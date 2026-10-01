@@ -1,0 +1,185 @@
+#!/bin/bash
+set -u
+
+PROC_ROOT="${R36_C04_PROC_ROOT:-/proc}"
+SYS_ROOT="${R36_C04_SYS_ROOT:-/sys}"
+DEV_ROOT="${R36_C04_DEV_ROOT:-/dev}"
+ROOTFS="${R36_C04_ROOTFS:-/}"
+STATE_ROOT="${R36_C04_STATE_ROOT:-/r36state}"
+ROMS_ROOT="${R36_C04_ROMS_ROOT:-/roms2}"
+OUTDIR="${R36_C04_OUTDIR:-$STATE_ROOT/logs/native-hardware}"
+REPORT="$OUTDIR/C04_BASELINE.conf"
+
+mkdir -p "$OUTDIR" 2>/dev/null || exit 20
+: >"$REPORT" || exit 21
+
+PASS_N=0; WARN_N=0; FAIL_N=0; DEFER_N=0; UNTESTED_N=0
+emit(){ printf '%s\n' "$*" >>"$REPORT"; }
+result(){
+  key="$1"; state="$2"; detail="$3"
+  emit "$key=$state"
+  emit "${key}_detail=$detail"
+  case "$state" in
+    PASS) PASS_N=$((PASS_N+1));;
+    WARN) WARN_N=$((WARN_N+1));;
+    FAIL) FAIL_N=$((FAIL_N+1));;
+    DEFERRED) DEFER_N=$((DEFER_N+1));;
+    UNTESTED) UNTESTED_N=$((UNTESTED_N+1));;
+  esac
+}
+kernel_release(){
+  if [ -n "${R36_C04_KERNEL_RELEASE:-}" ]; then printf '%s' "$R36_C04_KERNEL_RELEASE"; else uname -r 2>/dev/null || true; fi
+}
+pid1_name(){
+  if [ -n "${R36_C04_PID1:-}" ]; then printf '%s' "$R36_C04_PID1"; else cat "$PROC_ROOT/1/comm" 2>/dev/null || true; fi
+}
+svc_active(){
+  svc="$1"
+  if [ -n "${R36_C04_SYSTEMCTL:-}" ]; then "$R36_C04_SYSTEMCTL" is-active --quiet "$svc" >/dev/null 2>&1
+  else systemctl is-active --quiet "$svc" >/dev/null 2>&1; fi
+}
+mounted_at(){ awk -v t="$1" '$2==t{f=1} END{exit f?0:1}' "$PROC_ROOT/mounts" 2>/dev/null; }
+mount_source(){ awk -v t="$1" '$2==t{print $1; exit}' "$PROC_ROOT/mounts" 2>/dev/null; }
+read_one(){ [ -r "$1" ] || return 1; tr -d '\000\r\n' <"$1" 2>/dev/null; }
+find_input(){
+  wanted="$1"
+  for e in "$SYS_ROOT"/class/input/event*; do
+    [ -e "$e" ] || continue
+    n="$(read_one "$e/device/name" 2>/dev/null || true)"
+    [ "$n" = "$wanted" ] || continue
+    basename "$e"
+    return 0
+  done
+  return 1
+}
+first_dir(){ for p in "$@"; do [ -d "$p" ] && { printf '%s' "$p"; return 0; }; done; return 1; }
+
+emit 'format=R36OS_NATIVE_C04_BASELINE_V1'
+emit "timestamp=$(date -Is 2>/dev/null || date)"
+emit "kernel=$(kernel_release)"
+emit "pid1=$(pid1_name)"
+emit "probe_mode=passive"
+
+K="$(kernel_release)"
+[ "$K" = 6.12.94-r36os-k1 ] && result kernel PASS "$K" || result kernel FAIL "expected-6.12.94-r36os-k1 got-${K:-missing}"
+P1="$(pid1_name)"
+[ "$P1" = systemd ] && result pid1 PASS systemd || result pid1 FAIL "expected-systemd got-${P1:-missing}"
+svc_active systemd-journald.service && result journald PASS active || result journald FAIL inactive-or-missing
+svc_active systemd-udevd.service && result udevd PASS active || result udevd FAIL inactive-or-missing
+
+if mounted_at /r36state || mounted_at "$STATE_ROOT"; then
+  result r36state_mount PASS "$(mount_source /r36state || mount_source "$STATE_ROOT")"
+else
+  result r36state_mount FAIL not-mounted
+fi
+
+MODDEP="$ROOTFS/usr/lib/modules/6.12.94-r36os-k1/modules.dep"
+[ -s "$MODDEP" ] && result k1_modules PASS "$MODDEP" || result k1_modules FAIL missing-modules.dep
+
+ADC="$(find_input adc-joystick 2>/dev/null || true)"
+GPIO="$(find_input gpio-keys 2>/dev/null || true)"
+[ -n "$ADC" ] && result input_adc PASS "$ADC" || result input_adc FAIL adc-joystick-missing
+[ -n "$GPIO" ] && result input_gpio PASS "$GPIO" || result input_gpio FAIL gpio-keys-missing
+
+PWR="$(find_input 'rk805 pwrkey' 2>/dev/null || true)"
+[ -n "$PWR" ] && result input_power PASS "$PWR" || result input_power WARN rk805-pwrkey-not-enumerated
+JACK="$(find_input 'rk817_int Headphones' 2>/dev/null || true)"
+[ -n "$JACK" ] && result input_headphone PASS "$JACK" || result input_headphone WARN rk817-headphone-input-not-enumerated
+
+BL="$(first_dir "$SYS_ROOT"/class/backlight/* 2>/dev/null || true)"
+if [ -n "$BL" ]; then
+  BV="$(read_one "$BL/brightness" 2>/dev/null || true)"
+  BM="$(read_one "$BL/max_brightness" 2>/dev/null || true)"
+  case "$BV:$BM" in
+    *[!0-9:]*|:|*:) result backlight FAIL unreadable-brightness;;
+    *)
+      if [ "$BM" -gt 0 ] 2>/dev/null && [ "$BV" -ge 0 ] 2>/dev/null && [ "$BV" -le "$BM" ] 2>/dev/null; then
+        result backlight PASS "$(basename "$BL") current=$BV max=$BM"
+      else result backlight FAIL "invalid-range current=${BV:-?} max=${BM:-?}"; fi;;
+  esac
+else result backlight FAIL no-backlight-class-device; fi
+
+BAT=; CHARGERS=0
+for p in "$SYS_ROOT"/class/power_supply/*; do
+  [ -d "$p" ] || continue
+  TYPE="$(read_one "$p/type" 2>/dev/null || true)"
+  case "$TYPE" in
+    Battery) [ -n "$BAT" ] || BAT="$p";;
+    Mains|USB|USB_C|USB_PD|Wireless) CHARGERS=$((CHARGERS+1));;
+  esac
+done
+if [ -n "$BAT" ]; then
+  CAP="$(read_one "$BAT/capacity" 2>/dev/null || true)"
+  STAT="$(read_one "$BAT/status" 2>/dev/null || true)"
+  case "$CAP" in
+    ''|*[!0-9]*) result battery WARN "$(basename "$BAT") capacity-unavailable status=${STAT:-unknown}";;
+    *) result battery PASS "$(basename "$BAT") capacity=$CAP status=${STAT:-unknown}";;
+  esac
+else result battery FAIL no-battery-power-supply; fi
+[ "$CHARGERS" -gt 0 ] && result charger_interface PASS "count=$CHARGERS" || result charger_interface WARN no-separate-charger-supply
+
+TZ=
+for p in "$SYS_ROOT"/class/thermal/thermal_zone*; do
+  [ -r "$p/temp" ] || continue
+  V="$(read_one "$p/temp" 2>/dev/null || true)"
+  case "$V" in ''|*[!0-9-]*) continue;; esac
+  TZ="$p:$V"; break
+done
+[ -n "$TZ" ] && result thermal PASS "$TZ" || result thermal FAIL no-readable-thermal-zone
+
+CPUF=
+for p in "$SYS_ROOT"/devices/system/cpu/cpufreq/policy*; do
+  [ -d "$p" ] || continue
+  CUR="$(read_one "$p/scaling_cur_freq" 2>/dev/null || read_one "$p/cpuinfo_cur_freq" 2>/dev/null || true)"
+  [ -n "$CUR" ] || continue
+  CPUF="$p:$CUR"; break
+done
+[ -n "$CPUF" ] && result cpufreq PASS "$CPUF" || result cpufreq FAIL no-readable-cpufreq-policy
+
+USBDEV=; USBDRV=
+for d in "$SYS_ROOT"/bus/usb/devices/*; do
+  [ -r "$d/idVendor" ] || continue
+  [ -r "$d/idProduct" ] || continue
+  V="$(read_one "$d/idVendor" 2>/dev/null | tr 'A-F' 'a-f')"
+  P="$(read_one "$d/idProduct" 2>/dev/null | tr 'A-F' 'a-f')"
+  [ "$V:$P" = 0bda:0179 ] || continue
+  USBDEV="$(basename "$d")"
+  for i in "$d":*; do
+    [ -d "$i" ] || continue
+    if [ -L "$i/driver" ]; then USBDRV="$(basename "$(readlink -f "$i/driver" 2>/dev/null)" 2>/dev/null || true)"; break; fi
+  done
+  break
+done
+[ -n "$USBDEV" ] && result usb_realtek PASS "device=$USBDEV driver=${USBDRV:-unbound}" || result usb_realtek FAIL usb-0bda-0179-missing
+
+DRM_N=0
+if [ -d "$DEV_ROOT/dri" ]; then
+  for d in "$DEV_ROOT"/dri/card* "$DEV_ROOT"/dri/renderD*; do
+    [ -e "$d" ] || continue
+    DRM_N=$((DRM_N+1))
+  done
+fi
+[ "$DRM_N" -gt 0 ] && result drm_nodes PASS "count=$DRM_N" || result drm_nodes WARN no-drm-nodes
+
+if mounted_at /roms2 || mounted_at "$ROMS_ROOT"; then
+  result sd2_mount PASS "$(mount_source /roms2 || mount_source "$ROMS_ROOT")"
+else result sd2_mount WARN not-mounted-yet; fi
+
+result storage_active UNTESTED manual-write-read-delete-not-run
+result brightness_active UNTESTED manual-brightness-write-not-run
+result shutdown_active UNTESTED physical-clean-shutdown-not-run
+result wifi_functional DEFERRED chapter-05
+result gpu_render DEFERRED chapter-06
+result audio_playback DEFERRED chapter-10
+
+OVERALL=PASS
+[ "$FAIL_N" -gt 0 ] && OVERALL=FAIL
+emit "pass_count=$PASS_N"
+emit "warn_count=$WARN_N"
+emit "fail_count=$FAIL_N"
+emit "deferred_count=$DEFER_N"
+emit "untested_count=$UNTESTED_N"
+emit "overall=$OVERALL"
+sync 2>/dev/null || true
+printf 'R36OS_NATIVE_C04_BASELINE=%s pass=%s warn=%s fail=%s deferred=%s untested=%s\n' "$OVERALL" "$PASS_N" "$WARN_N" "$FAIL_N" "$DEFER_N" "$UNTESTED_N"
+[ "$OVERALL" = PASS ]
