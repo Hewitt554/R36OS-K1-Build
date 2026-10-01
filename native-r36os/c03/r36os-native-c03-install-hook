@@ -1,0 +1,57 @@
+#!/bin/bash
+set -euo pipefail
+NEW="${1:?generated boot.ini required}"
+META="${2:?hook metadata required}"
+BOOT="${R36OS_LEGACY_BOOT:-/boot/boot.ini}"
+REC="${R36OS_KERNEL_RECOVERY_DIR:-/r36update/R36OS-KernelNext/recovery}"
+LEGACY_SHA='b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e'
+PREV_HOOK_SHA='e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c'
+sha(){ sha256sum "$1" | awk '{print $1}'; }
+val(){ awk -F= -v k="$2" '$1==k{print substr($0,index($0,"=")+1);exit}' "$1"; }
+fail(){ echo "ERROR: $*" >&2; exit 1; }
+
+[ -s "$NEW" ] || fail 'new boot.ini missing/empty'
+[ -s "$META" ] || fail 'hook metadata missing/empty'
+[ -s "$BOOT" ] || fail 'active boot.ini missing/empty'
+[ "$(val "$META" previous_hook_sha256)" = "$PREV_HOOK_SHA" ] || fail 'metadata previous hook hash mismatch'
+NEW_SHA="$(val "$META" hooked_boot_sha256)"
+[ -n "$NEW_SHA" ] || fail 'metadata missing hooked hash'
+[ "$(sha "$NEW")" = "$NEW_SHA" ] || fail 'generated boot.ini does not match metadata'
+
+CUR="$(sha "$BOOT")"
+if [ "$CUR" = "$NEW_SHA" ]; then
+  echo 'status=ALREADY_INSTALLED'
+  exit 0
+fi
+
+mkdir -p "$REC"
+BACK="$REC/boot.ini.legacy.$LEGACY_SHA"
+if [ "$CUR" = "$LEGACY_SHA" ]; then
+  if [ ! -e "$BACK" ]; then
+    cp -f "$BOOT" "$BACK"
+    sync
+  fi
+elif [ "$CUR" = "$PREV_HOOK_SHA" ]; then
+  [ -f "$BACK" ] || fail 'current audited hook active but frozen legacy recovery copy missing'
+else
+  fail "active boot.ini is not frozen legacy/current R60 hook/new C03 hook: $CUR"
+fi
+
+[ "$(sha "$BACK")" = "$LEGACY_SHA" ] || fail 'legacy recovery backup verification failed'
+TMP="$BOOT.r36os-native-c03.new"
+rm -f "$TMP"
+cp -f "$NEW" "$TMP"
+sync
+[ "$(sha "$TMP")" = "$NEW_SHA" ] || fail 'temporary boot.ini verification failed'
+mv -f "$TMP" "$BOOT"
+sync
+if [ "$(sha "$BOOT")" != "$NEW_SHA" ]; then
+  REST="$BOOT.r36os-native-c03.restore"
+  cp -f "$BACK" "$REST"
+  sync
+  mv -f "$REST" "$BOOT"
+  sync
+  [ "$(sha "$BOOT")" = "$LEGACY_SHA" ] || fail 'hook install and emergency restore both failed'
+  fail 'C03 hook install readback failed; legacy restored'
+fi
+echo "status=PASS hooked_boot_sha256=$NEW_SHA"
