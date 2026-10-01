@@ -1,0 +1,74 @@
+name: R60 CP03 probe R38 package for graphics runtime
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - '.github/workflows/r60-cp03-r38-package-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact published R38
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p r38
+          gh release download alpha5r38 --repo Hewitt554/R36OS-K1-Build --pattern '00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd' --dir r38
+          P=r38/00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+          test "$(sha256sum "$P" | awk '{print $1}')" = 68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0
+          mkdir unpack
+          tar -xzf "$P" -C unpack
+          (cd unpack && sha256sum -c checksums.sha256 >/dev/null)
+          find unpack -type f -printf '%p %s\n' | sort | tee inventory.txt
+          echo R60_CP03_R38_PACKAGE=PASS
+
+      - name: Search package payload by name and exact R58 hashes
+        run: |
+          set -euo pipefail
+          mkdir targets
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, shutil
+          wanted={
+            'r36os-graphics-test-session':'764fe5cb26da8ba66701c1154fbef8e3f944f9fe2330180cd97829c20aa88393',
+            'r36os-graphics-test-inner':'4004f64a65d25671bfa57db9b28f741bf7bcef813f391b267cf5ca636df4e9c6',
+            'r36os-input-supervisor':'7a3e941160d8bc4efbac1b607dab47f17ebd21239a482a7683fe28702923ab45',
+          }
+          report=[]; exact={}
+          for p in Path('unpack').rglob('*'):
+              if not p.is_file(): continue
+              data=p.read_bytes(); h=hashlib.sha256(data).hexdigest()
+              for name,need in wanted.items():
+                  if p.name==name or h==need:
+                      report.append(f'{name}\t{h}\t{p}')
+                      if h==need and name not in exact:
+                          Path('targets',name).write_bytes(data); exact[name]=p
+          for name,need in wanted.items():
+              if name not in exact: report.append(f'MISSING_EXACT\t{name}\t{need}')
+          Path('target-report.txt').write_text('\n'.join(report)+'\n')
+          print('\n'.join(report))
+          Path('exact-count.txt').write_text(str(len(exact))+'\n')
+          PY
+          cat target-report.txt
+
+      - name: Upload package probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: R60-CP03-R38-package-probe
+          path: |
+            targets/
+            inventory.txt
+            target-report.txt
+            exact-count.txt
+          if-no-files-found: error
+          retention-days: 30
