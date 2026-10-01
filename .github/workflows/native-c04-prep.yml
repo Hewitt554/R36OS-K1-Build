@@ -49,6 +49,7 @@ jobs:
           S=native-r36os/c04/r36os-native-c04-storage-test
           bash -n "$P"
           bash -n "$S"
+          bash -n native-r36os/c04/r36os-native-c04-brightness-test
           bash -n native-r36os/c04/r36os-native-c04-snapshot
           ! grep -Eq 'systemctl[[:space:]]+(start|stop|restart|enable|disable|mask|unmask)' native-r36os/c04/r36os-native-c04-snapshot
           ! grep -Eq '(^|[;&|[:space:]])(modprobe|insmod|rmmod)[[:space:]]' native-r36os/c04/r36os-native-c04-snapshot
@@ -137,6 +138,7 @@ jobs:
             "$F/sys/class/input/event2/device" \
             "$F/sys/class/input/event3/device" \
             "$F/sys/class/backlight/backlight" \
+            "$F/sys/fs/cgroup" \
             "$F/sys/class/power_supply/battery" \
             "$F/sys/class/power_supply/usb" \
             "$F/sys/class/thermal/thermal_zone0" \
@@ -160,6 +162,7 @@ jobs:
 
           printf '70\n' >"$F/sys/class/backlight/backlight/brightness"
           printf '100\n' >"$F/sys/class/backlight/backlight/max_brightness"
+          printf 'cpu memory io pids\n' >"$F/sys/fs/cgroup/cgroup.controllers"
 
           printf 'Battery\n' >"$F/sys/class/power_supply/battery/type"
           printf '82\n' >"$F/sys/class/power_supply/battery/capacity"
@@ -268,3 +271,16 @@ jobs:
           cleanup
           trap - EXIT
           echo C04_STORAGE_HELPER=PASS
+
+      - name: Manual brightness helper restores original value
+        run: |
+          set -euo pipefail
+          F=/tmp/c04-brightness
+          mkdir -p "$F/class/backlight/backlight"
+          printf '50\n' >"$F/class/backlight/backlight/brightness"
+          printf '100\n' >"$F/class/backlight/backlight/max_brightness"
+          chmod 0666 "$F/class/backlight/backlight/brightness"
+          R36_C04_SYS_ROOT="$F" bash native-r36os/c04/r36os-native-c04-brightness-test | tee /tmp/c04-brightness.txt
+          grep -Fq 'C04_BRIGHTNESS_ACTIVE=PASS' /tmp/c04-brightness.txt
+          test "$(cat "$F/class/backlight/backlight/brightness")" = 50
+          echo C04_BRIGHTNESS_HELPER=PASS
