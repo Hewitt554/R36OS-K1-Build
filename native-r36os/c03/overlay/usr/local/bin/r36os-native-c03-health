@@ -36,6 +36,27 @@ fail(){
 NID="$(val r36os.native_candidate)"
 echo "$NID" | grep -Eq '^[0-9a-f]{24}$' || fail invalid-native-candidate
 [ "$(val r36os.native_state_uuid)" = a25488c6-742d-4555-82d1-e28ffc848af3 ] || fail wrong-state-uuid
+ROOTFS_SHA="$(val r36os.native_rootfs_sha)"
+echo "$ROOTFS_SHA" | grep -Eq '^[0-9a-f]{64}
+mountpoint -q /r36state 2>/dev/null || fail r36state-not-mounted
+[ -s /usr/lib/modules/6.12.94-r36os-k1/modules.dep ] || fail k1-modules-not-bound
+[ -s /etc/r36os-release ] || fail native-release-missing
+grep -Fq 'R36OS_VERSION="Native Prototype C03"' /etc/r36os-release || fail wrong-native-release
+systemctl is-active --quiet systemd-journald.service || fail journald-not-active
+systemctl is-active --quiet systemd-udevd.service || fail udevd-not-active
+
+READY=/r36state/r36os-next/C03_READY.conf
+[ -s "$READY" ] || fail ready-marker-missing
+grep -Fxq "native_candidate=$NID" "$READY" || fail ready-marker-candidate-mismatch
+grep -Fxq "rootfs_sha256=$ROOTFS_SHA" "$READY" || fail ready-marker-rootfs-mismatch
+grep -Fxq 'k1_candidate=9d7bd2334f315d98b482f850' "$READY" || fail ready-marker-k1-mismatch
+grep -Fxq 'kernel_release=6.12.94-r36os-k1' "$READY" || fail ready-marker-kernel-mismatch
+
+write_result PASS native-systemd-healthy
+printf '\nR36OS Native C03\n=================\nPASS: native Debian systemd root reached HEALTHY.\nCandidate: %s\n\nThis is a one-shot test.\nPower-cycle/reboot to return to the normal legacy R36OS path.\n' "$NID" >"$TTY" 2>/dev/null || true
+touch /run/r36os-native-c03-healthy 2>/dev/null || true
+exit 0
+ || fail invalid-rootfs-sha
 [ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] || fail pid1-not-systemd
 mountpoint -q /r36state 2>/dev/null || fail r36state-not-mounted
 [ -s /usr/lib/modules/6.12.94-r36os-k1/modules.dep ] || fail k1-modules-not-bound
