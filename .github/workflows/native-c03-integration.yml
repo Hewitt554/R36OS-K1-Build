@@ -80,7 +80,7 @@ jobs:
 
       - name: Download exact C02 and boot-lineage artifacts
         env:
-          GH_TOKEN: __TOKEN__
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir c02 lineage
