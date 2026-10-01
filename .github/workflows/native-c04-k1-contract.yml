@@ -17,7 +17,8 @@ jobs:
     timeout-minutes: 15
     env:
       REPO: Hewitt554/R36OS-K1-Build
-      TAG: alpha5r48
+      R38_TAG: alpha5r38
+      R59_TAG: alpha5r48
       R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
       R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
       R38_NAME: 00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
@@ -41,8 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p inputs/r38 inputs/r59 evidence pkg38 pkg59
-          gh release download "$TAG" --repo "$REPO" --pattern "$R38_NAME" --dir inputs/r38
-          gh release download "$TAG" --repo "$REPO" --pattern "$R59_NAME" --dir inputs/r59
+          gh release download "$R38_TAG" --repo "$REPO" --pattern "$R38_NAME" --dir inputs/r38
+          gh release download "$R59_TAG" --repo "$REPO" --pattern "$R59_NAME" --dir inputs/r59
           test "$(sha256sum "inputs/r38/$R38_NAME" | awk '{print $1}')" = "$R38_SHA"
           test "$(sha256sum "inputs/r59/$R59_NAME" | awk '{print $1}')" = "$R59_SHA"
           tar -xzf "inputs/r38/$R38_NAME" -C pkg38
