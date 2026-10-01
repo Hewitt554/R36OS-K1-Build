@@ -164,6 +164,7 @@ jobs:
           echo "$HOOK_SHA" | grep -Eq '^[0-9a-f]{64}$'
 
           test "$(sha256sum "$B/rootfs.tar.zst" | awk '{print $1}')" = "$ROOTFS_SHA"
+          test "$(awk -F= '$1=="rootfs_unpacked_kb"{print $2}' "$B/C03_READY.conf")" = 303322
           test "$(sha256sum "$B/uInitrd" | awk '{print $1}')" = "$UINITRD_SHA"
           test "$(sha256sum "$B/hooked-boot.ini" | awk '{print $1}')" = "$HOOK_SHA"
           test "$(sha256sum "$B/previous-hooked-boot.ini" | awk '{print $1}')" = "$CURRENT_HOOK_SHA"
