@@ -7,17 +7,19 @@ KREL="$(uname -r 2>/dev/null || true)"
 STATUS=/run/r36os-k1-wifi-bind.status
 PERSIST_DIR=/r36state/logs
 PERSIST="$PERSIST_DIR/k1-wifi-bind.log"
+PERSIST_CONF="$PERSIST_DIR/kernel-next/K1-WIFI-BIND.conf"
 USB_SYS=/sys/bus/usb/devices
 VID=0bda
 PID=0179
 DRIVER=rtl8xxxu
 FW=/lib/firmware/rtlwifi/rtl8188eufw.bin
 
-mkdir -p "$PERSIST_DIR" 2>/dev/null || true
+mkdir -p "$PERSIST_DIR" "$(dirname "$PERSIST_CONF")" 2>/dev/null || true
 
 emit() {
   line="$1"
   printf '%s\n' "$line" >>"$STATUS" 2>/dev/null || true
+  printf '%s\n' "$line" >>"$PERSIST_CONF" 2>/dev/null || true
   printf '%s %s\n' "$(date -Is 2>/dev/null || date)" "$line" >>"$PERSIST" 2>/dev/null || true
 }
 finish() {
@@ -28,6 +30,7 @@ finish() {
 }
 
 : >"$STATUS" 2>/dev/null || true
+: >"$PERSIST_CONF" 2>/dev/null || true
 emit 'format=R36OS_K1_WIFI_BIND_V1'
 emit "kernel=$KREL"
 
