@@ -32,7 +32,7 @@ jobs:
           git diff --name-only "$C03_PARENT"...HEAD | tee /tmp/c04-files.txt
           while IFS= read -r p; do
             case "$p" in
-              native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md|native-r36os/c04/*|.github/workflows/native-c04-prep.yml) ;;
+              native-r36os/CHAPTER_04_HARDWARE_BASELINE_PLAN.md|native-r36os/c04/*|.github/workflows/native-c04-prep.yml|.github/workflows/native-c04-k1-contract.yml) ;;
               *)
                 echo "C04 preparation changed forbidden path: $p" >&2
                 exit 20
@@ -49,6 +49,11 @@ jobs:
           S=native-r36os/c04/r36os-native-c04-storage-test
           bash -n "$P"
           bash -n "$S"
+          bash -n native-r36os/c04/r36os-native-c04-snapshot
+          ! grep -Eq 'systemctl[[:space:]]+(start|stop|restart|enable|disable|mask|unmask)' native-r36os/c04/r36os-native-c04-snapshot
+          ! grep -Eq '(^|[;&|[:space:]])(modprobe|insmod|rmmod)[[:space:]]' native-r36os/c04/r36os-native-c04-snapshot
+          ! grep -Eq '(^|[;&|[:space:]])(mount|umount|mkfs|fdisk|sfdisk|parted)[[:space:]]' native-r36os/c04/r36os-native-c04-snapshot
+          ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)[[:space:]]' native-r36os/c04/r36os-native-c04-snapshot
 
           grep -Fq 'format=R36OS_NATIVE_C04_BASELINE_V1' "$P"
           grep -Fq 'usb-0bda-0179-missing' "$P"
