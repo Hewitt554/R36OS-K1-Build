@@ -82,7 +82,7 @@ GPIO="$(find_input gpio-keys 2>/dev/null || true)"
 [ -n "$GPIO" ] && result input_gpio PASS "$GPIO" || result input_gpio FAIL gpio-keys-missing
 
 PWR="$(find_input 'rk805 pwrkey' 2>/dev/null || true)"
-[ -n "$PWR" ] && result input_power PASS "$PWR" || result input_power WARN rk805-pwrkey-not-enumerated
+[ -n "$PWR" ] && result input_power PASS "$PWR" || result input_power FAIL rk805-pwrkey-not-enumerated
 JACK="$(find_input 'rk817_int Headphones' 2>/dev/null || true)"
 [ -n "$JACK" ] && result input_headphone PASS "$JACK" || result input_headphone WARN rk817-headphone-input-not-enumerated
 
@@ -159,11 +159,17 @@ if [ -d "$DEV_ROOT/dri" ]; then
     DRM_N=$((DRM_N+1))
   done
 fi
-[ "$DRM_N" -gt 0 ] && result drm_nodes PASS "count=$DRM_N" || result drm_nodes WARN no-drm-nodes
+[ "$DRM_N" -gt 0 ] && result drm_nodes PASS "count=$DRM_N" || result drm_nodes FAIL no-drm-nodes
 
 if mounted_at /roms2 || mounted_at "$ROMS_ROOT"; then
   result sd2_mount PASS "$(mount_source /roms2 || mount_source "$ROMS_ROOT")"
 else result sd2_mount WARN not-mounted-yet; fi
+
+if [ -r "$SYS_ROOT/fs/cgroup/cgroup.controllers" ]; then
+  result cgroup_mode PASS unified-v2
+else
+  result cgroup_mode WARN unified-v2-not-observed
+fi
 
 result storage_active UNTESTED manual-write-read-delete-not-run
 result brightness_active UNTESTED manual-brightness-write-not-run
@@ -180,6 +186,8 @@ emit "fail_count=$FAIL_N"
 emit "deferred_count=$DEFER_N"
 emit "untested_count=$UNTESTED_N"
 emit "overall=$OVERALL"
+emit "chapter4_complete=no"
+emit "completion_gate=requires-physical-storage-brightness-shutdown-and-c03-pass"
 sync 2>/dev/null || true
 printf 'R36OS_NATIVE_C04_BASELINE=%s pass=%s warn=%s fail=%s deferred=%s untested=%s\n' "$OVERALL" "$PASS_N" "$WARN_N" "$FAIL_N" "$DEFER_N" "$UNTESTED_N"
 [ "$OVERALL" = PASS ]
