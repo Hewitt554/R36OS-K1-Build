@@ -85,7 +85,7 @@ jobs:
           fi
 
           gh release upload "$TAG" \
-            "artifact/$NAME" \
+            "artifact/out-a/$NAME" \
             "artifact/out-a/$NAME.sha256" \
             "artifact/out-a/C03DEV_DELIVERY_REPORT.txt" \
             --repo "$REPO" --clobber
