@@ -6,7 +6,7 @@ EXPECTED_HOOK_SHA = "e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15
 K1_CID = "9d7bd2334f315d98b482f850"
 STATE_UUID = "a25488c6-742d-4555-82d1-e28ffc848af3"
 KREL = "6.12.94-r36os-k1"
-ANCHOR = "# R36OS-K1-BOOT-ONCE-HOOK"
+ANCHOR = "# R36OS-K1-BOOT-ONCE-HOOK\n"
 
 def sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
