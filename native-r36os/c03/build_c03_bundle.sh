@@ -93,8 +93,9 @@ ROOTFS_SHA="$(sha "$BUNDLE/rootfs.tar.zst")"
 ROOTFS_BYTES="$(stat -c %s "$BUNDLE/rootfs.tar.zst")"
 # Logical regular-file bytes are deterministic. Filesystem allocation from
 # du(1) is not, and C03 already adds a fixed 512 MiB staging headroom.
-ROOTFS_LOGICAL_BYTES="$(find "$ROOT" -xdev -type f -printf '%s\n' | awk '{s+=$1} END{printf "%.0f",s+0}')"
-echo "$ROOTFS_LOGICAL_BYTES" | grep -Eq '^[0-9]+
+ROOTFS_LOGICAL_BYTES="$(find "$ROOT" -xdev -type f -printf '%s\\n' | awk '{s+=$1} END{printf "%.0f",s+0}')"
+echo "$ROOTFS_LOGICAL_BYTES" | grep -Eq '^[0-9]+$' || { echo rootfs-logical-bytes-invalid >&2; exit 26; }
+ROOTFS_KB=$(((ROOTFS_LOGICAL_BYTES + 1023) / 1024))
 
 cp "$WORK/init-a/uInitrd" "$BUNDLE/uInitrd"
 cp "$CURRENT_HOOK" "$BUNDLE/previous-hooked-boot.ini"
