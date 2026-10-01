@@ -1,0 +1,142 @@
+name: Native R36OS C04 frozen K1 platform audit
+
+on:
+  push:
+    branches:
+      - work/native-c04-hardware-baseline-prep-2026-10-01
+    paths:
+      - '.github/workflows/native-c04-k1-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      TAG: alpha5r48
+      R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
+      R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
+      R54_NAME: 00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd
+      R54_SHA: ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e
+      DTB_SHA: e2145905b1beb8d0f5b9dee6c5a21d31c29474be8762c893e81506fc40e627f4
+      KREL: 6.12.94-r36os-k1
+      K1_CID: 9d7bd2334f315d98b482f850
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install audit tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler xz-utils
+
+      - name: Download exact frozen K1 lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/r54 inputs/r59 evidence
+          gh release download "$TAG" --repo "$REPO" --pattern "$R54_NAME" --dir inputs/r54
+          gh release download "$TAG" --repo "$REPO" --pattern "$R59_NAME" --dir inputs/r59
+          test "$(sha256sum "inputs/r54/$R54_NAME" | awk '{print $1}')" = "$R54_SHA"
+          test "$(sha256sum "inputs/r59/$R59_NAME" | awk '{print $1}')" = "$R59_SHA"
+          mkdir -p pkg54 pkg59
+          tar -xzf "inputs/r54/$R54_NAME" -C pkg54
+          tar -xzf "inputs/r59/$R59_NAME" -C pkg59
+          echo C04_FROZEN_LINEAGE=PASS
+
+      - name: Recover exact DTB and module metadata
+        run: |
+          set -euo pipefail
+          DTB="$(find pkg54/payload/root/opt/r36os/kernel-next -type f -name '*.dtb' -print -quit)"
+          MODS="$(find pkg59/payload/root/opt/r36os/kernel-next -type f -name 'modules.tar.xz' -print -quit)"
+          test -s "$DTB"
+          test -s "$MODS"
+          test "$(sha256sum "$DTB" | awk '{print $1}')" = "$DTB_SHA"
+          cp "$DTB" evidence/panel4-k1.dtb
+          dtc -I dtb -O dts -o evidence/panel4-k1.dts "$DTB" 2>evidence/dtc-warnings.txt || {
+            cat evidence/dtc-warnings.txt
+            exit 20
+          }
+          tar -xJOf "$MODS" --wildcards '*/modules.builtin' >evidence/modules.builtin
+          tar -xJOf "$MODS" --wildcards '*/modules.dep' >evidence/modules.dep
+          tar -xJOf "$MODS" --wildcards '*/modules.alias' >evidence/modules.alias
+          echo C04_K1_METADATA=PASS
+
+      - name: Build hardware-driver contract report
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          built=Path('evidence/modules.builtin').read_text(errors='replace').splitlines()
+          dep=Path('evidence/modules.dep').read_text(errors='replace').splitlines()
+          allrows=built+dep
+          topics={
+            'input_adc':[r'adc[-_]joystick'],
+            'input_gpio':[r'gpio[-_]keys'],
+            'power_key':[r'rk805.*pwrkey',r'rk8.*pwrkey'],
+            'rk817':[r'rk817'],
+            'backlight':[r'pwm[_-]bl',r'backlight'],
+            'thermal':[r'rockchip[_-]thermal'],
+            'cpufreq':[r'cpufreq[_-]dt'],
+            'usb_dwc2':[r'/dwc2/|dwc2\.ko'],
+            'exfat':[r'/exfat/|exfat\.ko'],
+            'panfrost':[r'panfrost\.ko'],
+            'drm_rockchip':[r'rockchip.*drm|drm.*rockchip'],
+          }
+          out=[]
+          for key,pats in topics.items():
+              hits=[]
+              for row in allrows:
+                  low=row.lower()
+                  if any(re.search(p,low) for p in pats):
+                      hits.append(row)
+              out.append(f'[{key}]')
+              if hits:
+                  out.extend(sorted(set(hits))[:40])
+              else:
+                  out.append('NOT_FOUND_IN_MODULE_METADATA')
+          Path('evidence/C04_MODULE_CONTRACT.txt').write_text('\n'.join(out)+'\n')
+          print(Path('evidence/C04_MODULE_CONTRACT.txt').read_text())
+          PY
+
+      - name: Build device-tree contract report
+        run: |
+          set -euo pipefail
+          {
+            echo 'format=R36OS_NATIVE_C04_DTB_CONTRACT_V1'
+            echo "dtb_sha256=$DTB_SHA"
+            echo "kernel_release=$KREL"
+            echo "k1_candidate=$K1_CID"
+            echo
+            echo '--- relevant DT nodes/properties ---'
+            grep -nEi \
+              'adc-joystick|gpio-keys|pwm-backlight|backlight|rk817|rk805|battery|charger|thermal|cpu.?freq|opp-|mali|gpu|panfrost|dwc2|usb|mmc|sdmmc|sdio|headphone|hp-det' \
+              evidence/panel4-k1.dts || true
+          } >evidence/C04_DTB_CONTRACT.txt
+          sed -n '1,500p' evidence/C04_DTB_CONTRACT.txt
+
+      - name: Assert already-proven critical kernel features remain present
+        run: |
+          set -euo pipefail
+          cat evidence/modules.builtin evidence/modules.dep >evidence/modules.all
+          grep -Fq 'kernel/fs/ext4/ext4.ko' evidence/modules.builtin
+          grep -Fq 'kernel/drivers/mmc/core/mmc_core.ko' evidence/modules.builtin
+          grep -Fq 'kernel/drivers/mmc/core/mmc_block.ko' evidence/modules.builtin
+          grep -Fq 'kernel/drivers/mmc/host/dw_mmc-rockchip.ko' evidence/modules.builtin
+          grep -Fq 'kernel/drivers/gpu/drm/panfrost/panfrost.ko' evidence/modules.builtin
+          echo C04_K1_PROVEN_BASE=PASS
+
+      - name: Upload C04 frozen platform evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C04-frozen-K1-platform-audit
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
