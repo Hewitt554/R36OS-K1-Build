@@ -20,8 +20,8 @@ jobs:
       TAG: alpha5r48
       R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
       R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
-      R54_NAME: 00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd
-      R54_SHA: ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e
+      R38_NAME: 00-R36OS-Alpha5R38-K1BootNextOnce-FromR37.r36upd
+      R38_SHA: 68db42212fc0e13a9bad777daf68f4634bb86f58aa2347a923dde8cd71db30c0
       DTB_SHA: e2145905b1beb8d0f5b9dee6c5a21d31c29474be8762c893e81506fc40e627f4
       KREL: 6.12.94-r36os-k1
       K1_CID: 9d7bd2334f315d98b482f850
@@ -40,22 +40,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p inputs/r54 inputs/r59 evidence pkg54 pkg59
-          gh release download "$TAG" --repo "$REPO" --pattern "$R54_NAME" --dir inputs/r54
+          mkdir -p inputs/r38 inputs/r59 evidence pkg38 pkg59
+          gh release download "$TAG" --repo "$REPO" --pattern "$R38_NAME" --dir inputs/r38
           gh release download "$TAG" --repo "$REPO" --pattern "$R59_NAME" --dir inputs/r59
-          test "$(sha256sum "inputs/r54/$R54_NAME" | awk '{print $1}')" = "$R54_SHA"
+          test "$(sha256sum "inputs/r38/$R38_NAME" | awk '{print $1}')" = "$R38_SHA"
           test "$(sha256sum "inputs/r59/$R59_NAME" | awk '{print $1}')" = "$R59_SHA"
-          tar -xzf "inputs/r54/$R54_NAME" -C pkg54
+          tar -xzf "inputs/r38/$R38_NAME" -C pkg38
           tar -xzf "inputs/r59/$R59_NAME" -C pkg59
           echo C04_FROZEN_LINEAGE=PASS
 
       - name: Recover exact DTB and module metadata
         run: |
           set -euo pipefail
-          find pkg54/payload/root/opt/r36os/kernel-next -type f -printf '%p\t%s\n' | sort | tee evidence/r54-kernel-next-files.txt
+          find pkg38/payload/root/opt/r36os/kernel-next -type f -printf '%p\t%s\n' | sort | tee evidence/r38-kernel-next-files.txt
           find pkg59/payload/root/opt/r36os/kernel-next -type f -printf '%p\t%s\n' | sort | tee evidence/r59-kernel-next-files.txt
 
-          DTB="$(find pkg54/payload/root/opt/r36os/kernel-next -type f -name '*.dtb' -print -quit)"
+          DTB="$(find pkg38/payload/root/opt/r36os/kernel-next -type f -name '*.dtb' -print -quit)"
           MODS="$(find pkg59/payload/root/opt/r36os/kernel-next -type f -name 'modules.tar.xz' -print -quit)"
           echo "DTB=$DTB"
           echo "MODS=$MODS"
