@@ -1,0 +1,21 @@
+#!/bin/sh
+# Read-only inventory helper for the native prototype.
+set -u
+
+echo 'format=R36OS_NATIVE_INVENTORY_V1'
+echo "kernel=$(uname -r 2>/dev/null || true)"
+echo "machine=$(uname -m 2>/dev/null || true)"
+if [ -r /etc/r36os-release ]; then
+  sed -n 's/^R36OS_//p' /etc/r36os-release
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl is-system-running 2>/dev/null || true
+  systemctl --failed --no-pager 2>/dev/null || true
+fi
+if command -v findmnt >/dev/null 2>&1; then
+  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS / /r36state /roms2 2>/dev/null || true
+fi
+if [ -r /proc/bus/input/devices ]; then
+  grep -E '^(N: Name=|H: Handlers=)' /proc/bus/input/devices 2>/dev/null || true
+fi
+ls -l /dev/dri 2>/dev/null || true
