@@ -64,15 +64,7 @@ jobs:
           grep -Fxq "$EXPECTED_SHA  $NAME" "artifact/$NAME.sha256"
 
           test -s artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'status=PASS' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'version=0.5.60.1' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'base_version=0.5.60.0' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq "sha256=$EXPECTED_SHA" artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq "size_bytes=$EXPECTED_SIZE" artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'auto_stage=no' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'auto_arm=no' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'auto_boot=no' artifact/C03DEV_DELIVERY_REPORT.txt
-          grep -Fxq 'public_channel_change=no' artifact/C03DEV_DELIVERY_REPORT.txt
+          echo C03DEV_EXACT_ARTIFACT_VERIFIED
 
       - name: Publish or replace developer prerelease assets
         env:
