@@ -72,7 +72,59 @@ jobs:
           grep -Fq '/r36state|/roms2' "$S"
           ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
           ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)[[:space:]]' "$S"
+          python3 -m py_compile native-r36os/c04/validate_c03_physical_gate.py
+          ! grep -Eqi 'ssid|password|psk|/address|ip addr|nmcli .*wifi' native-r36os/c04/r36os-native-c04-snapshot
           echo C04_PREP_STATIC=PASS
+
+      - name: Physical gate validator contract
+        run: |
+          set -euo pipefail
+          V=native-r36os/c04/validate_c03_physical_gate.py
+
+          set +e
+          python3 "$V" /tmp/does-not-exist >/tmp/gate-missing.txt 2>&1
+          RC=$?
+          set -e
+          test "$RC" -ne 0
+          grep -Fq 'missing-physical-gate' /tmp/gate-missing.txt
+
+          cat >/tmp/gate-bad.conf <<'EOF'
+          format=R36OS_NATIVE_C03_PHYSICAL_RESULT_V1
+          status=PASS
+          source=physical-r36s
+          native_candidate=8f8eaa3bae6ad4352b4e01ef
+          rootfs_sha256=08214b18d833b8abed0ab86c0140774a0759f075e4d8ea454d85567590b53ec4
+          k1_candidate=9d7bd2334f315d98b482f850
+          kernel_release=6.12.94-r36os-k1
+          health_status=PASS
+          health_detail=native-systemd-healthy
+          pid1=systemd
+          c03_health_sha256=0000000000000000000000000000000000000000000000000000000000000000
+          evidence_bundle_sha256=1111111111111111111111111111111111111111111111111111111111111111
+          EOF
+          set +e
+          python3 "$V" /tmp/gate-bad.conf >/tmp/gate-bad.txt 2>&1
+          RC=$?
+          set -e
+          test "$RC" -ne 0
+          grep -Fq 'placeholder-c03_health_sha256' /tmp/gate-bad.txt
+
+          cat >/tmp/gate-good.conf <<'EOF'
+          format=R36OS_NATIVE_C03_PHYSICAL_RESULT_V1
+          status=PASS
+          source=physical-r36s
+          native_candidate=8f8eaa3bae6ad4352b4e01ef
+          rootfs_sha256=08214b18d833b8abed0ab86c0140774a0759f075e4d8ea454d85567590b53ec4
+          k1_candidate=9d7bd2334f315d98b482f850
+          kernel_release=6.12.94-r36os-k1
+          health_status=PASS
+          health_detail=native-systemd-healthy
+          pid1=systemd
+          c03_health_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          evidence_bundle_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          EOF
+          python3 "$V" /tmp/gate-good.conf | grep -Fq 'C04_GATE=PASS'
+          echo C04_PHYSICAL_GATE_VALIDATOR=PASS
 
       - name: Build healthy synthetic hardware fixture
         run: |
