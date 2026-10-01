@@ -18,8 +18,8 @@ new=old+'static int native_c03_menu=0,native_c03_sel=0,native_c03_confirm=0;'
 if s.count(old)!=1: raise SystemExit("controller globals anchor mismatch")
 s=s.replace(old,new,1)
 
-old='text(246,382,"Kernel Lab",1,C_MUTED);text(438,382,kb[0]?kb:"Not captured",1,contains(kb,"PASS")?C_GREEN:C_YELLOW);}'
-new='text(246,382,"Kernel Lab",1,C_MUTED);text(438,382,kb[0]?kb:"Not captured",1,contains(kb,"PASS")?C_GREEN:C_YELLOW);text(246,406,"R1",1,C_BLUE);text(286,406,"Native C03 developer controls",1,C_TEXT);}'
+old='text(246,382,"Kernel Lab",1,C_MUTED);'
+new=old+'text(246,406,"R1",1,C_BLUE);text(286,406,"Native C03 developer controls",1,C_TEXT);'
 if s.count(old)!=1: raise SystemExit("diagnostics draw anchor mismatch")
 s=s.replace(old,new,1)
 
