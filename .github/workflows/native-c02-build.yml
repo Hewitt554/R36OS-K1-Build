@@ -123,7 +123,7 @@ jobs:
           test -x /tmp/c02-root/usr/bin/journalctl
           test -x /tmp/c02-root/usr/bin/udevadm
           test -x /tmp/c02-root/usr/bin/nmcli
-          test -x /tmp/c02-root/usr/bin/iw
+          test -x /tmp/c02-root/usr/sbin/iw || test -x /tmp/c02-root/usr/bin/iw
           test -x /tmp/c02-root/usr/bin/lsusb
           test -s /tmp/c02-root/etc/r36os-release
           grep -Fq 'R36OS_VERSION="Native C02"' /tmp/c02-root/etc/r36os-release
