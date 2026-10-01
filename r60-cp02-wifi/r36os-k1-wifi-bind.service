@@ -1,0 +1,15 @@
+[Unit]
+Description=R36OS K1 RTL8188EU Wi-Fi binder
+Documentation=R36OS R60 CP02
+After=local-fs.target systemd-udev-trigger.service
+Before=NetworkManager.service wpa_supplicant.service
+ConditionKernelCommandLine=r36os.kernel_attempt=K1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/r36os-k1-wifi-bind
+RemainAfterExit=yes
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target
