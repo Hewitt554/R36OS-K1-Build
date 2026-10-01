@@ -85,3 +85,28 @@ jobs:
           grep -Fq 'ArkOS' /tmp/native-c01.txt
           grep -Fq 'R36OS_NATIVE_DEPENDENCY_SCAN_V1' /tmp/native-c01.json
           echo NATIVE_C01_SCANNER=PASS
+
+      - name: Validate physical capture is read-only and privacy-safe
+        run: |
+          set -euo pipefail
+          S=native-r36os/tools/capture_c01_physical_dependencies.sh
+          bash -n "$S"
+          grep -Fq '/r36state/logs/native-audit' "$S"
+          grep -Fq 'R36OS_NATIVE_C01_CAPTURE=PASS' "$S"
+          grep -Fq 'dpkg-query -W' "$S"
+          grep -Fq '/proc/device-tree' "$S"
+          grep -Fq 'udev-rules.sha256' "$S"
+          grep -Fq 'firmware-relevant.sha256' "$S"
+          grep -Fq 'graphics-library-identities.tsv' "$S"
+          grep -Fq 'alsa-aplay-list.txt' "$S"
+          grep -Fq 'Privacy guard' "$S"
+
+          ! grep -Eq '(^|[;&|[:space:]])(apt|apt-get|dpkg|pacman)[[:space:]]+(install|remove|purge|upgrade|dist-upgrade)' "$S"
+          ! grep -Eq 'systemctl[[:space:]]+(start|stop|restart|enable|disable|mask|unmask)' "$S"
+          ! grep -Eq 'modprobe[[:space:]]+-r|rmmod|insmod[[:space:]]' "$S"
+          ! grep -Eq 'nmcli[[:space:]].*(connect|disconnect|modify|delete|add)' "$S"
+          ! grep -Eq 'iw[[:space:]].*scan|nmcli[[:space:]].*wifi' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(reboot|poweroff|shutdown)([;&|[:space:]]|$)' "$S"
+          ! grep -Eq '(^|[;&|[:space:]])(mkfs|fdisk|sfdisk|parted)[[:space:]]' "$S"
+          ! grep -Eq '>[[:space:]]*/(boot|etc|usr|lib)/' "$S"
+          echo NATIVE_C01_CAPTURE_STATIC=PASS
