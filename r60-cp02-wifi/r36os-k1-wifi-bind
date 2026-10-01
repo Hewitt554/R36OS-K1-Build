@@ -1,0 +1,136 @@
+#!/bin/sh
+# R36OS R60 CP02 - K1 RTL8188EU runtime load/bind helper.
+# Legacy 4.4 is a strict no-op.  Never logs SSIDs, MAC addresses or credentials.
+set -u
+
+KREL="$(uname -r 2>/dev/null || true)"
+STATUS=/run/r36os-k1-wifi-bind.status
+PERSIST_DIR=/r36state/logs
+PERSIST="$PERSIST_DIR/k1-wifi-bind.log"
+USB_SYS=/sys/bus/usb/devices
+VID=0bda
+PID=0179
+DRIVER=rtl8xxxu
+FW=/lib/firmware/rtlwifi/rtl8188eufw.bin
+
+mkdir -p "$PERSIST_DIR" 2>/dev/null || true
+
+emit() {
+  line="$1"
+  printf '%s\n' "$line" >>"$STATUS" 2>/dev/null || true
+  printf '%s %s\n' "$(date -Is 2>/dev/null || date)" "$line" >>"$PERSIST" 2>/dev/null || true
+}
+finish() {
+  emit "status=$1"
+  emit "detail=$2"
+  sync 2>/dev/null || true
+  exit 0
+}
+
+: >"$STATUS" 2>/dev/null || true
+emit 'format=R36OS_K1_WIFI_BIND_V1'
+emit "kernel=$KREL"
+
+case "$KREL" in
+  6.12.94-r36os-k1) ;;
+  *) finish SKIP legacy-or-other-kernel ;;
+esac
+
+USB_DEV=
+USB_IF=
+for d in "$USB_SYS"/*; do
+  [ -r "$d/idVendor" ] || continue
+  [ -r "$d/idProduct" ] || continue
+  v="$(tr 'A-F' 'a-f' <"$d/idVendor" 2>/dev/null | tr -d '\r\n')"
+  p="$(tr 'A-F' 'a-f' <"$d/idProduct" 2>/dev/null | tr -d '\r\n')"
+  [ "$v:$p" = "$VID:$PID" ] || continue
+  USB_DEV="$d"
+  for i in "$d":*; do
+    [ -d "$i" ] || continue
+    USB_IF="$i"
+    break
+  done
+  break
+done
+
+[ -n "$USB_DEV" ] || finish WAIT usb-0bda-0179-not-present
+emit "usb_device=$(basename "$USB_DEV")"
+[ -n "$USB_IF" ] && emit "usb_interface=$(basename "$USB_IF")"
+[ -f "$FW" ] || finish FAIL firmware-missing
+emit "firmware_present=yes"
+
+MODULE_ROOT=
+for r in "/lib/modules/$KREL" "/usr/lib/modules/$KREL"; do
+  [ -d "$r" ] && { MODULE_ROOT="$r"; break; }
+done
+[ -n "$MODULE_ROOT" ] || finish FAIL module-root-missing
+emit "module_root=$MODULE_ROOT"
+
+RTL_PATH="$(find "$MODULE_ROOT" -type f -name 'rtl8xxxu.ko' -print 2>/dev/null | head -n1)"
+[ -n "$RTL_PATH" ] || finish FAIL rtl8xxxu-ko-missing
+[ -s "$MODULE_ROOT/modules.dep" ] || finish FAIL modules-dep-missing
+[ -s "$MODULE_ROOT/modules.alias" ] || finish FAIL modules-alias-missing
+emit "rtl8xxxu_ko=present"
+
+load_one() {
+  m="$1"
+  if grep -q "^$m " /proc/modules 2>/dev/null; then
+    emit "module_$m=already-loaded"
+    return 0
+  fi
+  if command -v modprobe >/dev/null 2>&1 && modprobe "$m" >/dev/null 2>&1; then
+    emit "module_$m=loaded-default"
+    return 0
+  fi
+  if command -v modprobe >/dev/null 2>&1 && [ -d "/usr/lib/modules/$KREL" ] && modprobe -d /usr "$m" >/dev/null 2>&1; then
+    emit "module_$m=loaded-usr-root"
+    return 0
+  fi
+  emit "module_$m=load-failed"
+  return 1
+}
+
+load_one cfg80211 || finish FAIL cfg80211-load
+load_one mac80211 || finish FAIL mac80211-load
+load_one rtl8xxxu || finish FAIL rtl8xxxu-load
+
+# Driver registration normally probes an already-enumerated USB device.
+# Give it a short chance before using an exact-interface bind fallback.
+n=0
+while [ "$n" -lt 20 ]; do
+  if [ -n "$USB_IF" ] && [ -L "$USB_IF/driver" ]; then break; fi
+  sleep 0.1
+  n=$((n+1))
+done
+
+if [ -n "$USB_IF" ] && [ ! -L "$USB_IF/driver" ] && [ -w "/sys/bus/usb/drivers/$DRIVER/bind" ]; then
+  ifname="$(basename "$USB_IF")"
+  printf '%s' "$ifname" >"/sys/bus/usb/drivers/$DRIVER/bind" 2>/dev/null || true
+  emit "explicit_bind_attempt=$ifname"
+fi
+
+n=0
+while [ "$n" -lt 30 ]; do
+  if [ -n "$USB_IF" ] && [ -L "$USB_IF/driver" ]; then break; fi
+  sleep 0.1
+  n=$((n+1))
+done
+
+if [ -n "$USB_IF" ] && [ -L "$USB_IF/driver" ]; then
+  bound="$(basename "$(readlink -f "$USB_IF/driver" 2>/dev/null)" 2>/dev/null || true)"
+  emit "driver_bound=$bound"
+else
+  finish FAIL usb-interface-unbound
+fi
+
+NETDEV=
+for ndev in /sys/class/net/*; do
+  [ -e "$ndev" ] || continue
+  [ -d "$ndev/wireless" ] || continue
+  NETDEV="$(basename "$ndev")"
+  break
+done
+
+[ -n "$NETDEV" ] || finish FAIL wireless-netdev-missing
+emit "wireless_netdev=$NETDEV"
+finish PASS rtl8xxxu-bound
