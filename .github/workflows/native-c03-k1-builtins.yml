@@ -1,0 +1,83 @@
+name: Native R36OS C03 K1 built-in storage proof
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - '.github/workflows/native-c03-k1-builtins.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      TAG: alpha5r48
+      R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
+      R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
+      KREL: 6.12.94-r36os-k1
+      K1_CID: 9d7bd2334f315d98b482f850
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact physically tested K1 package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir r59 pkg
+          gh release download "$TAG" --repo "$REPO" --pattern "$R59_NAME" --dir r59
+          P="r59/$R59_NAME"
+          test -f "$P"
+          test "$(sha256sum "$P" | awk '{print $1}')" = "$R59_SHA"
+          tar -xzf "$P" -C pkg
+          grep -Fxq "candidate_id=$K1_CID" pkg/payload/root/opt/r36os/kernel-next/K1/K1.conf
+          grep -Fxq "kernel_release=$KREL" pkg/payload/root/opt/r36os/kernel-next/K1/K1.conf
+          echo C03_EXACT_K1_PACKAGE=PASS
+
+      - name: Prove initramfs-critical storage drivers are built in
+        run: |
+          set -euo pipefail
+          M=pkg/payload/root/opt/r36os/kernel-next/K1/modules.tar.xz
+          test -s "$M"
+          tar -xJOf "$M" --wildcards '*/modules.builtin' >modules.builtin
+          for p in \
+            kernel/fs/ext4/ext4.ko \
+            kernel/drivers/mmc/core/mmc_core.ko \
+            kernel/drivers/mmc/core/mmc_block.ko \
+            kernel/drivers/mmc/host/dw_mmc.ko \
+            kernel/drivers/mmc/host/dw_mmc-pltfm.ko \
+            kernel/drivers/mmc/host/dw_mmc-rockchip.ko; do
+            grep -Fxq "$p" modules.builtin
+          done
+          grep -Fxq 'kernel/drivers/gpu/drm/panfrost/panfrost.ko' modules.builtin
+          {
+            echo 'format=R36OS_NATIVE_C03_K1_BUILTINS_V1'
+            echo 'status=PASS'
+            echo "kernel_release=$KREL"
+            echo "k1_candidate=$K1_CID"
+            echo 'ext4_builtin=yes'
+            echo 'mmc_core_builtin=yes'
+            echo 'mmc_block_builtin=yes'
+            echo 'dw_mmc_builtin=yes'
+            echo 'dw_mmc_pltfm_builtin=yes'
+            echo 'dw_mmc_rockchip_builtin=yes'
+            echo 'panfrost_builtin=yes'
+          } >C03_K1_BUILTINS.conf
+          echo C03_K1_BUILTIN_STORAGE=PASS
+
+      - name: Upload proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C03-K1-builtins
+          path: |
+            C03_K1_BUILTINS.conf
+            modules.builtin
+          if-no-files-found: error
+          retention-days: 30
