@@ -112,18 +112,42 @@ def main() -> int:
     block_a = generated.index(NATIVE_BEGIN)
     block_b = generated.index(NATIVE_END, block_a)
     block = generated[block_a:block_b]
-    order = [
-        'load mmc 1:3 ${loadaddr} "R36OS-NativeNext/C03/boot-native.',
-        'fatwrite mmc 1:3 ${loadaddr} "R36N3.CNS"',
-        'load mmc 1:3 ${loadaddr} "R36N3.CNS"',
-        'if test ${filesize} = ${r36os_native_req_size}',
-        'load mmc 1:3 ${loadaddr} "R36OS-KernelNext/K1/Image"',
-        'load mmc 1:3 ${initrd_loadaddr} "R36OS-NativeNext/C03/uInitrd"',
-        'load mmc 1:3 ${dtb_loadaddr} "R36OS-KernelNext/K1/rk3326-r36s-k1.dtb"',
-        'booti ${loadaddr} ${initrd_loadaddr} ${dtb_loadaddr}',
-    ]
-    pos = [block.index(x) for x in order]
-    assert pos == sorted(pos)
+    request_pos = block.index(
+        'load mmc 1:3 ${loadaddr} "R36OS-NativeNext/C03/boot-native.'
+    )
+    consumed_needle = 'load mmc 1:3 ${loadaddr} "R36N3.CNS"'
+    consumed_positions = []
+    start = 0
+    while True:
+        p = block.find(consumed_needle, start)
+        if p < 0:
+            break
+        consumed_positions.append(p)
+        start = p + len(consumed_needle)
+    assert len(consumed_positions) == 2, consumed_positions
+
+    write_pos = block.index('fatwrite mmc 1:3 ${loadaddr} "R36N3.CNS"')
+    size_pos = block.index('if test ${filesize} = ${r36os_native_req_size}')
+    image_pos = block.index('load mmc 1:3 ${loadaddr} "R36OS-KernelNext/K1/Image"')
+    initrd_pos = block.index(
+        'load mmc 1:3 ${initrd_loadaddr} "R36OS-NativeNext/C03/uInitrd"'
+    )
+    dtb_pos = block.index(
+        'load mmc 1:3 ${dtb_loadaddr} "R36OS-KernelNext/K1/rk3326-r36s-k1.dtb"'
+    )
+    booti_pos = block.index('booti ${loadaddr} ${initrd_loadaddr} ${dtb_loadaddr}')
+
+    assert (
+        request_pos
+        < consumed_positions[0]
+        < write_pos
+        < consumed_positions[1]
+        < size_pos
+        < image_pos
+        < initrd_pos
+        < dtb_pos
+        < booti_pos
+    )
     assert block.count("fatwrite ") == 1
     assert "saveenv" not in block
 
