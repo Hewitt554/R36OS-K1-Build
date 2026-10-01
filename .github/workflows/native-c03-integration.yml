@@ -206,7 +206,7 @@ jobs:
           test "$(find inspect \( -name 'westonwrap.sh' -o -name 'weston_pkg.squashfs' \) | wc -l)" -eq 0
           ! grep -Eqi '^(weston|xwayland|wine|wine64|wine32|box64|steam|emulationstation)\t' c03-packages.tsv
 
-          (cd inspect && sha256sum -c "$OLDPWD/$B/rootfs-files.sha256" >/dev/null)
+          (cd inspect && sudo sha256sum -c "$OLDPWD/$B/rootfs-files.sha256" >/dev/null)
           echo C03_NATIVE_ROOT_AUDIT=PASS
 
       - name: Unpack and audit C03 initramfs
