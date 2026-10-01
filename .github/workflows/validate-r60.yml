@@ -1,0 +1,169 @@
+name: Validate R36OS Alpha 5R60
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - '.github/workflows/validate-r60.yml'
+      - 'r60-release/**'
+      - 'r60-cp02-wifi/**'
+      - 'r60-cp03-graphics/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      CARRIER_TAG: alpha5r48
+      R59_NAME: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
+      R59_SHA: cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
+      R60_NAME: 00-R36OS-Alpha5R60-K1WiFiGraphicsLab-FromR59.r36upd
+      CID: 9d7bd2334f315d98b482f850
+      KREL: 6.12.94-r36os-k1
+      GRAPHICS_SHA: 9830642ae3b67397d74358718cae260fc228f497b9ae9aacec0ec452ac695291
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static source gate
+        run: |
+          set -euo pipefail
+          bash -n r60-release/build_release.sh
+          python3 -m py_compile r60-release/transform_identity.py
+          dash -n r60-cp02-wifi/r36os-k1-wifi-bind
+          grep -Fq 'for m in rfkill libarc4 cfg80211 mac80211 rtl8xxxu; do' r60-cp02-wifi/r36os-k1-wifi-bind
+          grep -Fq 'insmod "$path"' r60-cp02-wifi/r36os-k1-wifi-bind
+          grep -Fxq 'Wants=r36os-k1-wifi-bind.service' r60-cp02-wifi/20-r36os-k1-wifi-bind.conf
+          grep -Fxq 'After=r36os-k1-wifi-bind.service' r60-cp02-wifi/20-r36os-k1-wifi-bind.conf
+          grep -Fq 'ConditionKernelCommandLine=r36os.kernel_attempt=K1' r60-cp02-wifi/r36os-k1-wifi-bind.service
+          ! grep -Eqi 'ssid|psk|password|802-11-wireless\.ssid' r60-cp02-wifi/r36os-k1-wifi-bind
+          ! grep -Eqi 'reboot|shutdown|systemctl restart.*NetworkManager|systemctl restart.*r36os' r60-cp02-wifi/r36os-k1-wifi-bind
+
+          mkdir decoded
+          cat r60-cp03-graphics/payload/r36os-graphics-test-session.b64.part{00,01,02,03} | base64 -d >decoded/r36os-graphics-test-session
+          test "$(sha256sum decoded/r36os-graphics-test-session | awk '{print $1}')" = "$GRAPHICS_SHA"
+          bash -n decoded/r36os-graphics-test-session
+          grep -Fq 'r36_graphics_external_begin_k1_noinput(){' decoded/r36os-graphics-test-session
+          grep -Fq 'ready=SKIPPED_K1_GRAPHICS_NO_UINPUT' decoded/r36os-graphics-test-session
+          grep -Fq 'r36_external_begin "$LOG" "graphics-lab-$TS"' decoded/r36os-graphics-test-session
+          test "$(grep -Fc 'r36_external_begin "$LOG" "graphics-lab-$TS"' decoded/r36os-graphics-test-session)" -eq 1
+          grep -Fq 'KERNEL_DRIVER_FAULT' decoded/r36os-graphics-test-session
+          grep -Fq 'd_state_graphics_process=1' decoded/r36os-graphics-test-session
+          echo R60_SOURCE_GATE=PASS
+
+      - name: Download exact published R59
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir inputs
+          gh release download "$CARRIER_TAG" --repo "$REPO" --pattern "$R59_NAME" --dir inputs
+          R59="$PWD/inputs/$R59_NAME"
+          test -f "$R59"
+          test "$(sha256sum "$R59" | awk '{print $1}')" = "$R59_SHA"
+          echo "R59=$R59" >>"$GITHUB_ENV"
+          echo R60_R59_BASE=PASS
+
+      - name: Build R60 twice
+        run: |
+          set -euo pipefail
+          chmod +x r60-release/build_release.sh
+          ./r60-release/build_release.sh "$R59" "$PWD/out-a" | tee build-a.log
+          ./r60-release/build_release.sh "$R59" "$PWD/out-b" | tee build-b.log
+
+      - name: Deterministic package audit
+        run: |
+          set -euo pipefail
+          A="out-a/$R60_NAME"
+          B="out-b/$R60_NAME"
+          test -f "$A" && test -f "$B"
+          cmp "$A" "$B"
+          diff -u out-a/latest.conf out-b/latest.conf
+          diff -u out-a/RELEASE_REPORT.txt out-b/RELEASE_REPORT.txt
+          SHA="$(sha256sum "$A" | awk '{print $1}')"
+          SIZE="$(stat -c %s "$A")"
+          echo "R60_SHA=$SHA" >>"$GITHUB_ENV"
+          echo "R60_SIZE=$SIZE" >>"$GITHUB_ENV"
+
+          rm -rf pkg
+          mkdir pkg
+          tar -xzf "$A" -C pkg
+          (cd pkg && sha256sum -c checksums.sha256 >/dev/null)
+
+          test "$(awk -F= '$1=="version"{print $2}' pkg/manifest.conf)" = 0.5.60.0
+          test "$(awk -F= '$1=="base_version"{print $2}' pkg/manifest.conf)" = 0.5.59.0
+          test "$(awk -F= '$1=="candidate_id"{print $2}' pkg/manifest.conf)" = "$CID"
+          test "$(awk -F= '$1=="kernel_release"{print $2}' pkg/manifest.conf)" = "$KREL"
+          test "$(awk -F= '$1=="k1_binary_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="candidate_id_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_image_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_dtb_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="k1_uinitrd_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="module_payload_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="legacy_kernel_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="native_ui_change"{print $2}' pkg/manifest.conf)" = no
+          test "$(awk -F= '$1=="wifi_runtime_bind_fix"{print $2}' pkg/manifest.conf)" = yes
+          test "$(awk -F= '$1=="graphics_lab_k1_noinput"{print $2}' pkg/manifest.conf)" = yes
+
+          ROOT=pkg/payload/root
+          test "$(sha256sum "$ROOT/usr/local/bin/r36os-graphics-test-session" | awk '{print $1}')" = "$GRAPHICS_SHA"
+          dash -n "$ROOT/usr/local/bin/r36os-k1-wifi-bind"
+          bash -n "$ROOT/usr/local/bin/r36os-graphics-test-session"
+
+          test -s "$ROOT/etc/systemd/system/r36os-k1-wifi-bind.service"
+          test -s "$ROOT/etc/systemd/system/NetworkManager.service.d/20-r36os-k1-wifi-bind.conf"
+          grep -Fq 'for m in rfkill libarc4 cfg80211 mac80211 rtl8xxxu; do' "$ROOT/usr/local/bin/r36os-k1-wifi-bind"
+          grep -Fq 'insmod "$path"' "$ROOT/usr/local/bin/r36os-k1-wifi-bind"
+          grep -Fq 'r36_graphics_external_begin_k1_noinput(){' "$ROOT/usr/local/bin/r36os-graphics-test-session"
+          grep -Fq 'ready=SKIPPED_K1_GRAPHICS_NO_UINPUT' "$ROOT/usr/local/bin/r36os-graphics-test-session"
+
+          test ! -e "$ROOT/boot"
+          test ! -e "$ROOT/lib/modules"
+          test ! -e "$ROOT/usr/lib/modules"
+          test ! -e "$ROOT/opt/r36os/kernel-next/K1"
+          test ! -e "$ROOT/opt/r36os/kernel-next/hook.conf"
+          test ! -e "$ROOT/opt/r36os/kernel-next/hooked-boot.ini"
+          test ! -e "$ROOT/usr/local/bin/r36os-alpha5"
+          test "$(find "$ROOT" -type l -print -quit)" = ""
+
+          grep -Fxq 'version=0.5.60.0' out-a/latest.conf
+          grep -Fxq 'base_version=0.5.59.0' out-a/latest.conf
+          grep -Fxq "candidate_id=$CID" out-a/latest.conf
+          grep -Fxq "kernel_release=$KREL" out-a/latest.conf
+
+          grep -Fxq 'version=0.5.60.0' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'base_version=0.5.59.0' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'k1_binary_change=no' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'wifi_runtime_bind_fix=yes' out-a/RELEASE_REPORT.txt
+          grep -Fxq 'graphics_lab_k1_noinput=yes' out-a/RELEASE_REPORT.txt
+          echo "R60_PACKAGE_AUDIT=PASS sha256=$SHA size=$SIZE"
+
+      - name: Legacy/non-K1 binder no-op test
+        run: |
+          set -euo pipefail
+          sudo rm -f /run/r36os-k1-wifi-bind.status
+          sudo sh pkg/payload/root/usr/local/bin/r36os-k1-wifi-bind
+          sudo test -s /run/r36os-k1-wifi-bind.status
+          sudo grep -Fxq 'status=SKIP' /run/r36os-k1-wifi-bind.status
+          sudo grep -Fxq 'detail=legacy-or-other-kernel' /run/r36os-k1-wifi-bind.status
+          echo R60_LEGACY_WIFI_NOOP=PASS
+
+      - name: Upload exact validated R60 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Alpha5R60-audited-validation-candidate
+          path: |
+            out-a/00-R36OS-Alpha5R60-K1WiFiGraphicsLab-FromR59.r36upd
+            out-a/00-R36OS-Alpha5R60-K1WiFiGraphicsLab-FromR59.r36upd.sha256
+            out-a/latest.conf
+            out-a/RELEASE_REPORT.txt
+            build-a.log
+            build-b.log
+          if-no-files-found: error
+          retention-days: 30
