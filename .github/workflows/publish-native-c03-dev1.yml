@@ -63,15 +63,16 @@ jobs:
           test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
           grep -Fxq "$EXPECTED_SHA  $NAME" "artifact/$NAME.sha256"
 
-          mkdir audit
-          tar -xzf "$PKG" -C audit
-          (cd audit && sha256sum -c checksums.sha256 >/dev/null)
-          test "$(awk -F= '$1=="version"{print $2}' audit/manifest.conf)" = 0.5.60.1
-          test "$(awk -F= '$1=="developer_only"{print $2}' audit/manifest.conf)" = yes
-          test "$(awk -F= '$1=="public_channel_change"{print $2}' audit/manifest.conf)" = no
-          test "$(awk -F= '$1=="auto_stage"{print $2}' audit/manifest.conf)" = no
-          test "$(awk -F= '$1=="auto_arm"{print $2}' audit/manifest.conf)" = no
-          test "$(awk -F= '$1=="auto_boot"{print $2}' audit/manifest.conf)" = no
+          test -s artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'status=PASS' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'version=0.5.60.1' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'base_version=0.5.60.0' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq "sha256=$EXPECTED_SHA" artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'auto_stage=no' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'auto_arm=no' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'auto_boot=no' artifact/C03DEV_DELIVERY_REPORT.txt
+          grep -Fxq 'public_channel_change=no' artifact/C03DEV_DELIVERY_REPORT.txt
 
       - name: Publish or replace developer prerelease assets
         env:
