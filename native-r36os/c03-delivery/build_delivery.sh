@@ -59,7 +59,7 @@ chmod 0755 "$ROOT/usr/local/bin/r36os-alpha5"
 file "$ROOT/usr/local/bin/r36os-alpha5" | grep -Eq 'ARM aarch64|ARM64' || fail ui-arch
 file "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'statically linked' || fail ui-static
 strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'Native C03 developer controls' || fail ui-native-menu
-strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'Arm Native Boot Once' || fail ui-native-arm
+strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'arm-once' || fail ui-native-arm-action
 strings "$ROOT/usr/local/bin/r36os-alpha5" | grep -Fq 'K1 split input: gpio-keys event' || fail ui-r58-input-regression
 
 # Install the explicit control wrapper.
