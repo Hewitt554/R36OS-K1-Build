@@ -1,0 +1,90 @@
+name: R60 CP03 search Git history for graphics runtime
+
+on:
+  push:
+    branches:
+      - work/r60-checkpointed-k1-baseline-fixes-2026-10-01
+    paths:
+      - '.github/workflows/r60-cp03-git-history-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all remote branches
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git branch -r | sort | tee branches.txt
+
+      - name: Locate all historical target paths and exact hashes
+        run: |
+          set -euo pipefail
+          mkdir -p recovered
+          git rev-list --objects --all | grep -E '(^|/)(r36os-graphics-test-session|r36os-graphics-test-inner|r36os-input-supervisor)$' | sort -u | tee object-paths.txt || true
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess, hashlib
+          wanted={
+            'r36os-graphics-test-session':'764fe5cb26da8ba66701c1154fbef8e3f944f9fe2330180cd97829c20aa88393',
+            'r36os-graphics-test-inner':'4004f64a65d25671bfa57db9b28f741bf7bcef813f391b267cf5ca636df4e9c6',
+            'r36os-input-supervisor':'7a3e941160d8bc4efbac1b607dab47f17ebd21239a482a7683fe28702923ab45',
+          }
+          rows=[]
+          exact={}
+          p=Path('object-paths.txt')
+          for line in p.read_text().splitlines() if p.exists() else []:
+              parts=line.split(' ',1)
+              if len(parts)!=2: continue
+              obj,path=parts
+              data=subprocess.check_output(['git','cat-file','blob',obj])
+              sha=hashlib.sha256(data).hexdigest()
+              name=Path(path).name
+              rows.append(f'{name}\t{sha}\t{obj}\t{path}')
+              if name in wanted and sha==wanted[name] and name not in exact:
+                  Path('recovered',name).write_bytes(data)
+                  exact[name]=(obj,path)
+          for name,sha in wanted.items():
+              if name not in exact:
+                  rows.append(f'MISSING_EXACT\t{name}\t{sha}')
+          Path('history-report.txt').write_text('\n'.join(rows)+'\n')
+          print('\n'.join(rows))
+          Path('exact-count.txt').write_text(str(len(exact))+'\n')
+          PY
+
+      - name: Report exact recovered readiness logic
+        run: |
+          set -euo pipefail
+          COUNT="$(cat exact-count.txt)"
+          echo exact_count="$COUNT"
+          for f in recovered/*; do
+            [ -f "$f" ] || continue
+            echo "===== $f ====="
+            sha256sum "$f"
+            grep -nEi 'ready|input|supervisor|event|gamepad|gpio|adc|weston|handoff|graphics|FAIL|timeout' "$f" | head -500 || true
+          done | tee readiness-excerpts.txt
+          test "$COUNT" -gt 0
+
+      - name: Upload history evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R60-CP03-git-history-graphics-runtime
+          path: |
+            recovered/
+            object-paths.txt
+            history-report.txt
+            readiness-excerpts.txt
+            branches.txt
+            exact-count.txt
+          if-no-files-found: error
+          retention-days: 30
