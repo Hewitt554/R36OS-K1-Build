@@ -1,0 +1,87 @@
+name: Native R36OS C01 audit guard
+
+on:
+  push:
+    branches:
+      - work/native-c00-c01-baseline-audit-2026-10-01
+    paths:
+      - 'native-r36os/**'
+      - '.github/workflows/native-c01-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      FROZEN_R60: c1f582edf876349269b4212aa6a78f1387aa7ecc
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove audit-only branch scope
+        run: |
+          set -euo pipefail
+          git cat-file -e "$FROZEN_R60^{commit}"
+          git diff --name-only "$FROZEN_R60"...HEAD | tee /tmp/native-c01-files.txt
+          test -s /tmp/native-c01-files.txt
+
+          while IFS= read -r p; do
+            case "$p" in
+              native-r36os/*|.github/workflows/native-c01-audit.yml) ;;
+              *)
+                echo "Chapter 0/1 changed forbidden path: $p" >&2
+                exit 20
+                ;;
+            esac
+          done </tmp/native-c01-files.txt
+
+          ! grep -Eq '(^|/)r36os-release-channel/|(^|/)r60-release/|bootstrap_r36os_k1|kernel-next|boot\\.ini|uInitrd|\\.dtb$' /tmp/native-c01-files.txt
+          echo NATIVE_C01_SCOPE=PASS
+
+      - name: Validate chapter documents
+        run: |
+          set -euo pipefail
+          C0=native-r36os/CHAPTER_00_R60_FROZEN_BASELINE.md
+          C1=native-r36os/CHAPTER_01_DEPENDENCY_AUDIT.md
+          test -s "$C0"
+          test -s "$C1"
+          grep -Fq 'Chapter 0 status: PASS.' "$C0"
+          grep -Fq 'Alpha 5R60 / package 0.5.60.0' "$C0"
+          grep -Fq 'candidate ID: 9d7bd2334f315d98b482f850' "$C0"
+          grep -Fq 'K1 remains Boot Next Once only' "$C0"
+          grep -Fq 'Current Chapter 1 status: IN PROGRESS.' "$C1"
+          grep -Fq 'REMOVE-LEGACY' "$C1"
+          grep -Fq 'ARM proprietary Bifrost r13p0 EGL/GLES' "$C1"
+          grep -Fq 'CrustyGBM / libcrusty' "$C1"
+          grep -Fq 'rtl8xxxu' "$C1"
+          grep -Fq '/r36state/r36os-next/rootfs' "$C1"
+          echo NATIVE_C01_DOCS=PASS
+
+      - name: Validate dependency scanner
+        run: |
+          set -euo pipefail
+          python3 -m py_compile native-r36os/tools/source_dependency_scan.py
+          mkdir -p /tmp/native-c01-fixture
+          cat >/tmp/native-c01-fixture/example.sh <<'EOF'
+          #!/bin/sh
+          command -v nmcli >/dev/null
+          systemctl status NetworkManager.service
+          echo /opt/system/Tools/PortMaster/gptokeyb
+          echo ArkOS AeUX westonwrap Crusty Bifrost r13p0
+          EOF
+          python3 native-r36os/tools/source_dependency_scan.py \
+            /tmp/native-c01-fixture \
+            --json /tmp/native-c01.json \
+            --text /tmp/native-c01.txt
+          grep -Fq 'nmcli' /tmp/native-c01.txt
+          grep -Fq 'NetworkManager.service' /tmp/native-c01.txt
+          grep -Fq 'PortMaster' /tmp/native-c01.txt
+          grep -Fq 'ArkOS' /tmp/native-c01.txt
+          grep -Fq 'R36OS_NATIVE_DEPENDENCY_SCAN_V1' /tmp/native-c01.json
+          echo NATIVE_C01_SCANNER=PASS
