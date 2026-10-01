@@ -1,0 +1,128 @@
+#!/bin/bash
+# R36OS Native C04 detailed read-only evidence snapshot.
+set -u
+
+OUT="${R36_C04_SNAPSHOT_OUT:-/r36state/logs/native-hardware/C04_SNAPSHOT}"
+mkdir -p "$OUT" 2>/dev/null || exit 20
+
+capture(){
+  name="$1"; shift
+  { echo "# command: $*"; "$@"; } >"$OUT/$name" 2>&1 || true
+}
+
+{
+  echo 'format=R36OS_NATIVE_C04_SNAPSHOT_V1'
+  echo "time=$(date -Is 2>/dev/null || date)"
+  echo "kernel=$(uname -r 2>/dev/null || true)"
+  echo "pid1=$(cat /proc/1/comm 2>/dev/null || true)"
+} >"$OUT/IDENTITY.conf"
+
+cp -f /proc/cmdline "$OUT/cmdline.txt" 2>/dev/null || true
+cp -f /proc/bus/input/devices "$OUT/input-devices.txt" 2>/dev/null || true
+capture mounts.txt findmnt -R
+capture block.txt lsblk -o NAME,PATH,TYPE,FSTYPE,SIZE,MOUNTPOINTS
+capture failed-units.txt systemctl --failed --no-pager
+
+for svc in systemd-journald.service systemd-udevd.service dbus.service r36os-native-c03-health.service; do
+  systemctl status "$svc" --no-pager >"$OUT/unit-$svc.txt" 2>&1 || true
+done
+
+{
+  for e in /sys/class/input/event*; do
+    [ -e "$e" ] || continue
+    printf '%s\t' "$(basename "$e")"
+    tr -d '\000\r\n' <"$e/device/name" 2>/dev/null || true
+    printf '\n'
+  done
+} >"$OUT/input-sysfs.tsv"
+
+{
+  for b in /sys/class/backlight/*; do
+    [ -d "$b" ] || continue
+    echo "[$(basename "$b")]"
+    for k in type brightness actual_brightness max_brightness; do
+      [ -r "$b/$k" ] || continue
+      printf '%s=' "$k"
+      cat "$b/$k" 2>/dev/null || true
+    done
+  done
+} >"$OUT/backlight.txt"
+
+{
+  for p in /sys/class/power_supply/*; do
+    [ -d "$p" ] || continue
+    echo "[$(basename "$p")]"
+    for k in type status capacity capacity_level present online voltage_now current_now charge_now charge_full charge_full_design energy_now energy_full energy_full_design; do
+      [ -r "$p/$k" ] || continue
+      printf '%s=' "$k"
+      cat "$p/$k" 2>/dev/null || true
+    done
+  done
+} >"$OUT/power.txt"
+
+{
+  for p in /sys/class/thermal/thermal_zone*; do
+    [ -d "$p" ] || continue
+    printf '%s\t' "$(basename "$p")"
+    [ -r "$p/type" ] && tr -d '\r\n' <"$p/type" || true
+    printf '\t'
+    [ -r "$p/temp" ] && tr -d '\r\n' <"$p/temp" || true
+    printf '\n'
+  done
+} >"$OUT/thermal.tsv"
+
+{
+  for p in /sys/devices/system/cpu/cpufreq/policy*; do
+    [ -d "$p" ] || continue
+    echo "[$(basename "$p")]"
+    for k in scaling_cur_freq cpuinfo_cur_freq scaling_min_freq scaling_max_freq cpuinfo_min_freq cpuinfo_max_freq scaling_governor scaling_available_governors; do
+      [ -r "$p/$k" ] || continue
+      printf '%s=' "$k"
+      cat "$p/$k" 2>/dev/null || true
+    done
+  done
+} >"$OUT/cpufreq.txt"
+
+{
+  for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] || continue
+    [ -r "$d/idProduct" ] || continue
+    v="$(tr 'A-F' 'a-f' <"$d/idVendor" 2>/dev/null | tr -d '\r\n')"
+    p="$(tr 'A-F' 'a-f' <"$d/idProduct" 2>/dev/null | tr -d '\r\n')"
+    [ "$v:$p" = 0bda:0179 ] || continue
+    echo "device=$(basename "$d")"
+    echo "usb_id=0bda:0179"
+    [ -r "$d/product" ] && { printf 'product='; tr -d '\r\n' <"$d/product"; printf '\n'; }
+    for i in "$d":*; do
+      [ -d "$i" ] || continue
+      echo "interface=$(basename "$i")"
+      if [ -L "$i/driver" ]; then echo "driver=$(basename "$(readlink -f "$i/driver")")"; else echo 'driver=unbound'; fi
+    done
+  done
+} >"$OUT/usb-realtek.txt"
+
+{
+  ls -l /dev/dri 2>/dev/null || true
+  echo '--- sysfs DRM ---'
+  for d in /sys/class/drm/card* /sys/class/drm/renderD*; do
+    [ -e "$d" ] || continue
+    echo "$d -> $(readlink -f "$d" 2>/dev/null || true)"
+    [ -L "$d/device/driver" ] && echo "driver=$(basename "$(readlink -f "$d/device/driver")")"
+  done
+} >"$OUT/drm.txt"
+
+{
+  grep -E '^(panfrost|rockchipdrm|drm|dwc2|rtl8xxxu|cfg80211|mac80211|rfkill|libarc4) ' /proc/modules 2>/dev/null || true
+} >"$OUT/relevant-modules.txt"
+
+dmesg 2>/dev/null | grep -Ei \
+  'rk817|rk805|adc-joystick|gpio-keys|backlight|mmc|dw-mmc|dwc2|usb|panfrost|drm|thermal|cpufreq|regulator|power_supply' \
+  | tail -1200 >"$OUT/kernel-relevant.txt" || true
+
+(
+  cd "$OUT" || exit 1
+  find . -type f ! -name MANIFEST.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+) >"$OUT/MANIFEST.sha256"
+
+sync 2>/dev/null || true
+echo "R36OS_NATIVE_C04_SNAPSHOT=PASS out=$OUT"
