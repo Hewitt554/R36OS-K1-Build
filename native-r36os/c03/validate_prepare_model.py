@@ -84,8 +84,13 @@ def main() -> int:
     ns=ap.parse_args()
     s=ns.prepare.read_text()
 
-    # Top-level arming transaction.
-    ordered(s,[
+    # Top-level arming transaction. Restrict the ordering check to the
+    # arm case body so function definitions earlier in the file cannot be
+    # mistaken for calls.
+    case_a=s.index("  stage-only|arm-once)")
+    case_b=s.index("    ;;",case_a)
+    arm_case=s[case_a:case_b]
+    ordered(arm_case,[
         "verify_bundle || fail 110 bundle-verification",
         "verify_host || fail 111 host-verification",
         "verify_no_k1_pending || fail 112 k1-one-shot-pending",
