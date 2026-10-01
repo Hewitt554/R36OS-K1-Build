@@ -125,6 +125,7 @@ jobs:
           test -s "$A"
           test -s "$A.sha256"
           sha256sum -c "$A.sha256"
-          tar -tzf "$A" | grep -q '/MANIFEST.sha256
-          tar -tzf "$A" | grep -q '/tool-availability.tsv
+          tar -tzf "$A" >/tmp/native-c01-archive-list.txt
+          grep -q '/MANIFEST.sha256$' /tmp/native-c01-archive-list.txt
+          grep -q '/tool-availability.tsv$' /tmp/native-c01-archive-list.txt
           echo NATIVE_C01_CAPTURE_EXECUTION=PASS
