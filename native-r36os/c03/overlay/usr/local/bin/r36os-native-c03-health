@@ -47,7 +47,7 @@ ROOTFS_SHA="$(val r36os.native_rootfs_sha)"
 echo "$ROOTFS_SHA" | grep -Eq '^[0-9a-f]{64}$' || fail invalid-rootfs-sha
 
 [ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] || fail pid1-not-systemd
-mountpoint -q /r36state 2>/dev/null || fail r36state-not-mounted
+mountpoint -q /r36state/logs 2>/dev/null || fail r36state-logs-not-mounted
 [ -s /usr/lib/modules/6.12.94-r36os-k1/modules.dep ] || fail k1-modules-not-bound
 [ -s /etc/r36os-release ] || fail native-release-missing
 grep -Fq 'R36OS_VERSION="Native Prototype C03"' /etc/r36os-release || fail wrong-native-release
@@ -55,7 +55,7 @@ grep -Fq 'R36OS_VERSION="Native Prototype C03"' /etc/r36os-release || fail wrong
 systemctl is-active --quiet systemd-journald.service || fail journald-not-active
 systemctl is-active --quiet systemd-udevd.service || fail udevd-not-active
 
-READY=/r36state/r36os-next/C03_READY.conf
+READY=/etc/r36os-c03-staged-ready.conf
 [ -s "$READY" ] || fail ready-marker-missing
 grep -Fxq "native_candidate=$NID" "$READY" || fail ready-marker-candidate-mismatch
 grep -Fxq "rootfs_sha256=$ROOTFS_SHA" "$READY" || fail ready-marker-rootfs-mismatch
