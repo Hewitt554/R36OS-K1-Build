@@ -1,0 +1,106 @@
+name: Native R36OS C03 proven boot-lineage probe
+
+on:
+  push:
+    branches:
+      - work/native-c02-c03-rootfs-bootonce-2026-10-01
+    paths:
+      - '.github/workflows/native-c03-lineage-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      TAG: alpha5r48
+      R54: 00-R36OS-Alpha5R54-K1SystemdHandoff-FromR52.r36upd
+      R59: 00-R36OS-Alpha5R59-K1RTL8188EUWiFi-FromR58.r36upd
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install unpack tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends u-boot-tools cpio lz4 zstd xz-utils
+
+      - name: Download exact historical packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir inputs
+          gh release download "$TAG" --repo "$REPO" --pattern "$R54" --dir inputs
+          gh release download "$TAG" --repo "$REPO" --pattern "$R59" --dir inputs
+          sha256sum "inputs/$R54" "inputs/$R59" | tee package-sha256.txt
+          test "$(sha256sum "inputs/$R54" | awk '{print $1}')" = ed3b331fe1fb6cb23bf60aa997d2bd1fc6634039f2ec176d93d0dd2561ce166e
+          test "$(sha256sum "inputs/$R59" | awk '{print $1}')" = cfd4daa7185ec40fdb42bf7e62736e714f98d5fbd16e0a683085015beb48b624
+
+      - name: Extract exact hook and uInitrd
+        run: |
+          set -euo pipefail
+          mkdir r54 r59 evidence
+          tar -xzf "inputs/$R54" -C r54
+          tar -xzf "inputs/$R59" -C r59
+
+          find r54/payload/root/opt/r36os/kernel-next -maxdepth 3 -type f -printf '%P\t%s\n' | sort >evidence/r54-kernel-next-files.txt
+          find r59/payload/root/opt/r36os/kernel-next -maxdepth 3 -type f -printf '%P\t%s\n' | sort >evidence/r59-kernel-next-files.txt
+
+          UINITRD="$(find r54/payload/root/opt/r36os/kernel-next -type f -name uInitrd -print -quit)"
+          HOOK="$(find r59/payload/root/opt/r36os/kernel-next -type f -name hooked-boot.ini -print -quit)"
+          test -s "$UINITRD"
+          test -s "$HOOK"
+          cp "$UINITRD" evidence/uInitrd
+          cp "$HOOK" evidence/hooked-boot.ini
+          sha256sum evidence/uInitrd evidence/hooked-boot.ini | tee evidence/core-sha256.txt
+
+          test "$(sha256sum evidence/uInitrd | awk '{print $1}')" = 023a0d2adc113b2d1fea6826387ab6e03e4d479cf5fa36c9b9ff86cf41fd1925
+
+      - name: Unpack proven R54 initramfs
+        run: |
+          set -euo pipefail
+          dumpimage -l evidence/uInitrd | tee evidence/uinitrd-dumpimage.txt
+          dumpimage -T ramdisk -p 0 -o evidence/initrd.payload evidence/uInitrd
+          file evidence/initrd.payload | tee evidence/initrd-file.txt
+
+          mkdir evidence/initramfs
+          case "$(file -b evidence/initrd.payload)" in
+            *gzip*) gzip -dc evidence/initrd.payload >evidence/initramfs.cpio ;;
+            *LZ4*|*lz4*) lz4 -dc evidence/initrd.payload >evidence/initramfs.cpio ;;
+            *XZ*|*xz*) xz -dc evidence/initrd.payload >evidence/initramfs.cpio ;;
+            *Zstandard*|*zstd*) zstd -dc evidence/initrd.payload >evidence/initramfs.cpio ;;
+            *cpio*) cp evidence/initrd.payload evidence/initramfs.cpio ;;
+            *) echo "unknown initrd compression" >&2; exit 30 ;;
+          esac
+          (
+            cd evidence/initramfs
+            cpio -idmu --no-absolute-filenames <../initramfs.cpio >/dev/null 2>&1
+          )
+          test -s evidence/initramfs/init
+          cp evidence/initramfs/init evidence/proven-r54-init
+          sha256sum evidence/proven-r54-init >evidence/proven-r54-init.sha256
+          find evidence/initramfs -maxdepth 3 -printf '%y\t%p\t%s\n' | sort >evidence/initramfs-files.txt
+          sed -n '1,320p' evidence/proven-r54-init >evidence/proven-r54-init.txt
+          grep -nE 'root|r36state|modules|switch_root|r36i|cmdline|mount' evidence/proven-r54-init >evidence/proven-r54-init-key-lines.txt || true
+
+      - name: Extract hook decision path
+        run: |
+          set -euo pipefail
+          grep -nE 'boot-next|consumed|R36K1|Image|uInitrd|dtb|bootargs|booti|kernel_slot|kernel_attempt|candidate' \
+            evidence/hooked-boot.ini >evidence/hook-key-lines.txt || true
+          cat evidence/hook-key-lines.txt
+          echo C03_LINEAGE_PROBE=PASS
+
+      - name: Upload exact lineage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-Native-C03-proven-lineage
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
