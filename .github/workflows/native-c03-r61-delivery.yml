@@ -6,7 +6,7 @@ on:
       - work/native-c03-r61-delivery-2026-10-02
     paths:
       - 'native-r36os/c03-r61-delivery/**'
-      - '.github/workflows/native-c03-delivery.yml'
+      - '.github/workflows/native-c03-r61-delivery.yml'
   workflow_dispatch:
 
 permissions:
@@ -56,19 +56,19 @@ jobs:
             native-r36os/c03-delivery/r36os-native-c03-control
 
           cat >/tmp/bad-release <<'EOF'
-R36OS_NAME="R36OS"
-R36OS_VERSION="Alpha 5R60 C03Dev1"
-R36OS_PACKAGE_VERSION="0.5.60.1"
-EOF
+          R36OS_NAME="R36OS"
+          R36OS_VERSION="Alpha 5R60 C03Dev1"
+          R36OS_PACKAGE_VERSION="0.5.60.1"
+          EOF
           cp native-r36os/c03-r61-delivery/r36os-version-reference /tmp/r36os-version-bad
           python3 - /tmp/r36os-version-bad /tmp/bad-release <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); rel=Path(sys.argv[2]).resolve()
-s=p.read_text(); needle='REL=/etc/r36os-release'
-assert s.count(needle)==1
-p.write_text(s.replace(needle, "REL='"+str(rel)+"'"))
-PY
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]); rel=Path(sys.argv[2]).resolve()
+          s=p.read_text(); needle='REL=/etc/r36os-release'
+          assert s.count(needle)==1
+          p.write_text(s.replace(needle, "REL='"+str(rel)+"'"))
+          PY
           chmod +x /tmp/r36os-version-bad
           set +e
           /tmp/r36os-version-bad version >/tmp/bad-version.out 2>/tmp/bad-version.err
@@ -188,14 +188,14 @@ PY
 
           cp native-r36os/c03-r61-delivery/r36os-version-reference /tmp/r36os-version-r61
           python3 - /tmp/r36os-version-r61 "$ROOT/etc/r36os-release" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); rel=Path(sys.argv[2]).resolve()
-s=p.read_text()
-needle='REL=/etc/r36os-release'
-assert s.count(needle)==1
-p.write_text(s.replace(needle, "REL='"+str(rel)+"'"))
-PY
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]); rel=Path(sys.argv[2]).resolve()
+          s=p.read_text()
+          needle='REL=/etc/r36os-release'
+          assert s.count(needle)==1
+          p.write_text(s.replace(needle, "REL='"+str(rel)+"'"))
+          PY
           chmod +x /tmp/r36os-version-r61
           test "$(/tmp/r36os-version-r61 version)" = 0.5.61.0
           test "$(/tmp/r36os-version-r61 name)" = 'Alpha 5R61'
