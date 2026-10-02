@@ -24,7 +24,7 @@ K1_CID='9d7bd2334f315d98b482f850'
 KREL='6.12.94-r36os-k1'
 
 sha(){ sha256sum "$1" | awk '{print $1}'; }
-fail(){ echo "C03DEV_DELIVERY_BUILD=FAIL $*" >&2; exit 1; }
+fail(){ echo "C03R61_DELIVERY_BUILD=FAIL $*" >&2; exit 1; }
 
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK/base" "$ROOT/usr/local/bin" "$ROOT/etc" "$ROOT/opt/r36os/native-next/C03" "$ROOT/opt/r36os/features" "$OUT"
@@ -96,7 +96,7 @@ for line in ready.read_text().splitlines():
 if seen!=1:
     raise SystemExit('C03_READY prepare hash anchor mismatch')
 ready.write_text('\n'.join(lines)+'\n')
-print('C03DEV_PREPARE_SHA='+psha)
+print('C03R61_PREPARE_SHA='+psha)
 PY
 chmod 0755 "$C03/r36os-native-c03-prepare"
 bash -n "$C03/r36os-native-c03-prepare"
@@ -263,7 +263,7 @@ EOF
 rm -rf "$WORK/audit"; mkdir -p "$WORK/audit"
 tar -xzf "$OUT/$NAME" -C "$WORK/audit"
 (cd "$WORK/audit" && sha256sum -c checksums.sha256 >/dev/null)
-test "$(awk -F= '$1=="version"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.1
+test "$(awk -F= '$1=="version"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.61.0
 test "$(awk -F= '$1=="base_version"{print $2}' "$WORK/audit/manifest.conf")" = 0.5.60.0
 test "$(awk -F= '$1=="auto_arm"{print $2}' "$WORK/audit/manifest.conf")" = no
 test "$(awk -F= '$1=="auto_boot"{print $2}' "$WORK/audit/manifest.conf")" = no
