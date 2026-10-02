@@ -1,0 +1,158 @@
+name: Publish Alpha 5R61 Native C03
+
+on:
+  push:
+    branches:
+      - work/native-c03-r61-delivery-2026-10-02
+    paths:
+      - '.github/workflows/publish-r61-native-c03.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      SOURCE_RUN: '37057498119'
+      SOURCE_ARTIFACT: '11250100015'
+      SOURCE_HEAD: '132316df03579ac09f98815133cc8ab6f1f72723'
+      EXPECTED_MAIN: '80719b06ccfff6812c56daa0cdcd3f92b35ee5b5'
+      TAG: alpha5r61
+      NAME: 00-R36OS-Alpha5R61-NativeC03-FromR60.r36upd
+      EXPECTED_SHA: b4dd23089f2193cb42e1ee11504958c78e7526823109034c4a8780ed25d81eca
+      EXPECTED_SIZE: '71635833'
+      K1_CID: 9d7bd2334f315d98b482f850
+      NATIVE_CID: 8f8eaa3bae6ad4352b4e01ef
+      KREL: 6.12.94-r36os-k1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove exact validated R61 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN="$(gh api "repos/$REPO/actions/runs/$SOURCE_RUN")"
+          test "$(printf '%s' "$RUN" | jq -r .status)" = completed
+          test "$(printf '%s' "$RUN" | jq -r .conclusion)" = success
+          test "$(printf '%s' "$RUN" | jq -r .head_sha)" = "$SOURCE_HEAD"
+
+          ART="$(gh api "repos/$REPO/actions/artifacts/$SOURCE_ARTIFACT")"
+          test "$(printf '%s' "$ART" | jq -r .name)" = R36OS-Alpha5R61-NativeC03-update
+          test "$(printf '%s' "$ART" | jq -r .expired)" = false
+
+          MAIN="$(gh api "repos/$REPO/branches/main" --jq .commit.sha)"
+          test "$MAIN" = "$EXPECTED_MAIN"
+          echo R61_LINEAGE=PASS
+
+      - name: Download and verify exact package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir artifact
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$SOURCE_ARTIFACT/zip" >artifact.zip
+          unzip -q artifact.zip -d artifact
+          PKG="$(find artifact -type f -name "$NAME" -print -quit)"
+          SHA_FILE="$(find artifact -type f -name "$NAME.sha256" -print -quit)"
+          REPORT="$(find artifact -type f -name C03R61_DELIVERY_REPORT.txt -print -quit)"
+          test -s "$PKG"
+          test -s "$SHA_FILE"
+          test -s "$REPORT"
+          test "$(sha256sum "$PKG" | awk '{print $1}')" = "$EXPECTED_SHA"
+          test "$(stat -c %s "$PKG")" = "$EXPECTED_SIZE"
+          grep -Fq "$EXPECTED_SHA" "$SHA_FILE"
+          grep -Fxq 'status=PASS' "$REPORT"
+          grep -Fxq 'version=0.5.61.0' "$REPORT"
+          grep -Fxq 'base_version=0.5.60.0' "$REPORT"
+          grep -Fxq "sha256=$EXPECTED_SHA" "$REPORT"
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" "$REPORT"
+          printf '%s\n' "$PKG" > /tmp/pkg-path
+          printf '%s\n' "$SHA_FILE" > /tmp/sha-path
+          printf '%s\n' "$REPORT" > /tmp/report-path
+          echo R61_ARTIFACT=PASS
+
+      - name: Publish exact R61 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PKG="$(cat /tmp/pkg-path)"
+          SHA_FILE="$(cat /tmp/sha-path)"
+          REPORT="$(cat /tmp/report-path)"
+
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --target "$SOURCE_HEAD" \
+              --title "R36OS Alpha 5R61 — Native C03 physical test" \
+              --prerelease \
+              --notes "Alpha 5R61 is the corrected Native C03 physical-test delivery from Alpha 5R60. It uses the strict valid R36OS identity Alpha 5R61 / 0.5.61.0. Native C03 remains manual: no automatic staging, arming or native boot."
+          fi
+
+          gh release upload "$TAG" "$PKG" "$SHA_FILE" "$REPORT" --repo "$REPO" --clobber
+
+          REL="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          ASSET_ID="$(printf '%s' "$REL" | jq -r --arg n "$NAME" '.assets[] | select(.name==$n) | .id')"
+          test -n "$ASSET_ID"
+          A="$(gh api "repos/$REPO/releases/assets/$ASSET_ID")"
+          test "$(printf '%s' "$A" | jq -r .size)" = "$EXPECTED_SIZE"
+          test "$(printf '%s' "$A" | jq -r .digest)" = "sha256:$EXPECTED_SHA"
+          echo "ASSET_ID=$ASSET_ID" >> "$GITHUB_ENV"
+          echo R61_RELEASE=PASS
+
+      - name: Advance Online Update channel to R61
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+
+          cat >r36os-release-channel/latest.conf <<EOF
+          format=R36OS_REMOTE_UPDATE_V1
+          repo=Hewitt554/R36OS-K1-Build
+          available=yes
+          channel=alpha
+          version=0.5.61.0
+          base_version=0.5.60.0
+          filename=$NAME
+          size_bytes=$EXPECTED_SIZE
+          sha256=$EXPECTED_SHA
+          url=https://github.com/Hewitt554/R36OS-K1-Build/releases/download/$TAG/$NAME
+          candidate_id=$K1_CID
+          native_candidate=$NATIVE_CID
+          kernel_release=$KREL
+          EOF
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add r36os-release-channel/latest.conf
+          git commit -m 'Publish Alpha 5R61 Native C03 update channel'
+          git push origin main
+          echo "CHANNEL_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Verify live R61 channel
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 4 \
+            "https://raw.githubusercontent.com/$REPO/main/r36os-release-channel/latest.conf?commit=$CHANNEL_SHA" \
+            -o /tmp/live.conf
+          grep -Fxq 'version=0.5.61.0' /tmp/live.conf
+          grep -Fxq 'base_version=0.5.60.0' /tmp/live.conf
+          grep -Fxq "filename=$NAME" /tmp/live.conf
+          grep -Fxq "size_bytes=$EXPECTED_SIZE" /tmp/live.conf
+          grep -Fxq "sha256=$EXPECTED_SHA" /tmp/live.conf
+          grep -Fxq "candidate_id=$K1_CID" /tmp/live.conf
+          grep -Fxq "native_candidate=$NATIVE_CID" /tmp/live.conf
+          grep -Fxq "kernel_release=$KREL" /tmp/live.conf
+          echo R61_LIVE_CHANNEL=PASS
