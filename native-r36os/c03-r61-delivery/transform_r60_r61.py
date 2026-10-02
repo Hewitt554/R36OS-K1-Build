@@ -1,3 +1,4 @@
+# R61 delivery transforms exact authenticated R60 helper inputs only.
 from pathlib import Path
 import hashlib,sys
 
