@@ -48,15 +48,15 @@ jobs:
           import hashlib
           src=Path('out/boot.ini.restore-r60')
           dst=Path('out/boot.ini')
-          s=src.read_text()
-          old='setenv bootargs "root=UUID=\\'e139ce78-9841-40fe-8823-96a304a09859\\' rootwait rw fsck.repair=yes net.ifnames=0 fbcon=rotate:0 console=/dev/ttyFIQ0 quiet splash plymouth.ignore-serial-consoles consoleblank=0"'
-          new='setenv bootargs "root=UUID=\\'e139ce78-9841-40fe-8823-96a304a09859\\' rootwait rw fsck.repair=yes net.ifnames=0 fbcon=rotate:0 console=/dev/ttyFIQ0 console=tty1 consoleblank=0 loglevel=7 plymouth.enable=0 init=/usr/local/bin/r36os-update-rollback"'
-          if s.count(old)!=1:
-              raise SystemExit('legacy bootargs anchor mismatch')
-          s=s.replace(old,new,1)
-          marker='# R36OS-EMERGENCY-C03DEV1-ROLLBACK\\n# One boot only: restore previous-core, then restore the original boot.ini.\\n'
-          s=s.replace('odroidgoa-uboot-config\\n','odroidgoa-uboot-config\\n\\n'+marker,1)
-          dst.write_text(s)
+          lines=src.read_text().splitlines()
+          hits=[i for i,line in enumerate(lines) if line.startswith('setenv bootargs "root=UUID=')]
+          if len(hits)!=1:
+              raise SystemExit(f'legacy bootargs anchor mismatch count={len(hits)}')
+          lines[hits[0]]='setenv bootargs "root=UUID=\'e139ce78-9841-40fe-8823-96a304a09859\' rootwait rw fsck.repair=yes net.ifnames=0 fbcon=rotate:0 console=/dev/ttyFIQ0 console=tty1 consoleblank=0 loglevel=7 plymouth.enable=0 init=/usr/local/bin/r36os-update-rollback"'
+          lines.insert(1,'')
+          lines.insert(2,'# R36OS-EMERGENCY-C03DEV1-ROLLBACK')
+          lines.insert(3,'# One boot only: restore previous-core, then restore the original boot.ini.')
+          dst.write_text('\n'.join(lines)+'\n')
           print('restore_sha256='+hashlib.sha256(src.read_bytes()).hexdigest())
           print('rescue_sha256='+hashlib.sha256(dst.read_bytes()).hexdigest())
           PY
