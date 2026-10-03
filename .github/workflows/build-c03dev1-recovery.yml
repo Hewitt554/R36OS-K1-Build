@@ -117,7 +117,7 @@ jobs:
           $R60_HOOK_SHA
           EOF
 
-          sha256sum out/boot.ini out/boot.ini.restore-r60 out/README-RECOVERY.txt >out/SHA256SUMS.txt
+          (cd out && sha256sum boot.ini boot.ini.restore-r60 README-RECOVERY.txt >SHA256SUMS.txt)
           (cd out && zip -9 R36OS-C03Dev1-Emergency-Recovery.zip boot.ini boot.ini.restore-r60 README-RECOVERY.txt SHA256SUMS.txt)
 
       - name: Final safety audit
