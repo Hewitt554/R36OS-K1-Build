@@ -1,0 +1,155 @@
+name: Build R60 C03Dev1 emergency rollback rescue
+
+on:
+  push:
+    branches:
+      - work/r60-c03dev1-emergency-recovery-2026-10-03
+    paths:
+      - '.github/workflows/build-c03dev1-recovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      REPO: Hewitt554/R36OS-K1-Build
+      C03_ARTIFACT: '11175525608'
+      R60_HOOK_SHA: e389b843ca85cbed59e9227247b2735356f5f551351e8e274e2731fbb15e3c9c
+      TAG: r60-c03dev1-recovery
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact proven R60 boot hook
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir input out
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/artifacts/$C03_ARTIFACT/zip" >input/c03.zip
+          unzip -q input/c03.zip -d input/c03
+          SRC="$(find input/c03 -type f -path '*/bundle/previous-hooked-boot.ini' -print -quit)"
+          test -s "$SRC"
+          test "$(sha256sum "$SRC" | awk '{print $1}')" = "$R60_HOOK_SHA"
+          cp "$SRC" out/boot.ini.restore-r60
+          echo R60_RECOVERY_SOURCE=PASS
+
+      - name: Generate one-boot rollback boot.ini
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          src=Path('out/boot.ini.restore-r60')
+          dst=Path('out/boot.ini')
+          s=src.read_text()
+          old='setenv bootargs "root=UUID=\\'e139ce78-9841-40fe-8823-96a304a09859\\' rootwait rw fsck.repair=yes net.ifnames=0 fbcon=rotate:0 console=/dev/ttyFIQ0 quiet splash plymouth.ignore-serial-consoles consoleblank=0"'
+          new='setenv bootargs "root=UUID=\\'e139ce78-9841-40fe-8823-96a304a09859\\' rootwait rw fsck.repair=yes net.ifnames=0 fbcon=rotate:0 console=/dev/ttyFIQ0 console=tty1 consoleblank=0 loglevel=7 plymouth.enable=0 init=/usr/local/bin/r36os-update-rollback"'
+          if s.count(old)!=1:
+              raise SystemExit('legacy bootargs anchor mismatch')
+          s=s.replace(old,new,1)
+          marker='# R36OS-EMERGENCY-C03DEV1-ROLLBACK\\n# One boot only: restore previous-core, then restore the original boot.ini.\\n'
+          s=s.replace('odroidgoa-uboot-config\\n','odroidgoa-uboot-config\\n\\n'+marker,1)
+          dst.write_text(s)
+          print('restore_sha256='+hashlib.sha256(src.read_bytes()).hexdigest())
+          print('rescue_sha256='+hashlib.sha256(dst.read_bytes()).hexdigest())
+          PY
+
+          grep -Fq 'init=/usr/local/bin/r36os-update-rollback' out/boot.ini
+          grep -Fq 'R36OS-EMERGENCY-C03DEV1-ROLLBACK' out/boot.ini
+          test "$(grep -Fc 'init=/usr/local/bin/r36os-update-rollback' out/boot.ini)" -eq 1
+          test "$(sha256sum out/boot.ini.restore-r60 | awk '{print $1}')" = "$R60_HOOK_SHA"
+
+      - name: Write recovery instructions
+        run: |
+          set -euo pipefail
+          RESCUE_SHA="$(sha256sum out/boot.ini | awk '{print $1}')"
+          cat >out/README-RECOVERY.txt <<EOF
+          R36OS C03Dev1 EMERGENCY ROLLBACK RECOVERY
+
+          This recovery is for the yellow:
+              R36OS release identity invalid
+          failure caused by the invalid 0.5.60.1 developer identity.
+
+          It uses the exact authenticated R60 boot.ini as its base.
+
+          IMPORTANT:
+          - SD1 only.
+          - Do not format or repartition anything.
+          - Do not touch SD2.
+          - This is a ONE-BOOT rescue.
+          - Keep boot.ini.restore-r60 safe.
+
+          1. Fully power the R36S off.
+          2. Remove SD1 and put it in your PC.
+          3. Open the small FAT boot partition that contains boot.ini, Image and uInitrd.
+          4. Rename your current boot.ini to boot.ini.device-backup.
+          5. Copy the supplied rescue file named boot.ini to that partition.
+          6. Safely eject SD1 and put it back in the R36S.
+          7. Power on ONCE.
+          8. The legacy kernel will boot with:
+                init=/usr/local/bin/r36os-update-rollback
+             and restore /r36state/rollback/previous-core.
+          9. When the screen eventually stops/panics after rollback, fully power off.
+             That final stop is expected because the rollback helper exits after
+             restoring the files instead of launching systemd.
+          10. Put SD1 back in the PC.
+          11. Delete the rescue boot.ini.
+          12. Copy boot.ini.restore-r60 to the boot partition and rename it boot.ini.
+          13. Safely eject and boot normally.
+
+          Expected result:
+          - Alpha 5R60 / 0.5.60.0 returns.
+          - The C03Dev1 bad core files are restored from previous-core.
+          - Legacy 4.4 remains the normal boot.
+          - K1 payloads and R36STATE are not erased.
+
+          Rescue boot.ini SHA-256:
+          $RESCUE_SHA
+
+          Original authenticated R60 boot.ini SHA-256:
+          $R60_HOOK_SHA
+          EOF
+
+          sha256sum out/boot.ini out/boot.ini.restore-r60 out/README-RECOVERY.txt >out/SHA256SUMS.txt
+          (cd out && zip -9 R36OS-C03Dev1-Emergency-Recovery.zip boot.ini boot.ini.restore-r60 README-RECOVERY.txt SHA256SUMS.txt)
+
+      - name: Final safety audit
+        run: |
+          set -euo pipefail
+          unzip -q out/R36OS-C03Dev1-Emergency-Recovery.zip -d audit
+          (cd audit && sha256sum -c SHA256SUMS.txt)
+          test "$(sha256sum audit/boot.ini.restore-r60 | awk '{print $1}')" = "$R60_HOOK_SHA"
+          grep -Fq 'init=/usr/local/bin/r36os-update-rollback' audit/boot.ini
+          ! grep -Fq 'init=/usr/local/bin/r36os-update-rollback' audit/boot.ini.restore-r60
+          cmp out/boot.ini.restore-r60 audit/boot.ini.restore-r60
+          echo R60_C03DEV1_RECOVERY=PASS
+
+      - name: Publish emergency recovery prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --target "${GITHUB_SHA}" \
+              --title "R60 C03Dev1 emergency rollback recovery" \
+              --prerelease \
+              --notes "BOOT-partition-only emergency recovery for the C03Dev1 release-identity failure. Restores the previous R60 core using the existing rollback snapshot. Follow README-RECOVERY.txt exactly."
+          fi
+          gh release upload "$TAG" \
+            out/R36OS-C03Dev1-Emergency-Recovery.zip \
+            out/boot.ini \
+            out/boot.ini.restore-r60 \
+            out/README-RECOVERY.txt \
+            out/SHA256SUMS.txt \
+            --repo "$REPO" --clobber
+          gh release view "$TAG" --repo "$REPO" --json isPrerelease,assets >release.json
+          test "$(jq -r .isPrerelease release.json)" = true
+          jq -e '.assets[] | select(.name=="R36OS-C03Dev1-Emergency-Recovery.zip")' release.json >/dev/null
+          echo R60_C03DEV1_RECOVERY_PUBLISH=PASS
