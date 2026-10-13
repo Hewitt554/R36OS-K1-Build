@@ -126,7 +126,8 @@ done
   echo 'R36OS Alpha 6 CP06 native ARM64 development root'
   echo "UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "Installed packages: $(wc -l < "$DIST/r36os-native-packages.tsv")"
-  echo "Allocated root bytes: $(du -sb "$ROOT" | cut -f1)"
+  echo "Root apparent bytes: $(du -sb "$ROOT" | cut -f1)"
+  echo "Root allocated bytes: $(du -s -B1 "$ROOT" | cut -f1)"
   echo 'Target kernel: K1 Linux 6.12 (NOT BOOT TESTED)'
   echo 'No boot chain, no independent recovery, NOT FLASHABLE'
 } > "$DIST/r36os-native-build-metadata.txt"
