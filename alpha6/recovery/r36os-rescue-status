@@ -1,0 +1,16 @@
+#!/bin/sh
+# READ ONLY: inspect device tree, kernel and block-device enumeration
+PATH=/bin:/sbin
+export PATH
+printf 'Kernel: '
+/bin/uname -r
+printf 'Hardware model: '
+if [ -r /proc/device-tree/model ]; then /bin/tr '\000' ' ' </proc/device-tree/model; printf '\n'; else printf 'unknown\n'; fi
+printf 'Kernel command line: '
+/bin/cat /proc/cmdline 2>/dev/null || printf 'unavailable\n'
+printf 'Detected MMC devices:\n'
+for dev in /sys/block/mmcblk*; do
+  [ -e "$dev" ] || continue
+  /bin/printf '  %s\n' "$(basename "$dev")"
+done
+printf 'SD partition identity and restoration NOT enabled in CP07.\n'
