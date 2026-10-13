@@ -1,0 +1,30 @@
+name: R36OS Alpha6 CP09 Disposable Offline Restore
+on:
+  pull_request:
+    paths:
+      - 'alpha6/offline/**'
+      - 'alpha6/tests/test_verified_restore_fixture.py'
+      - 'alpha6/CP09_OFFLINE_RESTORE.md'
+      - '.github/workflows/r36os-alpha6-cp09-offline-restore.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tested-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and sandbox safety
+        run: |
+          python3 -m py_compile alpha6/offline/verified_restore_fixture.py alpha6/tests/test_verified_restore_fixture.py
+          test ! -e alpha6/dist/flash.img
+          test ! -e alpha6/dist/boot.ini
+      - name: Backup, integrity and interrupted-restore simulations
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -v -s alpha6/tests -p test_verified_restore_fixture.py
+      - name: Explicit nondeployment marker
+        run: |
+          echo 'CP09: temporary sandbox filesystem ONLY; cannot mount or modify R36S SD partitions.'
+          echo 'CP09 does NOT support OS rootfs restore, special files, xattrs or authenticated updates.'
