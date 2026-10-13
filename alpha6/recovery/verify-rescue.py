@@ -19,6 +19,7 @@ def files_newc(raw):
     name = raw[pos:pos+namesz]
     if not name.endswith(b'\0'): raise ValueError('name terminator')
     name = name[:-1].decode('utf-8')
+    if name.startswith('./'): name = name[2:]
     pos = (pos + namesz + 3) & ~3
     if pos + size > len(raw): raise ValueError('truncated data')
     data = raw[pos:pos+size]
@@ -37,10 +38,10 @@ def verify(blob, image):
   if zlib.crc32(hb) & 0xffffffff != crc: raise ValueError('uImage header CRC mismatch')
   if u[64:] != data or size != len(data) or zlib.crc32(data) & 0xffffffff != dcrc: raise ValueError('uImage data CRC mismatch')
   items = files_newc(gzip.decompress(data))
-  for key in ('./init', './bin/busybox', './bin/sh', './sbin/r36os-rescue-status', './etc/r36os-rescue-release'):
+  for key in ('init', 'bin/busybox', 'bin/sh', 'sbin/r36os-rescue-status', 'etc/r36os-rescue-release'):
     if key not in items: raise ValueError('missing required cpio entry: '+key)
-  if not items['./bin/busybox'].startswith(b'\x7fELF'): raise ValueError('BusyBox not ELF')
-  for key in ('./init','./sbin/r36os-rescue-status'):
+  if not items['bin/busybox'].startswith(b'\x7fELF'): raise ValueError('BusyBox not ELF')
+  for key in ('init','sbin/r36os-rescue-status'):
     code = items[key].decode('utf-8')
     for forbidden in ('mkfs.', 'wipefs ', 'sfdisk ', 'dd if=', 'mount -o rw'):
       if forbidden in code: raise ValueError('rescue write primitive in '+key)
