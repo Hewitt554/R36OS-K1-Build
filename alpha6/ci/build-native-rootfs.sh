@@ -117,6 +117,11 @@ rm -f "$ROOT/etc/ssh/ssh_host_"* "$ROOT/etc/machine-id"
 : > "$ROOT/etc/machine-id"
 rm -rf "$ROOT/var/lib/apt/lists/"* "$ROOT/var/cache/apt/archives/"* "$ROOT/var/log/"*
 mkdir -p "$ROOT/var/log"
+cleanup
+mounted=no
+for path in "$ROOT/proc" "$ROOT/sys" "$ROOT/dev"; do
+  if mountpoint -q "$path"; then echo "Refusing archive with live virtual mount: $path" >&2; exit 3; fi
+done
 {
   echo 'R36OS Alpha 6 CP06 native ARM64 development root'
   echo "UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -125,8 +130,6 @@ mkdir -p "$ROOT/var/log"
   echo 'Target kernel: K1 Linux 6.12 (NOT BOOT TESTED)'
   echo 'No boot chain, no independent recovery, NOT FLASHABLE'
 } > "$DIST/r36os-native-build-metadata.txt"
-cleanup
-mounted=no
 for path in "$ROOT/proc" "$ROOT/sys" "$ROOT/dev"; do
   if mountpoint -q "$path"; then echo "Refusing archive with live virtual mount: $path" >&2; exit 3; fi
 done
