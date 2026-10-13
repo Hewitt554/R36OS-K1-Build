@@ -1,0 +1,27 @@
+name: R36OS Alpha6 CP08 Offline Boot Gate
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/**'
+      - 'alpha6/tests/test_boot_gate.py'
+      - 'alpha6/tests/test_recovery_transaction.py'
+      - '.github/workflows/r36os-alpha6-boot-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-boot-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test boot candidate and recovery model
+        run: |
+          python3 -m unittest discover -v -s alpha6/tests -p test_boot_gate.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_recovery_transaction.py
+          python3 -m py_compile alpha6/boot/build-recovery-gate.py alpha6/boot/recovery-transaction-model.py
+      - name: Check there is no live boot or flash artifact
+        run: |
+          test ! -e alpha6/dist/boot.ini
+          test ! -e alpha6/dist/flash.img
+          echo "CP08 does not install or modify SD partitions."
