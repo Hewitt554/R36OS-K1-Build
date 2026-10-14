@@ -53,13 +53,17 @@ def parse_conf(data):
     checks={'hardware':'R36XX-RK3326','panel':'PANEL4_NV3051D_640X480',
             'root_uuid':EXPECTED_ROOT,'state_uuid':EXPECTED_STATE,
             'boot_mode':'R36OS_K1_BOOT_ONCE','modules_storage':'R36STATE_BIND'}
+    gaps=[]
     for key,value in checks.items():
+        if key in ('state_uuid','modules_storage') and key not in result:
+            gaps.append('K1.conf missing '+key+'; requires a rebuilt initramfs/layout integration')
+            continue
         if result.get(key)!=value: raise Invalid('K1.conf mismatch '+key+' observed='+repr(result.get(key, 'MISSING')))
     if not re.fullmatch(r'6\.12\.\d+[-.A-Za-z0-9]*',result.get('kernel_release','')):
         raise Invalid('invalid kernel_release')
     if not re.fullmatch(r'[0-9a-f]{24}',result.get('candidate_id','')):
         raise Invalid('invalid candidate_id')
-    return result
+    return result,gaps
 
 def read_small(tar,member,limit=1048576):
     if not member.isfile() or member.size>limit: raise Invalid('unsafe metadata size')
@@ -87,7 +91,7 @@ def verify(archive_path, stage_dir=None):
         candidates=[prefix for prefix in prefixes if all(prefix+n in entries and entries[prefix+n].isfile() for n in REQUIRED)]
         if len(candidates)!=1: raise Invalid('expected exactly one complete K1 candidate')
         prefix=candidates[0]
-        conf=parse_conf(read_small(tar,entries[prefix+'K1.conf']))
+        conf,gaps=parse_conf(read_small(tar,entries[prefix+'K1.conf']))
         manifest=parse_manifest(read_small(tar,entries[prefix+'MANIFEST.sha256']))
         checked={}
         for rel,sha in manifest.items():
@@ -117,7 +121,9 @@ def verify(archive_path, stage_dir=None):
         mod=tar.extractfile(entries[prefix+'modules.tar.xz'])
         if not mod or mod.read(6)!=bytes.fromhex('fd377a585a00'):
             raise Invalid('modules archive is not xz')
-        report={'result':'PASS_ARCHIVE_INTEGRITY_ONLY','safe_to_flash':False,'boot_tested':False,
+        report={'result':'PASS_ARCHIVE_INTEGRITY_WITH_BOOT_CONTRACT_GAPS' if gaps else 'PASS_ARCHIVE_INTEGRITY_ONLY',
+                'safe_to_flash':False,'boot_tested':False,'ready_for_alpha6_boot_integration':False,
+                'compatibility_gaps':gaps,
                 'source_archive':archive_path.name,'source_archive_bytes':source_size,
                 'source_archive_sha256':source_hash,'candidate_prefix':prefix,'candidate':conf,
                 'checked_manifest_entries':len(checked),
