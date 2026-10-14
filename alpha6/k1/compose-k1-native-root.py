@@ -77,8 +77,15 @@ def archive_member_path(name, release):
     if '..' in p.parts:
         raise Reject('archive contains traversal')
     parts = [x for x in p.parts if x not in ('.', '')]
-    # The nested archive must contain the exact /lib/modules ABI; an optional
-    # enclosing packaging folder is tolerated but no other ABI is extracted.
+    # Older pinned CP05 kernel artifacts package the live module directory as
+    # modules-<KREL>/modules.dep (not lib/modules/<KREL>/modules.dep).
+    # The prefix is *exactly* version-bound; never accept a different ABI.
+    if parts and parts[0].startswith('modules-'):
+        expected = 'modules-' + release
+        if parts[0] != expected:
+            raise Reject('modules archive contains a different kernel release')
+        return parts[1:]
+    # Other supported archive layout: lib/modules/<KREL>/...
     for i in range(len(parts)-2):
         if parts[i:i+2] == ['lib','modules']:
             if parts[i+2] != release:
