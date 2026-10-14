@@ -108,6 +108,8 @@ class Sandbox:
         try:
             d = json.loads(self.path("journal.json").read_text())
             state = d["state"]
+        except Rejected:
+            raise
         except (OSError, KeyError, ValueError) as e:
             raise Rejected("missing or invalid journal") from e
         if state not in STATE:
