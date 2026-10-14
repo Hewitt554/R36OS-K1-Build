@@ -115,8 +115,10 @@ def verify(archive_path, stage_dir=None):
         values=struct.unpack('>7I4B32s',head)
         magic,hcrc,stamp,size,load,ep,dcrc,osid,arch,typ,comp,title=values
         h=bytearray(head);h[4:8]=bytes(4)
-        if magic!=0x27051956 or osid!=5 or arch!=22 or typ!=3 or size!=entries[prefix+'uInitrd'].size-64 or comp not in (0,1):
+        if magic!=0x27051956 or osid!=5 or arch not in (2,22) or typ!=3 or size!=entries[prefix+'uInitrd'].size-64 or comp not in (0,1):
             raise Invalid('invalid uInitrd header: magic='+hex(magic)+' os='+str(osid)+' arch='+str(arch)+' type='+str(typ)+' comp='+str(comp)+' claimed_payload='+str(size)+' archive_bytes='+str(entries[prefix+'uInitrd'].size))
+        if arch==2:
+            gaps.append('K1 uInitrd U-Boot header has IH_ARCH_ARM=2 rather than ARM64=22; physical U-Boot acceptance untested')
         if zlib.crc32(h)&0xffffffff!=hcrc: raise Invalid('uInitrd header CRC mismatch')
         mod=tar.extractfile(entries[prefix+'modules.tar.xz'])
         if not mod or mod.read(6)!=bytes.fromhex('fd377a585a00'):
@@ -127,6 +129,7 @@ def verify(archive_path, stage_dir=None):
                 'source_archive':archive_path.name,'source_archive_bytes':source_size,
                 'source_archive_sha256':source_hash,'candidate_prefix':prefix,'candidate':conf,
                 'checked_manifest_entries':len(checked),
+                'uboot_ramdisk_arch_id':arch,
                 'required_boot_artifacts':{n:checked[n] for n in STAGE+('modules.tar.xz',)},
                 'warnings':['SHA256 manifest is not authenticated or signed',
                             'K1 physical Panel4 boot NOT TESTED','Original U-Boot not staged']}

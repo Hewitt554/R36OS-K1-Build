@@ -53,6 +53,26 @@ class TestK1(unittest.TestCase):
             b=bytearray(data['uInitrd']);b[5]^=1;data['uInitrd']=bytes(b)
             data['MANIFEST.sha256']=b''.join((hashlib.sha256(d).hexdigest()+'  '+n+'\n').encode() for n,d in data.items() if n!='MANIFEST.sha256')
         with self.assertRaisesRegex(v.Invalid,'header CRC'):self.check(fixture(edit))
+    def test_old_arm_ramdisk_header_recorded_as_gap(self):
+        def edit(data):
+            header=bytearray(data['uInitrd'])
+            header[29]=2
+            header[4:8]=bytes(4)
+            header[4:8]=struct.pack('>I',zlib.crc32(header[:64])&0xffffffff)
+            data['uInitrd']=bytes(header)
+            data['MANIFEST.sha256']=b''.join((hashlib.sha256(d).hexdigest()+'  '+n+'\n').encode() for n,d in data.items() if n!='MANIFEST.sha256')
+        result=self.check(fixture(edit))
+        self.assertEqual(result['uboot_ramdisk_arch_id'],2)
+        self.assertFalse(result['ready_for_alpha6_boot_integration'])
+        self.assertTrue(any('IH_ARCH_ARM=2' in gap for gap in result['compatibility_gaps']))
+    def test_missing_state_uuid_is_blocking_gap(self):
+        def edit(data):
+            lines=data['K1.conf'].decode().splitlines()
+            data['K1.conf']=('\n'.join(x for x in lines if not x.startswith('state_uuid='))+'\n').encode()
+            data['MANIFEST.sha256']=b''.join((hashlib.sha256(d).hexdigest()+'  '+n+'\n').encode() for n,d in data.items() if n!='MANIFEST.sha256')
+        result=self.check(fixture(edit))
+        self.assertFalse(result['ready_for_alpha6_boot_integration'])
+        self.assertTrue(any('missing state_uuid' in gap for gap in result['compatibility_gaps']))
     def test_path_traversal(self):
         with self.assertRaisesRegex(v.Invalid,'unsafe'):v.norm_member('../boot.ini')
     def test_absolute_path(self):
