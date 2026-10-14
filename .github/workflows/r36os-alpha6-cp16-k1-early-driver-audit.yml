@@ -1,0 +1,64 @@
+name: R36OS Alpha6 CP16 K1 Early Driver Audit (Development)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/k1/audit-k1-early-boot.py'
+      - 'alpha6/tests/test_cp16_early_drivers.py'
+      - 'alpha6/CP16_EARLY_DRIVER_AUDIT.md'
+      - '.github/workflows/r36os-alpha6-cp16-k1-early-driver-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  early-boot-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline audit safety tests
+        run: |
+          python3 -m py_compile alpha6/k1/audit-k1-early-boot.py
+          python3 -m unittest discover -v -s alpha6/tests -p 'test_cp16_early_drivers.py'
+      - name: Retrieve historical K1 release artifact (read only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
+          mkdir -p "$RUNNER_TEMP/cp16-k1"
+          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
+            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp16-k1"
+          find "$RUNNER_TEMP/cp16-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' \
+            -printf '%p\n' | sort > "$RUNNER_TEMP/cp16-inputs.txt"
+          test "$(wc -l < "$RUNNER_TEMP/cp16-inputs.txt")" -eq 1
+      - name: Check effective kernel evidence and ABI-matched modules
+        run: |
+          set -euo pipefail
+          archive="$(cat "$RUNNER_TEMP/cp16-inputs.txt")"
+          mkdir -p alpha6/dist
+          python3 alpha6/k1/audit-k1-early-boot.py "$archive" \
+            alpha6/dist/cp16-k1-early-boot-report.json
+          python3 - <<'PY'
+          import json
+          p='alpha6/dist/cp16-k1-early-boot-report.json'
+          x=json.load(open(p))
+          assert x['safe_to_flash'] is False
+          assert x['boot_tested'] is False
+          assert x['early_boot_verified'] is False
+          assert x['kernel_release']=='6.12.94-r36os-k1'
+          assert len(x['drivers']) >= 7
+          print('CP16 K1 evidence captured; boot readiness deliberately NOT granted')
+          print('Effective kernel config found:',x['effective_kernel_config_available'])
+          print('Blocking conditions:',len(x['blockers']))
+          for key,v in x['drivers'].items():
+              print(key,':',v['status'],'Kconfig',v['config_value'])
+          for issue in x['blockers']:
+              print('BLOCKER:', issue)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp16-K1-DRIVER-EVIDENCE-NOT-BOOT-READY
+          path: alpha6/dist/cp16-k1-early-boot-report.json
+          if-no-files-found: error
+          retention-days: 30
