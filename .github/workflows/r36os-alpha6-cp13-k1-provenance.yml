@@ -1,0 +1,53 @@
+name: R36OS Alpha6 CP13 K1 Artifact Validation (Development)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/k1/**'
+      - 'alpha6/tests/test_cp13_k1_artifact.py'
+      - '.github/workflows/r36os-alpha6-cp13-k1-provenance.yml'
+      - 'alpha6/CP13_K1_BOOT_STAGING.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  k1-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline verifier tests
+        run: |
+          python3 -m py_compile alpha6/k1/verify-k1-artifact.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp13_k1_artifact.py
+      - name: Download pinned 2026-09-30 K1 development artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/cp13-k1"
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
+          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
+            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp13-k1"
+          find "$RUNNER_TEMP/cp13-k1" -maxdepth 4 -type f -printf '%P %s bytes\n'
+      - name: Verify candidate and stage separated UNTESTED boot files
+        run: |
+          mapfile -t ARCHIVES < <(find "$RUNNER_TEMP/cp13-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
+          test "${#ARCHIVES[@]}" -eq 1 || { echo "Expected exactly one K1 result archive" >&2; exit 3; }
+          mkdir -p alpha6/dist
+          python3 alpha6/k1/verify-k1-artifact.py "${ARCHIVES[0]}" \
+            alpha6/dist/cp13-k1-provenance.json --stage alpha6/dist/CP13_UNTESTED_K1_BOOT_FILES
+          python3 - <<'PY'
+          import json
+          data=json.load(open('alpha6/dist/cp13-k1-provenance.json'))
+          assert data['safe_to_flash'] is False and data['boot_tested'] is False
+          assert data['checked_manifest_entries'] >= 4
+          print('CP13 archive integrity PASS; no physical boot claim')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp13-UNTESTED-K1-BOOT-FILES
+          path: |
+            alpha6/dist/cp13-k1-provenance.json
+            alpha6/dist/CP13_UNTESTED_K1_BOOT_FILES/*
+          if-no-files-found: error
+          retention-days: 30
