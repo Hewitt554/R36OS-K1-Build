@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import tarfile
 import tempfile
 import unittest
 import zlib
@@ -46,6 +47,21 @@ def build_dtb(with_mmc=True, with_display=True, corrupt=False):
 INIT=(HOME/'diag'/'cp17-init').read_bytes()
 
 class CP17Tests(unittest.TestCase):
+    def test_gnu_tar_leading_dot_member(self):
+        class FakeTar:
+            def getmembers(self):
+                m=tarfile.TarInfo('./candidate/K1/rk3326-r36s-k1.dtb')
+                m.type=tarfile.REGTYPE
+                return [m]
+        found=f.unique_tar_member(FakeTar(),'candidate/K1/rk3326-r36s-k1.dtb')
+        self.assertEqual(found.name,'./candidate/K1/rk3326-r36s-k1.dtb')
+    def test_gnu_tar_duplicate_normalized_members_blocked(self):
+        class FakeTar:
+            def getmembers(self):
+                return [tarfile.TarInfo('./candidate/K1/rk3326-r36s-k1.dtb'),
+                        tarfile.TarInfo('candidate/K1/rk3326-r36s-k1.dtb')]
+        with self.assertRaisesRegex(f.FDTError,'duplicated'):
+            f.unique_tar_member(FakeTar(),'candidate/K1/rk3326-r36s-k1.dtb')
     def test_valid_fdt_rk3326_panel_and_mmc(self):
         r=f.classify(f.parse_fdt(build_dtb()))
         self.assertTrue(r['rk3326_root_compatible'])
