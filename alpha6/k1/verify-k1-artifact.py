@@ -54,7 +54,7 @@ def parse_conf(data):
             'root_uuid':EXPECTED_ROOT,'state_uuid':EXPECTED_STATE,
             'boot_mode':'R36OS_K1_BOOT_ONCE','modules_storage':'R36STATE_BIND'}
     for key,value in checks.items():
-        if result.get(key)!=value: raise Invalid('K1.conf mismatch '+key)
+        if result.get(key)!=value: raise Invalid('K1.conf mismatch '+key+' observed='+repr(result.get(key, 'MISSING')))
     if not re.fullmatch(r'6\.12\.\d+[-.A-Za-z0-9]*',result.get('kernel_release','')):
         raise Invalid('invalid kernel_release')
     if not re.fullmatch(r'[0-9a-f]{24}',result.get('candidate_id','')):
