@@ -116,7 +116,7 @@ def verify(archive_path, stage_dir=None):
         magic,hcrc,stamp,size,load,ep,dcrc,osid,arch,typ,comp,title=values
         h=bytearray(head);h[4:8]=bytes(4)
         if magic!=0x27051956 or osid!=5 or arch!=22 or typ!=3 or size!=entries[prefix+'uInitrd'].size-64 or comp not in (0,1):
-            raise Invalid('invalid uInitrd header')
+            raise Invalid('invalid uInitrd header: magic='+hex(magic)+' os='+str(osid)+' arch='+str(arch)+' type='+str(typ)+' comp='+str(comp)+' claimed_payload='+str(size)+' archive_bytes='+str(entries[prefix+'uInitrd'].size))
         if zlib.crc32(h)&0xffffffff!=hcrc: raise Invalid('uInitrd header CRC mismatch')
         mod=tar.extractfile(entries[prefix+'modules.tar.xz'])
         if not mod or mod.read(6)!=bytes.fromhex('fd377a585a00'):
