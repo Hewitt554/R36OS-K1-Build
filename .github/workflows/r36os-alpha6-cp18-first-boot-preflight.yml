@@ -1,0 +1,84 @@
+name: R36OS Alpha6 CP18 First-Boot Evidence (No Install)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/cp18-*'
+      - 'alpha6/tests/test_cp18_preflight.py'
+      - 'alpha6/CP18_FIRST_BOOT_EVIDENCE.md'
+      - '.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify-pinned-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test boot-evidence rejection and diagnostic artifact verifiers
+        run: |
+          python3 -m py_compile alpha6/boot/cp18-first-boot-preflight.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp18_preflight.py
+      - name: Download pinned historical K1 and passing CP17 diagnostic artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/cp18-k1" "$RUNNER_TEMP/cp18-cp17-raw" "$RUNNER_TEMP/cp18-cp17-files"
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11924001285 --jq '.expired')" = false
+          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
+            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp18-k1"
+          gh run download 38624606064 -R Hewitt554/R36OS-K1-Build \
+            -n r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED -D "$RUNNER_TEMP/cp18-cp17-raw"
+          mapfile -t ARCH < <(find "$RUNNER_TEMP/cp18-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
+          test "${#ARCH[@]}" -eq 1
+          echo "K1_ARCHIVE=${ARCH[0]}" >> "$GITHUB_ENV"
+          # GitHub artifact uploads can preserve different directory prefixes.
+          # Require exactly one file of each expected name; flatten ONLY into disposable temp.
+          for file in \
+            CP17-ARCH2-DIAGNOSTIC-UNTESTED.uInitrd \
+            CP17-ARCH22-DIAGNOSTIC-UNTESTED.uInitrd \
+            cp17-diagnostic-report.json cp17-k1-panel4-dtb-report.json DO_NOT_FLASH.txt; do
+            mapfile -t FOUND < <(find "$RUNNER_TEMP/cp18-cp17-raw" -type f -name "$file" | sort)
+            test "${#FOUND[@]}" -eq 1
+            cp -- "${FOUND[0]}" "$RUNNER_TEMP/cp18-cp17-files/$file"
+          done
+      - name: Produce a report only — refuse live boot files and installation
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d /tmp/r36os-cp18-preflight-XXXXXXXX)"
+          case "$tmp" in /tmp/r36os-cp18-preflight-*) ;; *) exit 9 ;; esac
+          trap 'case "$tmp" in /tmp/r36os-cp18-preflight-*) rm -rf -- "$tmp" ;; esac' EXIT
+          python3 alpha6/boot/cp18-first-boot-preflight.py \
+            --k1-archive "$K1_ARCHIVE" \
+            --cp17-folder "$RUNNER_TEMP/cp18-cp17-files" \
+            --r3-evidence alpha6/boot/cp18-r3-boot-evidence.json \
+            --output-workspace "$tmp"
+          python3 - "$tmp/cp18-boot-preflight-report.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          a=json.loads(Path(sys.argv[1]).read_text())
+          assert a['status']=='PASS_COMPONENT_INTEGRITY_BUT_BOOT_NOT_PERMITTED'
+          assert a['safe_to_flash'] is False
+          assert a['safe_to_install_boot_script'] is False
+          assert a['boot_tested'] is False and a['recovery_boot_tested'] is False
+          assert a['installable_files']==[]
+          assert a['r3_original_boot']['legacy_boot_write_commands']==['fatwrite','saveenv']
+          assert a['cp17']['panel4_dsi_compatible']==['rocknix,generic-dsi']
+          print('CP18: all component hashes consistent, boot/restore blockers remain')
+          PY
+          mkdir -p alpha6/dist/cp18-evidence-only
+          cp "$tmp/cp18-boot-preflight-report.json" "$tmp/CP18_REQUIRES_HARDWARE_VALIDATION.txt" alpha6/dist/cp18-evidence-only/
+          (cd alpha6/dist/cp18-evidence-only && sha256sum cp18-boot-preflight-report.json CP18_REQUIRES_HARDWARE_VALIDATION.txt > SHA256SUMS)
+          test "$(find alpha6/dist/cp18-evidence-only -maxdepth 1 -type f | wc -l)" -eq 3
+          test ! -e alpha6/dist/boot.ini
+          test ! -e alpha6/dist/flash.img
+          test ! -e alpha6/dist/idbloader.img
+          test ! -e alpha6/dist/RECOVERY.ON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp18-BOOT-EVIDENCE-ONLY-NOT-FLASHABLE
+          path: alpha6/dist/cp18-evidence-only/*
+          if-no-files-found: error
+          retention-days: 14
