@@ -1,0 +1,70 @@
+#!/bin/sh
+# R36OS Alpha6 CP17 read-only hardware probe. NO SD writes, mounts or rollback.
+PATH=/bin:/sbin
+export PATH
+umask 077
+/bin/mount -t proc proc /proc 2>/dev/null || :
+/bin/mount -t sysfs sysfs /sys 2>/dev/null || :
+/bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
+/bin/mkdir -p /run
+/bin/mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || :
+/bin/mdev -s 2>/dev/null || :
+[ ! -c /dev/console ] || exec </dev/console >/dev/console 2>&1
+
+printf '\nR36OS ALPHA 6 CP17 FIRST BOOT DIAGNOSTIC\n'
+printf 'READ ONLY: NO partition mounts / upgrades / recovery operations.\n'
+printf 'Kernel: '; /bin/uname -r
+printf 'Board: '
+if [ -r /proc/device-tree/model ]; then
+    /bin/tr '\000' ' ' </proc/device-tree/model; printf '\n'
+else
+    printf 'No readable model property\n'
+fi
+printf 'Framebuffer devices:\n'
+for f in /sys/class/graphics/fb[0-9]*; do
+    [ -e "$f" ] || continue
+    printf '  %s' "${f##*/}"
+    if [ -r "$f/virtual_size" ]; then printf ' resolution='; /bin/cat "$f/virtual_size"; else printf '\n'; fi
+done
+printf 'DRM connectors:\n'
+for f in /sys/class/drm/card*-*; do
+    [ -e "$f" ] || continue
+    printf '  %s' "${f##*/}"
+    if [ -r "$f/status" ]; then printf ' status='; /bin/cat "$f/status"; else printf '\n'; fi
+done
+printf 'MMC devices (sysfs names only):\n'
+for f in /sys/block/mmcblk[0-9]*; do
+    [ -e "$f" ] || continue
+    printf '  %s\n' "${f##*/}"
+done
+printf 'Input event devices:\n'
+for f in /sys/class/input/event[0-9]*; do
+    [ -e "$f" ] || continue
+    printf '  %s\n' "${f##*/}"
+done
+printf 'Power supplies:\n'
+for f in /sys/class/power_supply/*; do
+    [ -e "$f" ] || continue
+    printf '  %s' "${f##*/}"
+    if [ -r "$f/type" ]; then printf ' type='; /bin/cat "$f/type"; else printf '\n'; fi
+done
+printf 'Attempting optional framebuffer visibility test (VRAM ONLY):\n'
+if [ -c /dev/fb0 ]; then
+    /bin/r36os-fbdiag || printf 'Framebuffer test unavailable; serial/console log remains.\n'
+else
+    printf 'No /dev/fb0; do not interpret blank screen as a successful panel test.\n'
+fi
+printf '\nCP17 diagnostic complete: hardware support NOT YET VERIFIED.\n'
+printf 'Diagnostic output is on console only; no persistent logs were written.\n'
+ALLOW_SHELL=no
+if [ -r /proc/cmdline ]; then
+    for word in $(/bin/cat /proc/cmdline); do
+        case "$word" in r36os.cp17_shell=1) ALLOW_SHELL=yes ;; esac
+    done
+fi
+if [ "$ALLOW_SHELL" = yes ]; then
+    printf 'Manually requested experimental read-only diagnostic shell.\n'
+    exec /bin/sh -i
+fi
+printf 'Power off to exit. No automatic reboot/SD write.\n'
+while :; do /bin/sleep 60; done
