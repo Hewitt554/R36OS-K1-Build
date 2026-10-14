@@ -19,7 +19,7 @@ import zlib
 
 VERSION = '6.12.94-r36os-k1'
 UUID_PATTERN = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
-APPLET_NAMES = ('sh', 'mount', 'mdev', 'mkdir', 'sleep', 'cat', 'blkid', 'grep',
+APPLET_NAMES = ('sh', 'mount', 'mdev', 'mkdir', 'sleep', 'cat', 'grep',
                 'uname', 'switch_root')
 U_HEADER = struct.Struct('>7I4B32s')
 MARKER = 'CP15_K1_NATIVE_ROOT_NOT_BOOT_TESTED'
@@ -78,7 +78,7 @@ def cpio_entry(name: str, mode: int, contents: bytes, number: int, rdevmajor=0, 
     return result
 
 
-def pack_cpio(init_script: bytes, busybox: bytes, uuid: str) -> bytes:
+def pack_cpio(init_script: bytes, busybox: bytes, uuid: str, probe: bytes) -> bytes:
     files = [('dev', stat.S_IFDIR | 0o755, b'', 0, 0),
              ('proc', stat.S_IFDIR | 0o755, b'', 0, 0),
              ('sys', stat.S_IFDIR | 0o755, b'', 0, 0),
@@ -88,6 +88,7 @@ def pack_cpio(init_script: bytes, busybox: bytes, uuid: str) -> bytes:
              ('dev/console', stat.S_IFCHR | 0o600, b'', 5, 1),
              ('dev/null', stat.S_IFCHR | 0o666, b'', 1, 3),
              ('bin/busybox', stat.S_IFREG | 0o755, busybox, 0, 0),
+             ('bin/r36os-probe-root', stat.S_IFREG | 0o755, probe, 0, 0),
              ('init', stat.S_IFREG | 0o755, init_script, 0, 0)]
     for applet in APPLET_NAMES:
         files.append(('bin/' + applet, stat.S_IFLNK | 0o777, b'busybox', 0, 0))
@@ -127,10 +128,11 @@ def verify_uimage(u: bytes, expected_arch: int, source: bytes | None = None):
     return True
 
 
-def generate(busybox_path: Path, init_path: Path, output_dir: Path, native_uuid: str):
+def generate(busybox_path: Path, init_path: Path, probe_path: Path, output_dir: Path, native_uuid: str):
     native_uuid = require_uuid(native_uuid)
     output = safe_dir(output_dir)
     bb=read_busybox(busybox_path)
+    probe=read_busybox(probe_path)  # static ARM64 ELF, same ABI checks
     if init_path.is_symlink() or not init_path.is_file():
         raise UnsafeInput('native init source missing')
     script=init_path.read_bytes()
@@ -138,7 +140,7 @@ def generate(busybox_path: Path, init_path: Path, output_dir: Path, native_uuid:
         raise UnsafeInput('required native boot identity and handoff absent')
     if b'e139ce78-9841-40fe-8823-96a304a09859' in script:
         raise UnsafeInput('inherited R3 UUID must not be referenced')
-    raw=pack_cpio(script,bb,native_uuid)
+    raw=pack_cpio(script,bb,native_uuid,probe)
     gz=gzip.compress(raw,compresslevel=9,mtime=0)
     output_files={}
     for arch,filename in ((2,'CP15-ARM-UNTESTED.uInitrd'),(22,'CP15-ARM64-UNTESTED.uInitrd')):
@@ -154,7 +156,7 @@ def generate(busybox_path: Path, init_path: Path, output_dir: Path, native_uuid:
     report={'format':MARKER,'safe_to_flash':False,'boot_tested':False,
             'native_root_uuid':native_uuid,'kernel_release':VERSION,
             'initrd_files':output_files,'compressed_payload_bytes':len(gz),
-            'cpio_filesystem_bytes':len(raw),'busybox_bytes':len(bb),
+            'cpio_filesystem_bytes':len(raw),'busybox_bytes':len(bb),'probe_bytes':len(probe),
             'root_mount':'READ_ONLY; ext4 noload; no partition updates',
             'boot_critical_module_support':'NOT VERIFIED: MMC/ext4 must be built into K1 or included in an early module bundle',
             'hardware_compatibility':'UNTESTED Panel4/U-Boot; ARM and ARM64 header variants are alternatives, not interchangeable claims'}
@@ -167,9 +169,10 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--busybox',type=Path,required=True)
     p.add_argument('--init-script',type=Path,required=True)
+    p.add_argument('--probe',type=Path,required=True)
     p.add_argument('--output-dir',type=Path,required=True)
     p.add_argument('--native-root-uuid',required=True)
     a=p.parse_args()
-    r=generate(a.busybox,a.init_script,a.output_dir,a.native_root_uuid)
+    r=generate(a.busybox,a.init_script,a.probe,a.output_dir,a.native_root_uuid)
     print('CP15 ARM64 native initrd staging PASS; NOT BOOT TESTED;',r['compressed_payload_bytes'],'bytes payload')
 if __name__=='__main__':main()

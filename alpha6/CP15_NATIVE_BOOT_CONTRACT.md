@@ -10,7 +10,7 @@ CP15 creates its *own* statically linked ARM64 BusyBox `newc`/gzip initramfs. Th
 
     rdinit=/init r36os.boot_mode=native-dev r36os.root_uuid=<NEW_ROOT_EXT4_UUID> r36os.kernel_release=6.12.94-r36os-k1
 
-The selected root UUID is obtained from **the CP14 disposable ext4 build report** for each CI run. This is not a fixed production UUID, boot script or end-user setting. The script refuses missing/duplicate parameters, any legacy R3 root UUID, wrong kernel release, wrong filesystem identity, and a native OS without its fail-closed update policy or matching modules.dep. It probes `mmcblk*p*` using the BusyBox-compatible `blkid <device>` output (not host util-linux-specific flags). Root is mounted ext4 **read-only, `noload`**, and the basic native identity is checked before `switch_root /newroot /sbin/init`. It never applies updates or writes backup/restore commands.
+The selected root UUID is obtained from **the CP14 disposable ext4 build report** for each CI run. This is not a fixed production UUID, boot script or end-user setting. The script refuses missing/duplicate parameters, any legacy R3 root UUID, wrong kernel release, wrong filesystem identity, and a native OS without its fail-closed update policy or matching modules.dep. It probes `mmcblk*p*` using a tiny statically linked AArch64 C utility (`r36os-probe-root`), which reads only the fixed ext4 superblock bytes to verify UUID, ext4 extents feature and the R36SYS label. The historical BusyBox-static build lacks `blkid`, so no BusyBox `blkid` dependency is assumed. The probe refuses non-MMC/non-block paths in the deployed build. GitHub tests the same filesystem parsing on a regular scratch ext4 file through a distinct fixture-only compile flag. Root is mounted ext4 **read-only, `noload`**, and the basic native identity is checked before `switch_root /newroot /sbin/init`. It never applies updates or writes backup/restore commands.
 
 CP15 packages **two mutually alternative development headers** around identical gzip payload bytes: a U-Boot AArch64 (`IH_ARCH_ARM64=22`) ramdisk and the ARM (`IH_ARCH_ARM=2`) header observed on the archived K1 `uInitrd`. Valid CRC/metadata in both variants does not establish physical bootloader acceptance. The boot-argument preview must **never** be copied to `boot.ini` without a reviewed, hardware-tested boot chain.
 
@@ -25,7 +25,7 @@ CP15 packages **two mutually alternative development headers** around identical 
 
 ## GitHub verification
 
-`r36os-alpha6-cp15-native-initrd.yml` runs 17+ standalone tests, reuses the pinned historic K1 kernel archive, builds a clean native ARM64 Debian root, integrates its matching modules through CP14, creates a *new* scratch ext4 root UUID, builds and validates both independent U-Boot `uInitrd` headers against that UUID, and uploads only the development initrds, example bootargs and small reports. No flashable disk image or bootloader changes are produced.
+`r36os-alpha6-cp15-native-initrd.yml` runs 18+ standalone tests, reuses the pinned historic K1 kernel archive, builds a clean native ARM64 Debian root, integrates its matching modules through CP14, creates a *new* scratch ext4 root UUID, builds and validates both independent U-Boot `uInitrd` headers against that UUID, and uploads only the development initrds, example bootargs and small reports. No flashable disk image or bootloader changes are produced.
 
 ## Next acceptance step
 

@@ -51,32 +51,32 @@ class CP15NativeTests(unittest.TestCase):
             p=Path(t)/'busybox';p.write_bytes(stub_busybox())
             self.assertEqual(c.read_busybox(p),stub_busybox())
     def test_recovery_cpio_contains_required_nodes(self):
-        content=c.pack_cpio(SCRIPT,stub_busybox(),UUID)
+        content=c.pack_cpio(SCRIPT,stub_busybox(),UUID,stub_busybox())
         self.assertIn(b'dev/console\x00',content)
-        self.assertIn(b'bin/blkid\x00',content)
+        self.assertIn(b'bin/r36os-probe-root\x00',content)
         self.assertIn(b'bin/switch_root\x00',content)
         self.assertIn(b'etc/cp15-boot-contract\x00',content)
         self.assertIn(UUID.encode(),content)
     def test_both_arch_headers_verify(self):
         import gzip
-        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID),mtime=0)
+        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID,stub_busybox()),mtime=0)
         for arch in (2,22):
             with self.subTest(arch=arch):
                 self.assertTrue(c.verify_uimage(c.uimage(src,arch),arch,src))
     def test_header_arch_mismatch_fails(self):
         import gzip
-        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID),mtime=0)
+        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID,stub_busybox()),mtime=0)
         with self.assertRaisesRegex(c.UnsafeInput,'architecture'):c.verify_uimage(c.uimage(src,2),22)
     def test_corrupt_payload_fails(self):
         import gzip
-        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID),mtime=0)
+        src=gzip.compress(c.pack_cpio(SCRIPT,stub_busybox(),UUID,stub_busybox()),mtime=0)
         u=bytearray(c.uimage(src,22));u[-1]^=1
         with self.assertRaisesRegex(c.UnsafeInput,'CRC'):c.verify_uimage(u,22)
     def test_staging_produces_offline_report(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);f=root/'busybox';f.write_bytes(stub_busybox())
             with tempfile.TemporaryDirectory(prefix='r36os-cp15-initrd-') as out:
-                report=c.generate(f,P/'boot/cp15-init',Path(out),UUID)
+                report=c.generate(f,P/'boot/cp15-init',f,Path(out),UUID)
                 self.assertFalse(report['safe_to_flash'])
                 self.assertFalse(report['boot_tested'])
                 self.assertEqual(report['native_root_uuid'],UUID)
@@ -85,7 +85,7 @@ class CP15NativeTests(unittest.TestCase):
     def test_boot_script_fails_closed_and_no_writes(self):
         text=SCRIPT.decode()
         for x in ('r36os.root_uuid=','r36os.kernel_release=','r36os.boot_mode=',
-                  'matching-uuid-has-wrong-filesystem','matching-uuid-has-wrong-label',
+                  'matching-uuid-has-wrong-filesystem-or-label','r36os-probe-root',
                   'native-release-mismatch','k1-modules-abi-not-found',
                   'flash_image_ready=false','mount -t ext4 -o ro,noload'):
             self.assertIn(x,text)
@@ -95,8 +95,14 @@ class CP15NativeTests(unittest.TestCase):
         self.assertNotIn('e139ce78-9841-40fe-8823-96a304a09859',SCRIPT.decode())
     def test_busybox_options_compatible(self):
         text=SCRIPT.decode()
-        self.assertNotIn('blkid -s ',text)
+        self.assertNotIn('/bin/blkid ',text)
         self.assertNotIn('mount --move',text.split('exec /bin/switch_root')[0].split('# BusyBox mount commonly lacks GNU --move.')[0])
+    def test_probe_source_readonly_block_contract(self):
+        source=(P/'boot/cp15-probe-root.c').read_text()
+        for required in ('O_RDONLY','O_NOFOLLOW','S_ISBLK','pread','R36SYS','0x68','0x38'):
+            self.assertIn(required,source)
+        for disallowed in ('O_WRONLY','O_RDWR','pwrite(','mkfs.'):
+            self.assertNotIn(disallowed,source)
     def test_posix_shell_syntax(self):
         proc=subprocess.run(['sh','-n',str(P/'boot/cp15-init')],capture_output=True,text=True)
         self.assertEqual(proc.returncode,0,proc.stderr)

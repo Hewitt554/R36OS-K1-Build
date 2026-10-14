@@ -70,12 +70,15 @@ while [ "$TRIES" -lt 20 ]; do
     # MMC numbering depends on firmware and SD slot. Never assume mmcblk0p2.
     for dev in /dev/mmcblk*p*; do
         [ -b "$dev" ] || continue
-        # BusyBox blkid does not implement util-linux -s/-o flags.
-        # Match a complete, delimited UUID field, never PARTUUID or prefix.
-        INFO=$(/bin/blkid "$dev" 2>/dev/null) || continue
-        case " $INFO " in *" UUID=\"$ROOT_UUID\""*) ;; *) continue ;; esac
-        case " $INFO " in *' TYPE="ext4"'*) ;; *) fail matching-uuid-has-wrong-filesystem ;; esac
-        case " $INFO " in *' LABEL="R36SYS"'*) ;; *) fail matching-uuid-has-wrong-label ;; esac
+        # Static ARM64 ext4 superblock reader: block devices only, no writes.
+        # Exit 3 means UUID matches but label/format differs: STOP safely.
+        if /bin/r36os-probe-root "$dev" "$ROOT_UUID"; then
+            :
+        else
+            STATUS=$?
+            [ "$STATUS" -ne 3 ] || fail matching-uuid-has-wrong-filesystem-or-label
+            continue
+        fi
         [ -z "$FOUND" ] || fail duplicate-root-uuid
         FOUND=$dev
     done

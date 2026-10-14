@@ -4,10 +4,10 @@ set -euo pipefail
 [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || exit 2
 BASE="$(cd "$(dirname "$0")/.." && pwd)"
 [[ -s "$BASE/dist/cp14-k1-native-report.json" ]] || { echo 'CP14 native-root integration report is required' >&2; exit 3; }
-for cmd in busybox python3 mkimage readelf; do command -v "$cmd" >/dev/null || exit 3; done
+for cmd in busybox python3 mkimage readelf gcc; do command -v "$cmd" >/dev/null || exit 3; done
 BUSYBOX=$(command -v busybox)
 # Applet inventory varies across BusyBox distributions.
-for applet in sh mount mdev mkdir sleep cat blkid grep uname switch_root; do
+for applet in sh mount mdev mkdir sleep cat grep uname switch_root; do
   busybox --list | grep -qx "$applet" || { echo "Missing static BusyBox applet: $applet" >&2; exit 3; }
 done
 WORK=$(mktemp -d /tmp/r36os-cp15-initrd-XXXXXXXX)
@@ -24,7 +24,14 @@ assert p['scratch_native_root_uuid'] != p['k1_root_uuid']
 print(p['scratch_native_root_uuid'])
 PY
 )
+# Native static probe is independent of distro BusyBox feature selection.
+gcc -std=c11 -Os -Wall -Wextra -Werror -static \
+  -o "$WORK/r36os-probe-root" "$BASE/boot/cp15-probe-root.c"
+if readelf -l "$WORK/r36os-probe-root" | grep -q INTERP; then
+  echo 'CP15 probe must be fully static' >&2; exit 4
+fi
 python3 "$BASE/boot/build-cp15-initrd.py" \
+  --probe "$WORK/r36os-probe-root" \
   --busybox "$BUSYBOX" \
   --init-script "$BASE/boot/cp15-init" \
   --output-dir "$WORK" \
