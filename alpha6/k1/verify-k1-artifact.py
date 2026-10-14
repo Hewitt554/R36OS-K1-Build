@@ -76,6 +76,10 @@ def verify(archive_path, stage_dir=None):
     with tarfile.open(archive_path,'r:gz') as tar:
         entries={}
         for member in tar:
+            # GNU tar archives commonly include a harmless root directory './'.
+            # Ignore only that directory, never an unsafe file or path.
+            if member.isdir() and member.name in ('.','./'):
+                continue
             name=norm_member(member.name)
             if name in entries: raise Invalid('duplicate archive member')
             entries[name]=member
