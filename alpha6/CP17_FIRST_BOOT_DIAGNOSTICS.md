@@ -25,3 +25,7 @@ The ARM64 GitHub workflow builds the independent initramfs and static C framebuf
 - Physical K1 boot, visible framebuffer test, MMC-root detection, input event presence, RK817 status and actual read-only root handoff still untested.
 
 No new downloads, diagnostics, or SD operations are required on the user's Windows PC just to run this GitHub CI workflow. It is **not** a first-boot test report until someone explicitly tests it on real hardware.
+
+## Static K1 DTB findings (October 14 CI)
+
+The pinned K1 device tree identifies the RK3326 board and has **two enabled actual MMC host nodes** at `/mmc@ff370000` and `/mmc@ff380000`. Older reports included pinctrl group names in the MMC count; the CP17 classifier now excludes those pin groups. The device tree exposes `/dsi@ff450000` and `/dsi@ff450000/panel@0` with a **generic** panel compatible `rocknix,generic-dsi` rather than an explicit NV3051D compatible. It also contains the RK817 PMIC compatible. That is static evidence of node declarations only, not proof that the display will initialise or match the Panel 4 640x480 timing.

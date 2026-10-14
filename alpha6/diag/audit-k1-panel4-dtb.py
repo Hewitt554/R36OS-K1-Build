@@ -93,6 +93,7 @@ def classify(nodes: dict) -> dict:
     model=dt_strings(root.get('model',b''))
     is_rk3326=any('rk3326' in x for x in compat)
     mmc=[]; display=[]; power=[]; input_devices=[]
+    dsi_panel_compat=[]
     for path,values in sorted(nodes.items()):
         if path=='/': continue
         kind=path.split('/')[-1].lower()
@@ -101,10 +102,15 @@ def classify(nodes: dict) -> dict:
         enabled=not status or status[0] in ('okay','ok')
         item={'path':path,'status':status[0] if status else 'implicit-okay',
               'compatible':compatibles[:12]}
-        if ('mmc' in kind or any('mmc' in c for c in compatibles)) and enabled:
+        # Only controller nodes, not pinctrl/emmc or sdmmc pin groups.
+        mmc_host=(kind.startswith(('mmc@','sdmmc@','sdhci@'))
+                  or any('dw-mshc' in c or 'sdhci' in c for c in compatibles))
+        if mmc_host and enabled:
             mmc.append(item)
         if ('dsi' in kind or 'panel' in kind or any('nv3051' in c or 'mipi-dsi' in c for c in compatibles)):
             display.append(item)
+            if 'panel' in kind:
+                dsi_panel_compat.extend(compatibles)
         if 'rk8' in kind or any('rk817' in c or 'rk808' in c for c in compatibles):
             power.append(item)
         if 'gpio-keys' in kind or 'gpio-keys' in compatibles:
@@ -113,12 +119,17 @@ def classify(nodes: dict) -> dict:
     if not is_rk3326: blockers.append('DTB root compatible does not advertise RK3326')
     if not mmc: blockers.append('No enabled MMC nodes evidenced in DTB')
     if not display: blockers.append('No panel/DSI candidate nodes found')
+    identified_nv3051d=any('nv3051' in c.lower() for c in dsi_panel_compat)
+    if display and not identified_nv3051d:
+        blockers.append('Panel node does not identify NV3051D explicitly; compatible strings are not proof of Panel4 timing')
     blockers.extend(['No physical Panel4 framebuffer/display boot verification',
                      'No original R3 boot.ini or U-Boot memory layout validation',
                      'No safe independently booted fallback for a failed kernel'])
     return {'board_model':model[:2], 'root_compatible':compat,
             'rk3326_root_compatible':is_rk3326,'dtb_node_count':len(nodes),
             'enabled_mmc_nodes':mmc[:25], 'display_candidates':display[:25],
+            'panel_node_compatible':sorted(set(dsi_panel_compat)),
+            'nv3051d_compatible_explicit':identified_nv3051d,
             'power_candidates':power[:25], 'gpio_keys_candidates':input_devices[:25],
             'blockers':blockers,'boot_tested':False,'safe_to_flash':False,
             'display_tested':False,'recovery_boot_tested':False}

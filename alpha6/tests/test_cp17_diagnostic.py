@@ -69,6 +69,20 @@ class CP17Tests(unittest.TestCase):
         self.assertEqual(len(r['display_candidates']),2)
         self.assertFalse(r['boot_tested'])
         self.assertFalse(r['safe_to_flash'])
+    def test_pinctrl_mmc_groups_are_not_host_controllers(self):
+        nodes={'/':{'compatible':b'rockchip,rk3326\0'},
+               '/pinctrl/emmc':{}, '/pinctrl/sdmmc/sdmmc-det':{},
+               '/mmc@ff370000':{'compatible':b'rockchip,px30-dw-mshc\0'}}
+        x=f.classify(nodes)
+        self.assertEqual([m['path'] for m in x['enabled_mmc_nodes']],['/mmc@ff370000'])
+    def test_generic_dsi_explicitly_requires_panel_hardware_test(self):
+        nodes={'/':{'compatible':b'rockchip,rk3326\0'},
+               '/mmc@ff370000':{'compatible':b'rockchip,px30-dw-mshc\0'},
+               '/dsi@ff450000/panel@0':{'compatible':b'rocknix,generic-dsi\0'}}
+        x=f.classify(nodes)
+        self.assertFalse(x['nv3051d_compatible_explicit'])
+        self.assertEqual(x['panel_node_compatible'],['rocknix,generic-dsi'])
+        self.assertTrue(any('NV3051D explicitly' in issue for issue in x['blockers']))
     def test_no_mmc_is_blocker(self):
         r=f.classify(f.parse_fdt(build_dtb(with_mmc=False)))
         self.assertTrue(any('No enabled MMC' in x for x in r['blockers']))
