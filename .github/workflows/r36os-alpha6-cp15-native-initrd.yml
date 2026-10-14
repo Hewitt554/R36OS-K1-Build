@@ -1,0 +1,72 @@
+name: R36OS Alpha6 CP15 K1 Native Root Initrd (Development)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/cp15-init'
+      - 'alpha6/boot/build-cp15-initrd.py'
+      - 'alpha6/boot/build-cp15-ci.sh'
+      - 'alpha6/tests/test_cp15_native_initrd.py'
+      - 'alpha6/CP15_NATIVE_BOOT_CONTRACT.md'
+      - '.github/workflows/r36os-alpha6-cp15-native-initrd.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native-boot-contract:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native CI build and test tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            busybox-static binutils debootstrap zstd e2fsprogs u-boot-tools
+      - name: Validate the fail-closed native initrd boot contract
+        run: |
+          sh -n alpha6/boot/cp15-init
+          bash -n alpha6/boot/build-cp15-ci.sh
+          python3 -m py_compile alpha6/boot/build-cp15-initrd.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp15_native_initrd.py
+      - name: Download checksum-pinned historical K1 kernel candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/cp15-k1"
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
+          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
+            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp15-k1"
+          mapfile -t SOURCE < <(find "$RUNNER_TEMP/cp15-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
+          test "${#SOURCE[@]}" -eq 1
+          echo "K1_ARCHIVE=${SOURCE[0]}" >> "$GITHUB_ENV"
+      - name: Build clean ARM64 native Debian root filesystem
+        run: sudo bash alpha6/ci/build-native-rootfs.sh
+      - name: Verify K1 modules and construct fresh disposable native ext4 root
+        run: sudo bash alpha6/k1/build-cp14-native-root-ci.sh "$K1_ARCHIVE"
+      - name: Build paired, untested ARM and ARM64 U-Boot initrds
+        run: sudo bash alpha6/boot/build-cp15-ci.sh
+      - name: Explicitly reject boot-ready claims
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          x=json.loads(Path('alpha6/dist/cp15-initrd-report.json').read_text())
+          y=json.loads(Path('alpha6/dist/cp14-k1-native-report.json').read_text())
+          assert not x['safe_to_flash'] and not x['boot_tested']
+          assert x['native_root_uuid']==y['scratch_native_root_uuid']
+          assert 'NOT VERIFIED' in x['boot_critical_module_support']
+          assert not Path('alpha6/dist/boot.ini').exists()
+          print('CP15 offline initramfs contract PASS; flash and Panel4 boot NOT VERIFIED')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp15-K1-NATIVE-INITRD-UNTESTED
+          path: |
+            alpha6/dist/cp15-initrd-report.json
+            alpha6/dist/cp14-k1-native-report.json
+            alpha6/dist/CP15-ARM-UNTESTED.uInitrd
+            alpha6/dist/CP15-ARM64-UNTESTED.uInitrd
+            alpha6/dist/CP15-BOOTARGS-SAMPLE-NOT-INSTALL.txt
+          if-no-files-found: error
+          retention-days: 14

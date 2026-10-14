@@ -1,0 +1,106 @@
+#!/bin/sh
+# R36OS Alpha 6 CP15: early boot of READ-ONLY native root, no on-device writes.
+# Requires explicit, single bootarg r36os.root_uuid and kernel ABI identity.
+PATH=/bin:/sbin
+export PATH
+umask 077
+
+/bin/mount -t proc proc /proc 2>/dev/null || :
+/bin/mount -t sysfs sysfs /sys 2>/dev/null || :
+/bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
+/bin/mkdir -p /run /newroot
+/bin/mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || :
+/bin/mdev -s 2>/dev/null || :
+
+# After mounts succeed, use console if present; early printk remains usable otherwise.
+[ ! -c /dev/console ] || exec </dev/console >/dev/console 2>&1
+
+fail() {
+    printf '\nR36OS CP15 EARLY BOOT STOP: %s\n' "$1"
+    printf 'No updates, partition restoration or boot flag writes were attempted.\n'
+    # Diagnostic shell is opt-in through physical test bootargs only.
+    if [ "${ALLOW_SHELL:-no}" = yes ]; then
+        printf 'Diagnostic shell explicitly requested: r36os.debug_shell=1\n'
+        exec /bin/sh -i
+    fi
+    while :; do /bin/sleep 60; done
+}
+
+# Any missing or duplicated argument is a failure, not a reason to fall back
+# to the inherited R3 root UUID or a guessed MMC partition.
+ROOT_UUID=
+KREL=
+MODE=
+ALLOW_SHELL=no
+SEEN_UUID=0
+SEEN_KREL=0
+SEEN_MODE=0
+if [ ! -r /proc/cmdline ]; then fail missing-cmdline; fi
+for word in $(/bin/cat /proc/cmdline); do
+    case "$word" in
+        r36os.root_uuid=*)
+            SEEN_UUID=$((SEEN_UUID+1))
+            ROOT_UUID=${word#r36os.root_uuid=}
+            ;;
+        r36os.kernel_release=*)
+            SEEN_KREL=$((SEEN_KREL+1))
+            KREL=${word#r36os.kernel_release=}
+            ;;
+        r36os.boot_mode=*)
+            SEEN_MODE=$((SEEN_MODE+1))
+            MODE=${word#r36os.boot_mode=}
+            ;;
+        r36os.debug_shell=1) ALLOW_SHELL=yes ;;
+    esac
+done
+[ "$SEEN_UUID" -eq 1 ] || fail root-uuid-missing-or-duplicated
+[ "$SEEN_KREL" -eq 1 ] || fail kernel-release-missing-or-duplicated
+[ "$SEEN_MODE" -eq 1 ] || fail boot-mode-missing-or-duplicated
+[ "$MODE" = native-dev ] || fail boot-mode-rejected
+
+# 36 lowercase hex/dash characters, exact RFC4122 UUID textual shape.
+printf '%s\n' "$ROOT_UUID" | /bin/grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || fail root-uuid-invalid
+[ "$KREL" = 6.12.94-r36os-k1 ] || fail unsupported-kernel-abi
+[ "$(/bin/uname -r)" = "$KREL" ] || fail running-kernel-mismatch
+
+printf 'R36OS CP15: probing MMC devices for exact native root UUID %s\n' "$ROOT_UUID"
+FOUND=
+TRIES=0
+while [ "$TRIES" -lt 20 ]; do
+    # MMC numbering depends on firmware and SD slot. Never assume mmcblk0p2.
+    for dev in /dev/mmcblk*p*; do
+        [ -b "$dev" ] || continue
+        # BusyBox blkid does not implement util-linux -s/-o flags.
+        # Match a complete, delimited UUID field, never PARTUUID or prefix.
+        INFO=$(/bin/blkid "$dev" 2>/dev/null) || continue
+        case " $INFO " in *" UUID=\"$ROOT_UUID\""*) ;; *) continue ;; esac
+        case " $INFO " in *' TYPE="ext4"'*) ;; *) fail matching-uuid-has-wrong-filesystem ;; esac
+        case " $INFO " in *' LABEL="R36SYS"'*) ;; *) fail matching-uuid-has-wrong-label ;; esac
+        [ -z "$FOUND" ] || fail duplicate-root-uuid
+        FOUND=$dev
+    done
+    [ -z "$FOUND" ] || break
+    TRIES=$((TRIES+1))
+    /bin/sleep 1
+    /bin/mdev -s 2>/dev/null || :
+done
+[ -n "$FOUND" ] || fail native-root-not-found
+
+/bin/mount -t ext4 -o ro,noload "$FOUND" /newroot || fail native-root-mount-failed
+[ -f /newroot/etc/r36os-release ] || fail native-release-missing
+/bin/grep -qx 'ID=r36os' /newroot/etc/r36os-release || fail native-release-mismatch
+[ -f /newroot/etc/r36os/firstboot-policy.conf ] || fail native-update-policy-missing
+/bin/grep -qx 'flash_image_ready=false' /newroot/etc/r36os/firstboot-policy.conf || fail native-update-policy-unsafe
+/bin/grep -qx 'update_apply_enabled=false' /newroot/etc/r36os/firstboot-policy.conf || fail native-updater-enabled
+[ -f "/newroot/lib/modules/$KREL/modules.dep" ] || fail k1-modules-abi-not-found
+[ -x /newroot/sbin/init ] || fail native-init-missing
+
+printf 'R36OS CP15: verified %s, transferring to native userspace (root read-only)\n' "$FOUND"
+# BusyBox mount commonly lacks GNU --move. Attach independent instances
+# directly at existing rootfs mountpoints without writing the ext4 root.
+[ -d /newroot/proc ] && [ -d /newroot/sys ] && [ -d /newroot/dev ] && [ -d /newroot/run ] || fail native-virtual-mountpoints-absent
+/bin/mount -t proc proc /newroot/proc || fail proc-handoff-mount
+/bin/mount -t sysfs sysfs /newroot/sys || fail sys-handoff-mount
+/bin/mount -t devtmpfs devtmpfs /newroot/dev || fail dev-handoff-mount
+/bin/mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /newroot/run || fail run-handoff-mount
+exec /bin/switch_root /newroot /sbin/init
