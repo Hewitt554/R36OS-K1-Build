@@ -1,0 +1,44 @@
+name: R36OS Alpha6 CP11 Boot Extraction and Geometry
+on:
+  pull_request:
+    paths:
+      - 'alpha6/cp11/**'
+      - '.github/workflows/r36os-alpha6-cp11-boot-extract.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-offline-boot-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Python syntax and read-only boot extraction fixtures
+        run: |
+          python3 -m py_compile alpha6/cp11/tools/*.py
+          cd alpha6/cp11
+          python3 -m unittest discover -s tests -v |& tee ../cp11-test-results.txt
+      - name: Generate layout simulation
+        run: |
+          python3 alpha6/cp11/tools/layout_preview.py
+          python3 - <<'PY'
+          import json
+          p='alpha6/cp11/docs/CP11_LAYOUT_CAPACITY_SIMULATION.json'
+          d=json.load(open(p))
+          assert d['status']=='DESIGN_ONLY' and d['selected'] is None
+          assert len(d['layout_options'])==6
+          assert all(len(x['partitions'])==4 for x in d['layout_options'])
+          PY
+      - name: Explicitly no real boot image
+        run: |
+          test ! -f alpha6/cp11/boot.ini
+          test ! -f alpha6/cp11/flash.img
+          echo 'CP11 is read-only and does not deploy any bootloader configuration.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alpha6-cp11-offline-report-NOT-FLASHABLE
+          path: |
+            alpha6/cp11/docs/CP11_LAYOUT_CAPACITY_SIMULATION.json
+            alpha6/cp11-test-results.txt
+          if-no-files-found: error
+          retention-days: 14
