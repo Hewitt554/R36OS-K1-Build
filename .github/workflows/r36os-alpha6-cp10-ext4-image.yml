@@ -1,0 +1,41 @@
+name: R36OS Alpha6 CP10 Disposable ext4 Image Recovery
+on:
+  pull_request:
+    paths:
+      - 'alpha6/offline/ext4_image_fixture.py'
+      - 'alpha6/tests/test_ext4_image_restore.py'
+      - '.github/workflows/r36os-alpha6-cp10-ext4-image.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ext4-offline-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux ext4 filesystem utilities
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends e2fsprogs
+          command -v mke2fs
+          command -v e2fsck
+          command -v debugfs
+      - name: Verify the harness cannot target real SD or a mounted root
+        run: |
+          python3 -m py_compile alpha6/offline/ext4_image_fixture.py alpha6/tests/test_ext4_image_restore.py
+          ! grep -E '(^|[^[:alnum:]])(losetup|mount|umount|dd |sfdisk|wipefs|/dev/mmcblk|/dev/sd[a-z])' alpha6/offline/ext4_image_fixture.py
+      - name: Test 16 ext4 image snapshot and recovery scenarios
+        run: |
+          python3 -m unittest discover -v -s alpha6/tests -p 'test_ext4_image_restore.py' 2>&1 | tee cp10-test-results.txt
+          ! grep -E 'skipped=|FAILED|ERROR' cp10-test-results.txt
+          grep -q 'Ran 16 tests' cp10-test-results.txt
+          grep -q '^OK$' cp10-test-results.txt
+      - name: Upload offline-only test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cp10-ext4-disposable-fixtures-logs
+          path: cp10-test-results.txt
+          if-no-files-found: warn
+          retention-days: 14
