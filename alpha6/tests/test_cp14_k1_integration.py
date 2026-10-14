@@ -39,6 +39,18 @@ class TestCP14(unittest.TestCase):
             res=m.extract_modules_nested(io.BytesIO(standard()),Path(d)/'stage',RELEASE)
             self.assertEqual(res['module_files'],1)
             self.assertTrue((Path(d)/'stage/kernel/drivers/dummy.ko').is_file())
+    def test_historical_k1_flat_modules_layout(self):
+        b=blob([
+            ('modules-'+RELEASE+'/modules.dep',b'kernel/drivers/x.ko:\n',tarfile.REGTYPE,''),
+            ('modules-'+RELEASE+'/kernel/drivers/x.ko',b'\x7fELFtest',tarfile.REGTYPE,'')])
+        with tempfile.TemporaryDirectory() as d:
+            res=m.extract_modules_nested(io.BytesIO(b),Path(d)/'stage',RELEASE)
+            self.assertEqual(res['module_files'],1)
+    def test_historical_k1_flat_layout_wrong_release_rejected(self):
+        b=blob([('modules-6.12.95-r36os-k1/modules.dep',b'',tarfile.REGTYPE,'')])
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(m.Reject,'different kernel release'):
+                m.extract_modules_nested(io.BytesIO(b),Path(d)/'stage',RELEASE)
     def test_skips_compile_time_symlinks(self):
         b=blob([
             ('lib/modules/'+RELEASE+'/source',b'',tarfile.SYMTYPE,'/unsafe/build'),
