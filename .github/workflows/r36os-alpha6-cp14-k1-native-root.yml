@@ -1,0 +1,61 @@
+name: R36OS Alpha6 CP14 K1 Modules + Native Root Integration
+on:
+  pull_request:
+    paths:
+      - 'alpha6/k1/compose-k1-native-root.py'
+      - 'alpha6/k1/build-cp14-native-root-ci.sh'
+      - 'alpha6/tests/test_cp14_k1_integration.py'
+      - 'alpha6/CP14_K1_NATIVE_INTEGRATION.md'
+      - '.github/workflows/r36os-alpha6-cp14-k1-native-root.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  integrate-k1-native-root:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native root and ext4 build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap zstd e2fsprogs
+      - name: Test module archive safety before real build
+        run: |
+          python3 -m py_compile alpha6/k1/compose-k1-native-root.py
+          bash -n alpha6/k1/build-cp14-native-root-ci.sh
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp14_k1_integration.py
+      - name: Retrieve pinned successful K1 kernel artifact (READ ONLY)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/cp14-k1"
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
+          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
+            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp14-k1"
+          mapfile -t ARCHIVES < <(find "$RUNNER_TEMP/cp14-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
+          test "${#ARCHIVES[@]}" -eq 1 || { echo 'Expected exactly one K1 source' >&2; exit 3; }
+          echo "K1_ARCHIVE=${ARCHIVES[0]}" >> "$GITHUB_ENV"
+      - name: Build actual CP06 ARM64 root from Debian packages
+        run: sudo bash alpha6/ci/build-native-rootfs.sh
+      - name: Install K1 modules and check disposable ext4 filesystem
+        run: sudo bash alpha6/k1/build-cp14-native-root-ci.sh "$K1_ARCHIVE"
+      - name: Verify explicit NOT-READY report
+        run: |
+          python3 - <<'PY'
+          import json
+          p='alpha6/dist/cp14-k1-native-report.json'
+          data=json.load(open(p))
+          assert data['safe_to_flash'] is False
+          assert data['boot_tested'] is False
+          assert data['ext4_fsck']=='PASS_READONLY'
+          assert data['scratch_native_root_uuid']!=data['k1_root_uuid']
+          print('CP14 nonbootable root integration report PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp14-K1-NATIVE-NOT-BOOTABLE
+          path: alpha6/dist/cp14-k1-native-report.json
+          if-no-files-found: error
+          retention-days: 30
