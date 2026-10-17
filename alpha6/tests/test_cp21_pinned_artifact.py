@@ -10,7 +10,8 @@ import unittest
 SOURCE=Path(__file__).resolve().parents[1]/'k1/cp21_pinned_artifact.py'
 spec=importlib.util.spec_from_file_location('cp21_pinning',SOURCE)
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-PENDING=json.loads((SOURCE.with_name('k1-candidate-pin.json')).read_text())
+ACTIVE=json.loads((SOURCE.with_name('k1-candidate-pin.json')).read_text())
+PENDING={**ACTIVE,'status':m.STATUS_PENDING,'run_id':None,'head_sha':None,'archive_sha256':None}
 SHA='a'*64
 COMMIT='b'*40
 RUN_ID=39038977056
@@ -31,6 +32,9 @@ def report():
             'new_archive_sha256':SHA}
 
 class PinTests(unittest.TestCase):
+    def test_checked_active_reviewed_pin(self):
+        self.assertEqual(m.valid_pin(ACTIVE,True)['status'],m.STATUS_READY)
+        self.assertFalse(ACTIVE['hardware_boot_tested'])
     def test_checked_pending(self):
         self.assertEqual(m.valid_pin(PENDING)['status'],m.STATUS_PENDING)
     def test_pending_is_not_ready(self):
