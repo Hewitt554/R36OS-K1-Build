@@ -42,6 +42,11 @@ def candidate(data: bytes, sha: str = R3_SHA, size: int = R3_SIZE) -> bytes:
         raise UnsafeSource("source length mismatch")
     if hashlib.sha256(data).hexdigest() != sha:
         raise UnsafeSource("source checksum mismatch")
+    # CP19: The exact original R3 script has now been recovered. Retire the
+    # unsafe historical CP08 boot-selector candidate for production inputs.
+    # Synthetic tests remain available for negative-path regression coverage.
+    if sha == R3_SHA and size == R3_SIZE:
+        raise UnsafeSource("CP19 RETIRED: original R3 boot.ini must not receive the CP08 recovery gate")
     if b"R36OS-CP08-RECOVERY-GATE-BEGIN" in data:
         raise UnsafeSource("already modified")
     if data.count(ANCHOR) != 1 or data.count(b"booti ") != 1:
