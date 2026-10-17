@@ -1,4 +1,4 @@
-name: R36OS Alpha6 CP22 K1 Dependency Migration Drafts (No Install)
+name: R36OS Alpha6 CP22 K1 Migration Regression (No Install)
 on:
   push:
     branches: [alpha6-native-root-cp06]
@@ -26,37 +26,37 @@ jobs:
           set -euo pipefail
           python3 -m py_compile alpha6/cp22/prepare-consumer-migration.py
           python3 -m unittest discover -v -s alpha6/tests -p test_cp22_migration.py
-          python3 alpha6/k1/cp21_pinned_artifact.py alpha6/k1/k1-candidate-pin.json --check-pending
-      - name: Generate draft workflow files in an isolated /tmp folder only
+          python3 alpha6/k1/cp21_pinned_artifact.py alpha6/k1/k1-candidate-pin.json --get sha256
+      - name: Validate five activated CI consumers and one blocked CP18 consumer
         run: |
           set -euo pipefail
-          workspace="$(mktemp -d /tmp/r36os-cp22-workflow-drafts-XXXXXXXX)"
-          case "$workspace" in /tmp/r36os-cp22-workflow-drafts-*) ;; *) exit 7;; esac
-          trap 'case "$workspace" in /tmp/r36os-cp22-workflow-drafts-*) rm -rf -- "$workspace";; esac' EXIT
-          python3 alpha6/cp22/prepare-consumer-migration.py --repo-root "$PWD" --out "$workspace"
-          python3 - "$workspace" <<'PY'
-          import json,sys
+          mkdir -p alpha6/dist/cp22-offline-drafts
+          python3 - <<'PY'
           from pathlib import Path
-          path=Path(sys.argv[1]); report=json.loads((path/'CP22_REVIEW_ONLY.json').read_text())
-          assert report['format']=='R36OS_CP22_K1_WORKFLOW_MIGRATION_DRAFT_ONLY_V1'
-          assert report['pin_status']=='PENDING_REBUILD'
-          assert report['ready_to_apply_to_development_branch'] is False
-          assert report['source_files_edited'] is False
-          assert report['safe_to_flash'] is False
-          assert len(report['workflow_drafts'])==6
-          for row in report['workflow_drafts']:
-              text=(path/row['generated_candidate']).read_text()
-              assert '11124161537' not in text and '36763257082' not in text
-              assert text.count('cp21-download-pinned-k1.sh')==1
-          print('CP22 source-matched six actual workflows and staged isolated patches; no activation')
+          import json
+          names=('r36os-alpha6-cp13-k1-provenance.yml',
+                 'r36os-alpha6-cp14-k1-native-root.yml',
+                 'r36os-alpha6-cp15-native-initrd.yml',
+                 'r36os-alpha6-cp16-k1-early-driver-audit.yml',
+                 'r36os-alpha6-cp17-panel4-diagnostics.yml')
+          for name in names:
+              text=(Path('.github/workflows')/name).read_text()
+              assert text.count('cp21-download-pinned-k1.sh') == 1, name
+              assert '11124161537' not in text and '36763257082' not in text, name
+          stale=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
+          assert '11924001285' in stale
+          assert 'cp21-download-pinned-k1.sh' not in stale
+          result={'status':'PASS_FIVE_PINNED_CONSUMERS_CP18_STILL_BLOCKED',
+                  'five_consumer_names':names,'cp18_new_panel4_dependency_resolved':False,
+                  'historical_cp22_draft_generator_used':False,
+                  'safe_to_flash':False,'boot_tested':False}
+          Path('alpha6/dist/cp22-offline-drafts/CP22_MIGRATION_STATUS.json').write_text(json.dumps(result,indent=2)+'\\n')
+          print('CP22: five active consumers checked, CP18 deliberately still blocked')
           PY
           git diff --exit-code -- .github/workflows alpha6/k1/k1-candidate-pin.json
-          mkdir -p alpha6/dist/cp22-offline-drafts
-          cp -- "$workspace"/* alpha6/dist/cp22-offline-drafts/
-          (cd alpha6/dist/cp22-offline-drafts && sha256sum *.yml CP22_REVIEW_ONLY.json > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: r36os-alpha6-cp22-SIX-K1-DRAFTS-REVIEW-ONLY-NOT-ACTIVATED
+          name: r36os-alpha6-cp22-MIGRATION-CONTRACTS-NOT-BOOTABLE
           path: alpha6/dist/cp22-offline-drafts/
           if-no-files-found: error
           retention-days: 30
