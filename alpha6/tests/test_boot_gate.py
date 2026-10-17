@@ -43,6 +43,19 @@ class TestGate(unittest.TestCase):
     def test_multiple_booti_rejected(self):
         with self.assertRaisesRegex(g.UnsafeSource,"boot structure"):
             make(SOURCE+b"booti extra\n")
+    def test_real_r3_gate_is_explicitly_retired(self):
+        oldsha, oldsize = g.R3_SHA, g.R3_SIZE
+        try:
+            # Map the synthetic fixture to the real identity constants to
+            # exercise the fail-closed production branch without publishing
+            # or copying the user's actual original boot script.
+            g.R3_SHA = hashlib.sha256(SOURCE).hexdigest()
+            g.R3_SIZE = len(SOURCE)
+            with self.assertRaisesRegex(g.UnsafeSource, "CP19 RETIRED"):
+                g.candidate(SOURCE, g.R3_SHA, g.R3_SIZE)
+        finally:
+            g.R3_SHA, g.R3_SIZE = oldsha, oldsize
+
     def test_hook_has_no_fat_writes(self):
         for forbidden in (b"fatwrite",b"saveenv",b"mw.b",b"erase",b"run update"):
             self.assertNotIn(forbidden,g.HOOK)
