@@ -1,0 +1,67 @@
+name: R36OS Alpha6 CP20 Rebuild Expired K1 Candidate (UNTESTED)
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - '.github/workflows/r36os-alpha6-cp20-refresh-k1.yml'
+      - 'bootstrap_r36os_k1.sh'
+      - 'alpha6/k1/cp20_verify_rebuilt_candidate.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r36os-alpha6-cp20-k1-rebuild
+  cancel-in-progress: false
+jobs:
+  rebuild-and-reverify:
+    if: github.ref == 'refs/heads/alpha6-native-root-cp06'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check original pinned build recipe before any build
+        run: |
+          test "$(grep -c '^BASE_COMMIT="89719bd08a8a8b32fb0448b58e0e55df20acd0f4"' bootstrap_r36os_k1.sh)" -eq 1
+          test "$(grep -c '^BASE_BLOB_SHA1="7afd3b5032f78371f687e3bab0a38fc076a6c966"' bootstrap_r36os_k1.sh)" -eq 1
+          bash -n bootstrap_r36os_k1.sh
+          python3 -m py_compile alpha6/k1/verify-k1-artifact.py alpha6/k1/cp20_verify_rebuilt_candidate.py
+          echo 'Pinned prior bootstrap verified by source constants and bash syntax.'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/r36os-k1-cp04-downloads
+          key: r36os-k1-cp04-linux-6.12.94-e998a232
+      - name: Rebuild historic K1 using pinned source — NO SD DEVICE
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash bootstrap_r36os_k1.sh 2>&1 | tee cloud-build.log
+      - name: Verify NEW K1 result archive with CP13 integrity rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p alpha6/dist
+          mapfile -t ARR < <(find results -maxdepth 3 -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
+          test "${#ARR[@]}" -eq 1 || { echo 'Expected exactly one compiled result archive' >&2; exit 3; }
+          python3 alpha6/k1/cp20_verify_rebuilt_candidate.py "${ARR[0]}" \
+            alpha6/dist/cp20-REBUILT-K1-PROVENANCE.json
+          cp -- "${ARR[0]}" alpha6/dist/
+          sha256sum "${ARR[0]}" | tee alpha6/dist/cp20-new-k1-checksum.txt
+      - name: Upload validated NEW K1 candidate (still hardware-UNTESTED)
+        uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp20-REBUILT-K1-HARDWARE-UNTESTED
+          path: |
+            alpha6/dist/R36OS_K1_CP04_CP05_RESULT_*.tar.gz
+            alpha6/dist/cp20-REBUILT-K1-PROVENANCE.json
+            alpha6/dist/cp20-new-k1-checksum.txt
+            cloud-build.log
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload failure evidence if build or archive validation fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp20-K1-REBUILD-FAILED-LOG
+          path: cloud-build.log
+          if-no-files-found: warn
+          retention-days: 30

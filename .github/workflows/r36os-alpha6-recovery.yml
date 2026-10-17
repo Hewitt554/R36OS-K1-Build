@@ -1,0 +1,41 @@
+name: R36OS Alpha6 CP07 Recovery RAM Rescue (Development)
+on:
+  pull_request:
+    paths:
+      - alpha6/recovery/**
+      - alpha6/tests/test_rescue_validator.py
+      - .github/workflows/r36os-alpha6-recovery.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rescue:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends busybox-static cpio u-boot-tools binutils
+      - name: Check sources and offline tests
+        run: |
+          bash -n alpha6/recovery/build-rescue.sh
+          sh -n alpha6/recovery/init
+          sh -n alpha6/recovery/r36os-rescue-status
+          python3 -m unittest discover -v -s alpha6/tests -p test_rescue_validator.py
+      - name: Build diagnostic-only rescue initramfs
+        run: |
+          bash alpha6/recovery/build-rescue.sh
+          mkimage -l alpha6/dist/r36os-cp07-rescue.uInitrd
+          (cd alpha6/dist && sha256sum -c r36os-cp07-rescue.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-rescue-cp07-NOT-BOOT-TESTED
+          path: |
+            alpha6/dist/r36os-cp07-rescue.cpio.gz
+            alpha6/dist/r36os-cp07-rescue.uInitrd
+            alpha6/dist/r36os-cp07-rescue.sha256
+            alpha6/dist/RECOVERY_UNTESTED.txt
+          retention-days: 14
+          if-no-files-found: error

@@ -1,0 +1,17 @@
+{
+  "format": "R36OS_CP21_REPRODUCIBLE_K1_SOURCE_PIN_V1",
+  "repository": "Hewitt554/R36OS-K1-Build",
+  "branch": "alpha6-native-root-cp06",
+  "workflow": ".github/workflows/r36os-alpha6-cp20-refresh-k1.yml",
+  "artifact_name": "r36os-alpha6-cp20-REBUILT-K1-HARDWARE-UNTESTED",
+  "kernel_release": "6.12.94-r36os-k1",
+  "panel": "PANEL4_NV3051D_640X480",
+  "historical_artifact_id_expired": 11124161537,
+  "safe_to_flash": false,
+  "hardware_boot_tested": false,
+  "reproducible_bit_for_bit": false,
+  "status": "PINNED_CI_VERIFIED_NOT_BOOT_TESTED",
+  "run_id": 39038977056,
+  "head_sha": "b593608d9cdc5f0275cc7f6471e31ff4db5bb366",
+  "archive_sha256": "d5945b6760df7b52b4036aec3896b9491498fe2b556e48ef253f677407b581d8"
+}

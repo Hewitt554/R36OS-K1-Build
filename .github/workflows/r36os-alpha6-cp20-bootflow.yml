@@ -1,0 +1,53 @@
+name: R36OS Alpha6 CP20 Offline Legacy Boot-Flow Model
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/cp20_bootflow_sim.py'
+      - 'alpha6/tests/test_cp20_bootflow.py'
+      - 'alpha6/CP20_BOOTFLOW_AND_K1_REBUILD.md'
+      - 'alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json'
+      - '.github/workflows/r36os-alpha6-cp20-bootflow.yml'
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/boot/cp20_bootflow_sim.py'
+      - 'alpha6/tests/test_cp20_bootflow.py'
+      - '.github/workflows/r36os-alpha6-cp20-bootflow.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  model-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm no boot installation material was staged
+        run: |
+          test ! -e alpha6/dist/boot.ini
+          test ! -e alpha6/dist/flash.img
+          test ! -e alpha6/dist/RECOVERY.ON
+      - name: Validate original CP19 derived evidence and offline branching
+        run: |
+          python3 -m py_compile alpha6/boot/cp20_bootflow_sim.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp20_bootflow.py
+          mkdir -p alpha6/dist
+          python3 alpha6/boot/cp20_bootflow_sim.py \
+            --audit alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json \
+            --output alpha6/dist/cp20-OFFLINE-BOOTFLOW-MATRIX.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          j=json.loads(Path('alpha6/dist/cp20-OFFLINE-BOOTFLOW-MATRIX.json').read_text())
+          assert j['summary']=={'scenario_count':15,'scenarios_with_persistent_writes':6,
+              'scenarios_with_unchecked_load_failure':3,'recovery_paths_physically_verified':0}
+          assert j['safe_to_flash'] is False and j['installation_artifacts']==[]
+          assert j['actual_uboot_boot_tested'] is False and j['script_source_published'] is False
+          print('CP20: 15 original-R3-linked branch scenarios modeled, no real U-Boot or installation')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp20-BOOT-FLOW-MODEL-ONLY
+          path: alpha6/dist/cp20-OFFLINE-BOOTFLOW-MATRIX.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,49 @@
+name: R36OS Alpha6 CP12 Native Root + Rescue Disk Fixture
+on:
+  pull_request:
+    paths:
+      - 'alpha6/image/**'
+      - 'alpha6/tests/test_cp12_assembler.py'
+      - '.github/workflows/r36os-alpha6-cp12-image-assembly.yml'
+      - 'alpha6/CP12_IMAGE_INTEGRATION.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integrate-four-filesystems:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install offline root + FAT/ext4 fixture dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            debootstrap zstd busybox-static cpio u-boot-tools binutils dosfstools mtools e2fsprogs
+      - name: Validate CP12 source and partition math
+        run: |
+          bash -n alpha6/image/build-cp12-ci.sh
+          python3 -m py_compile alpha6/image/assemble-disk-fixture.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp12_assembler.py
+      - name: Build CP07 diagnostic ramdisk (not boot tested)
+        run: bash alpha6/recovery/build-rescue.sh
+      - name: Build CP06 native ARM64 Debian userspace
+        run: sudo bash alpha6/ci/build-native-rootfs.sh
+      - name: Assemble and verify disposable MBR image using real filesystems
+        run: sudo bash alpha6/image/build-cp12-ci.sh
+      - name: Check image intentionally NOT deployable
+        run: |
+          python3 - <<'PY'
+          import json
+          x=json.load(open('alpha6/dist/cp12-image-report.json'))
+          assert x['safe_to_flash'] is False
+          assert [p['type'] for p in x['partitions']] == [12,131,12,131]
+          assert len(x['partitions']) == 4
+          print('NONBOOTABLE fixture safety verification PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp12-NONBOOTABLE-integration-report
+          path: alpha6/dist/cp12-image-report.json
+          if-no-files-found: error
+          retention-days: 14

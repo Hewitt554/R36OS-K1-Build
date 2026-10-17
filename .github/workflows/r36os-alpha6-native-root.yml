@@ -1,0 +1,42 @@
+name: R36OS Alpha 6 Native Root CP06 (Development)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/**'
+      - '.github/workflows/r36os-alpha6-native-root.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-root:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify CI source and ARM64 runner
+        run: |
+          test "$(uname -m)" = aarch64
+          bash -n alpha6/ci/build-native-rootfs.sh
+          python3 alpha6/tests/test_build_recipe.py
+      - name: Install native build tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap zstd
+      - name: Build clean ARM64 rootfs
+        run: sudo bash alpha6/ci/build-native-rootfs.sh
+      - name: Verify rootfs checksum and size
+        run: |
+          cd alpha6/dist
+          sha256sum -c r36os-native-rootfs-arm64-cp06.sha256
+          cat r36os-native-build-metadata.txt
+          du -h r36os-native-rootfs-arm64-cp06.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-arm64-root-cp06-NOT-FLASHABLE
+          path: |
+            alpha6/dist/r36os-native-rootfs-arm64-cp06.tar.zst
+            alpha6/dist/r36os-native-rootfs-arm64-cp06.sha256
+            alpha6/dist/r36os-native-packages.tsv
+            alpha6/dist/r36os-native-build-metadata.txt
+          if-no-files-found: error
+          retention-days: 14
