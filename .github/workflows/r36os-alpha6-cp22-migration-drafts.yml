@@ -44,7 +44,7 @@ jobs:
               assert text.count('cp21-download-pinned-k1.sh') == 1, name
               assert '11124161537' not in text and '36763257082' not in text, name
           stale=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
-          assert '12105135581' in stale
+          assert '12105631029' in stale
           assert stale.count('cp21-download-pinned-k1.sh') == 1
           result={'status':'PASS_FIVE_PINNED_CONSUMERS_CP18_STILL_BLOCKED',
                   'five_consumer_names':names,'cp18_new_panel4_dependency_resolved':False,
