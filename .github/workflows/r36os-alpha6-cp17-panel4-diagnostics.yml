@@ -30,17 +30,14 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only alpha6/diag/cp17-fbdiag.c
       - name: Build uninstalled ARM/ARM64 U-Boot diagnostic ramdisk variants
         run: bash alpha6/diag/build-cp17-ci.sh
-      - name: Retrieve pinned K1 artifact containing Panel 4 device tree (read only)
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/cp17-k1"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp17-k1"
-          mapfile -t ARCH < <(find "$RUNNER_TEMP/cp17-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
-          test "${#ARCH[@]}" -eq 1
-          echo "K1_ARCHIVE=${ARCH[0]}" >> "$GITHUB_ENV"
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
       - name: Verify archived K1 Panel 4 DTB structure and candidate nodes
         run: |
           python3 alpha6/diag/audit-k1-panel4-dtb.py \

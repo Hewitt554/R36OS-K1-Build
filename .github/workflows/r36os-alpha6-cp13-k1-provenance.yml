@@ -20,21 +20,19 @@ jobs:
         run: |
           python3 -m py_compile alpha6/k1/verify-k1-artifact.py
           python3 -m unittest discover -v -s alpha6/tests -p test_cp13_k1_artifact.py
-      - name: Download pinned 2026-09-30 K1 development artifact
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/cp13-k1"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp13-k1"
-          find "$RUNNER_TEMP/cp13-k1" -maxdepth 4 -type f -printf '%P %s bytes\n'
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
       - name: Verify candidate and stage separated UNTESTED boot files
         run: |
-          mapfile -t ARCHIVES < <(find "$RUNNER_TEMP/cp13-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
-          test "${#ARCHIVES[@]}" -eq 1 || { echo "Expected exactly one K1 result archive" >&2; exit 3; }
+          test -f "$K1_ARCHIVE"
           mkdir -p alpha6/dist
-          python3 alpha6/k1/verify-k1-artifact.py "${ARCHIVES[0]}" \
+          python3 alpha6/k1/verify-k1-artifact.py "$K1_ARCHIVE" \
             alpha6/dist/cp13-k1-provenance.json --stage alpha6/dist/CP13_UNTESTED_K1_BOOT_FILES
           python3 - <<'PY'
           import json

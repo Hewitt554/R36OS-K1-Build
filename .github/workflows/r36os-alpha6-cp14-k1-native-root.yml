@@ -26,17 +26,14 @@ jobs:
           python3 -m py_compile alpha6/k1/compose-k1-native-root.py
           bash -n alpha6/k1/build-cp14-native-root-ci.sh
           python3 -m unittest discover -v -s alpha6/tests -p test_cp14_k1_integration.py
-      - name: Retrieve pinned successful K1 kernel artifact (READ ONLY)
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/cp14-k1"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp14-k1"
-          mapfile -t ARCHIVES < <(find "$RUNNER_TEMP/cp14-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
-          test "${#ARCHIVES[@]}" -eq 1 || { echo 'Expected exactly one K1 source' >&2; exit 3; }
-          echo "K1_ARCHIVE=${ARCHIVES[0]}" >> "$GITHUB_ENV"
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
       - name: Build actual CP06 ARM64 root from Debian packages
         run: sudo bash alpha6/ci/build-native-rootfs.sh
       - name: Install K1 modules and check disposable ext4 filesystem

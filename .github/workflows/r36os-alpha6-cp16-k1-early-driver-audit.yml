@@ -20,22 +20,18 @@ jobs:
         run: |
           python3 -m py_compile alpha6/k1/audit-k1-early-boot.py
           python3 -m unittest discover -v -s alpha6/tests -p 'test_cp16_early_drivers.py'
-      - name: Retrieve historical K1 release artifact (read only)
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          mkdir -p "$RUNNER_TEMP/cp16-k1"
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp16-k1"
-          find "$RUNNER_TEMP/cp16-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' \
-            -printf '%p\n' | sort > "$RUNNER_TEMP/cp16-inputs.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cp16-inputs.txt")" -eq 1
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
       - name: Check effective kernel evidence and ABI-matched modules
         run: |
           set -euo pipefail
-          archive="$(cat "$RUNNER_TEMP/cp16-inputs.txt")"
+          archive="$K1_ARCHIVE"
           mkdir -p alpha6/dist
           python3 alpha6/k1/audit-k1-early-boot.py "$archive" \
             alpha6/dist/cp16-k1-early-boot-report.json

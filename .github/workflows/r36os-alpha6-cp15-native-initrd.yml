@@ -49,17 +49,14 @@ jobs:
           set -e
           test "$ret" -eq 3
           echo 'CP15 C read-only probe: real ext4 UUID/label tests PASS'
-      - name: Download checksum-pinned historical K1 kernel candidate
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/cp15-k1"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp15-k1"
-          mapfile -t SOURCE < <(find "$RUNNER_TEMP/cp15-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
-          test "${#SOURCE[@]}" -eq 1
-          echo "K1_ARCHIVE=${SOURCE[0]}" >> "$GITHUB_ENV"
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
       - name: Build clean ARM64 native Debian root filesystem
         run: sudo bash alpha6/ci/build-native-rootfs.sh
       - name: Verify K1 modules and construct fresh disposable native ext4 root

@@ -10,8 +10,8 @@
   "safe_to_flash": false,
   "hardware_boot_tested": false,
   "reproducible_bit_for_bit": false,
-  "status": "PENDING_REBUILD",
-  "run_id": null,
-  "head_sha": null,
-  "archive_sha256": null
+  "status": "PINNED_CI_VERIFIED_NOT_BOOT_TESTED",
+  "run_id": 39038977056,
+  "head_sha": "b593608d9cdc5f0275cc7f6471e31ff4db5bb366",
+  "archive_sha256": "d5945b6760df7b52b4036aec3896b9491498fe2b556e48ef253f677407b581d8"
 }
