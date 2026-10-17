@@ -1,0 +1,29 @@
+{
+  "format": "R36OS_CP24_ARTIFACT_LEDGER_V1",
+  "repository": "Hewitt554/R36OS-K1-Build",
+  "branch": "alpha6-native-root-cp06",
+  "kernel_release": "6.12.94-r36os-k1",
+  "safe_to_flash": false,
+  "hardware_boot_tested": false,
+  "panel4_has_been_physically_tested": false,
+  "independent_recovery_proven": false,
+  "artifacts": {
+    "k1": {
+      "artifact_id": 12103773756,
+      "run_id": 39038977056,
+      "head_sha": "b593608d9cdc5f0275cc7f6471e31ff4db5bb366",
+      "name": "r36os-alpha6-cp20-REBUILT-K1-HARDWARE-UNTESTED",
+      "workflow_path": ".github/workflows/r36os-alpha6-cp20-refresh-k1.yml",
+      "archive_sha256": "d5945b6760df7b52b4036aec3896b9491498fe2b556e48ef253f677407b581d8",
+      "retention_requested_days": 90
+    },
+    "panel4": {
+      "artifact_id": 12105631029,
+      "run_id": 39044552247,
+      "head_sha": "d549a763a56c5b18b833ee6fe876be7655732a18",
+      "name": "r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED",
+      "workflow_path": ".github/workflows/r36os-alpha6-cp17-panel4-diagnostics.yml",
+      "retention_requested_days": 90
+    }
+  }
+}
