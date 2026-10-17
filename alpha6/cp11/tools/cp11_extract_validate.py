@@ -54,17 +54,19 @@ def extract_and_validate(image:Path, *, expected_image_size=REFERENCE_IMAGE_SIZE
         original=fat.read_file(boot[0],max_bytes=64*1024)
     if hexsha(original) != expected_boot_sha:
         raise AuditRejected("boot.ini SHA-256 differs from verified CP01 report")
-    # In production, cp08_candidate() itself additionally enforces the fixed R3 reference.
+    # CP19: the real R3 boot script is now available and CP08 was RETIRED.
+    # Production extraction MUST NOT generate any boot-selector candidate.
+    # CP11 synthetic fixture tests may still exercise the historical hook.
     if allow_test_reference:
         modified=cp08_candidate(original, expected_boot_sha, expected_boot_size)
+        if modified.replace(HOOK,b"",1)!=original:
+            raise AuditRejected("Synthetic test candidate does not preserve bytes")
+        if b'R36OS/RECOVERY.ON' not in modified or b'R36OS/rescue.uInitrd' not in modified:
+            raise AuditRejected("Synthetic test recovery paths absent")
+        if modified.count(HOOK)!=1:
+            raise AuditRejected("Unexpected number of synthetic gates")
     else:
-        modified=cp08_candidate(original)
-    if modified.replace(HOOK,b"",1)!=original:
-        raise AuditRejected("Candidate does not preserve original bytes")
-    if b'R36OS/RECOVERY.ON' not in modified or b'R36OS/rescue.uInitrd' not in modified:
-        raise AuditRejected("CP08 recovery load paths absent")
-    if modified.count(HOOK)!=1:
-        raise AuditRejected("Unexpected number of recovery gates")
+        modified=b''
     # Audit the structure, not a claim that U-Boot will accept or run it.
     original_text=original.decode('utf-8',errors='strict')
     if '\x00' in original_text:
@@ -73,7 +75,8 @@ def extract_and_validate(image:Path, *, expected_image_size=REFERENCE_IMAGE_SIZE
               "has_saveenv":"saveenv" in original_text,
               "has_fatwrite":"fatwrite" in original_text,
               "original_booti_count":original.count(b'booti '),
-              "candidate_booti_count":modified.count(b'booti '),
+              "candidate_booti_count":modified.count(b'booti ') if allow_test_reference else 0,
+              "cp08_candidate_generation_disabled":not allow_test_reference,
               "original_bytes_recoverable":True,
               "read_only_source":True,
               "cp08_uboot_syntax_boot_test":"NOT_TESTED",
@@ -105,10 +108,10 @@ def store_outputs(root:Path, image:Path, original:bytes, modified:bytes, checks:
         "image_bytes":image.stat().st_size,
         "r3_boot_ini_bytes":len(original),
         "r3_boot_ini_sha256":hexsha(original),
-        "cp08_candidate_bytes":len(modified),
-        "cp08_candidate_sha256":hexsha(modified),
+        "cp08_candidate_bytes":len(modified) if modified else None,
+        "cp08_candidate_sha256":hexsha(modified) if modified else None,
         "original_file":FILE_ORIGINAL,
-        "candidate_file":FILE_CANDIDATE,
+        "candidate_file":FILE_CANDIDATE if modified else None,
         "checked":checks,
         "warning":"Candidate is not a proven U-Boot script. DO NOT install onto BOOT, SD1 or SD2.",
         "limitations":["Source IMG was not rehashed fully; prior CP00 provided that verification",
@@ -117,15 +120,16 @@ def store_outputs(root:Path, image:Path, original:bytes, modified:bytes, checks:
                         "Does not create a flashable Alpha 6 image"]
     }
     (out/FILE_ORIGINAL).write_bytes(original)
-    (out/FILE_CANDIDATE).write_bytes(modified)
+    if modified:
+        (out/FILE_CANDIDATE).write_bytes(modified)
     (out/FILE_REPORT).write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     (out/FILE_SUMMARY).write_text('\n'.join([
         'R36OS CP11 verified R3 boot.ini extraction (source IMG READ ONLY)',
         'Status: PASS',
         'Original boot.ini: '+str(len(original))+' bytes',
         'SHA256: '+hexsha(original),
-        'CP08 candidate: '+str(len(modified))+' bytes',
-        'Candidate SHA256: '+hexsha(modified),
+        'CP08 candidate: '+(str(len(modified))+' synthetic bytes' if modified else 'RETIRED: not generated'),
+        'Candidate SHA256: '+(hexsha(modified) if modified else 'not applicable'),
         'Original boot preserved: yes',
         'Hardware tested: NO',
         'Bootloader script tested: NO',
@@ -145,7 +149,7 @@ def main(argv=None):
     except (OSError,ValueError,UnicodeError,UnsafeSource) as e:
         print('CP11 FAIL (image was not modified):',str(e),file=sys.stderr)
         return 1
-    print('CP11 PASS: audited original boot.ini found and CP08 candidate generated')
+    print('CP11 PASS: audited original boot.ini found; real CP08 candidate RETIRED and not generated')
     print('Reports and files in:',result)
     print('UPLOAD ONLY these two if requested: '+FILE_REPORT+', '+FILE_ORIGINAL)
     print('DO NOT INSTALL THE CANDIDATE; IT HAS NOT BEEN BOOT TESTED.')
