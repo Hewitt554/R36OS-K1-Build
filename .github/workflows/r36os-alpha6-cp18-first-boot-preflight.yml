@@ -29,10 +29,10 @@ jobs:
           bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
           echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/cp18-cp17-raw" "$RUNNER_TEMP/cp18-cp17-files"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/12105135581 --jq '.expired')" = false
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39042973635 --jq '.conclusion')" = success
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39042973635 --jq '.head_sha')" = 713ce31e48f6e995f7dd70b9557545ae4f73cf40
-          gh run download 39042973635 -R Hewitt554/R36OS-K1-Build \
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/12105631029 --jq '.expired')" = false
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39044552247 --jq '.conclusion')" = success
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39044552247 --jq '.head_sha')" = d549a763a56c5b18b833ee6fe876be7655732a18
+          gh run download 39044552247 -R Hewitt554/R36OS-K1-Build \
             -n r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED -D "$RUNNER_TEMP/cp18-cp17-raw"
           for file in \
             CP17-ARCH2-DIAGNOSTIC-UNTESTED.uInitrd \
