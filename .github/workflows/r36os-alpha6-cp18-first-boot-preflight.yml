@@ -79,4 +79,4 @@ jobs:
           name: r36os-alpha6-cp18-BOOT-EVIDENCE-ONLY-NOT-FLASHABLE
           path: alpha6/dist/cp18-evidence-only/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
