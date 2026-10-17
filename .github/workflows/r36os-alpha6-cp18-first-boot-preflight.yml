@@ -20,22 +20,20 @@ jobs:
         run: |
           python3 -m py_compile alpha6/boot/cp18-first-boot-preflight.py
           python3 -m unittest discover -v -s alpha6/tests -p test_cp18_preflight.py
-      - name: Download pinned historical K1 and passing CP17 diagnostic artifacts
+      - name: Download checksum-pinned rebuilt K1 and fresh CP17 Panel4 diagnostic artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/cp18-k1" "$RUNNER_TEMP/cp18-cp17-raw" "$RUNNER_TEMP/cp18-cp17-files"
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11124161537 --jq '.expired')" = false
-          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/11924001285 --jq '.expired')" = false
-          gh run download 36763257082 -R Hewitt554/R36OS-K1-Build \
-            -n R36OS-K1-CP04-CP05-result -D "$RUNNER_TEMP/cp18-k1"
-          gh run download 38624606064 -R Hewitt554/R36OS-K1-Build \
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/cp18-cp17-raw" "$RUNNER_TEMP/cp18-cp17-files"
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/12105135581 --jq '.expired')" = false
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39042973635 --jq '.conclusion')" = success
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39042973635 --jq '.head_sha')" = 713ce31e48f6e995f7dd70b9557545ae4f73cf40
+          gh run download 39042973635 -R Hewitt554/R36OS-K1-Build \
             -n r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED -D "$RUNNER_TEMP/cp18-cp17-raw"
-          mapfile -t ARCH < <(find "$RUNNER_TEMP/cp18-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz' | sort)
-          test "${#ARCH[@]}" -eq 1
-          echo "K1_ARCHIVE=${ARCH[0]}" >> "$GITHUB_ENV"
-          # GitHub artifact uploads can preserve different directory prefixes.
-          # Require exactly one file of each expected name; flatten ONLY into disposable temp.
           for file in \
             CP17-ARCH2-DIAGNOSTIC-UNTESTED.uInitrd \
             CP17-ARCH22-DIAGNOSTIC-UNTESTED.uInitrd \

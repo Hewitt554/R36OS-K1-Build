@@ -58,8 +58,8 @@ jobs:
               assert s.count('cp21-download-pinned-k1.sh')==1, name
           # CP18 requires independently fresh CP17 provenance and is gated.
           s=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
-          assert '11924001285' in s and 'cp21-download-pinned-k1.sh' not in s
-          print('CP23: five consumers migrated; CP18 intentionally awaiting fresh CP17')
+          assert '12105135581' in s and s.count('cp21-download-pinned-k1.sh')==1
+          print('CP23: six download paths migrated; CP18 verified separately against fresh CP17')
           PYEND
       - uses: actions/upload-artifact@v4
         with:

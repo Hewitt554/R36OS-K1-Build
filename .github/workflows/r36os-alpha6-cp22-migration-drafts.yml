@@ -44,14 +44,14 @@ jobs:
               assert text.count('cp21-download-pinned-k1.sh') == 1, name
               assert '11124161537' not in text and '36763257082' not in text, name
           stale=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
-          assert '11924001285' in stale
-          assert 'cp21-download-pinned-k1.sh' not in stale
+          assert '12105135581' in stale
+          assert stale.count('cp21-download-pinned-k1.sh') == 1
           result={'status':'PASS_FIVE_PINNED_CONSUMERS_CP18_STILL_BLOCKED',
                   'five_consumer_names':names,'cp18_new_panel4_dependency_resolved':False,
                   'historical_cp22_draft_generator_used':False,
                   'safe_to_flash':False,'boot_tested':False}
           Path('alpha6/dist/cp22-offline-drafts/CP22_MIGRATION_STATUS.json').write_text(json.dumps(result,indent=2)+'\\n')
-          print('CP22: five active consumers checked, CP18 deliberately still blocked')
+          print('CP22: six active consumer download paths checked; CP18 cross-artifact validation is separate')
           PY
           git diff --exit-code -- .github/workflows alpha6/k1/k1-candidate-pin.json
       - uses: actions/upload-artifact@v4
