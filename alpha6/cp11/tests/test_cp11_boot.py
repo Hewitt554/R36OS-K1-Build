@@ -97,6 +97,21 @@ class Cp11BootValidation(unittest.TestCase):
         self.assertIn(b'R36OS/rescue.uInitrd',candidate)
         self.assertEqual(candidate.count(HOOK),1)
 
+    def test_cp19_production_extraction_returns_original_only(self):
+        # The real extraction branch accepts the verified source but no
+        # longer creates the deprecated CP08 recovery gate candidate.
+        original, candidate, checks = extract_and_validate(
+            self.img, expected_image_size=SIZE,
+            expected_partition_start=START, expected_partition_sectors=SECTORS,
+            expected_boot_sha=hashlib.sha256(self.boot).hexdigest(),
+            expected_boot_size=R3_SIZE, allow_test_reference=False)
+        self.assertEqual(original, self.boot)
+        self.assertEqual(candidate, b'')
+        self.assertTrue(checks['cp08_candidate_generation_disabled'])
+        output = store_outputs(self.root,self.img,original,candidate,checks)
+        self.assertFalse((output/'R36OS_CP11_BOOT_CANDIDATE_UNTESTED.txt').exists())
+        self.assertIsNone(json.loads((output/'R36OS_CP11_BOOT_VALIDATION.json').read_text())['candidate_file'])
+
     def test_output_non_destructive_and_new_folder(self):
         original,candidate,checks=self.check()
         a=store_outputs(self.root,self.img,original,candidate,checks)
