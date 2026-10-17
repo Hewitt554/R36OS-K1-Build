@@ -70,4 +70,4 @@ jobs:
             alpha6/dist/cp17-k1-panel4-dtb-report.json
             alpha6/dist/cp17-uninstalled-diagnostic/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
