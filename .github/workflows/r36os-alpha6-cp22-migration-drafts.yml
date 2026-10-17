@@ -1,0 +1,62 @@
+name: R36OS Alpha6 CP22 K1 Dependency Migration Drafts (No Install)
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/cp22/**'
+      - 'alpha6/tests/test_cp22_migration.py'
+      - 'alpha6/CP22_K1_DEPENDENCY_MIGRATION.md'
+      - '.github/workflows/r36os-alpha6-cp22-migration-drafts.yml'
+  pull_request:
+    paths:
+      - 'alpha6/cp22/**'
+      - 'alpha6/tests/test_cp22_migration.py'
+      - 'alpha6/CP22_K1_DEPENDENCY_MIGRATION.md'
+      - '.github/workflows/r36os-alpha6-cp22-migration-drafts.yml'
+permissions:
+  contents: read
+jobs:
+  dry-run-six-consumers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test all six fail-closed K1 workflow migrations
+        run: |
+          set -euo pipefail
+          python3 -m py_compile alpha6/cp22/prepare-consumer-migration.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp22_migration.py
+          python3 alpha6/k1/cp21_pinned_artifact.py alpha6/k1/k1-candidate-pin.json --check-pending
+      - name: Generate draft workflow files in an isolated /tmp folder only
+        run: |
+          set -euo pipefail
+          workspace="$(mktemp -d /tmp/r36os-cp22-workflow-drafts-XXXXXXXX)"
+          case "$workspace" in /tmp/r36os-cp22-workflow-drafts-*) ;; *) exit 7;; esac
+          trap 'case "$workspace" in /tmp/r36os-cp22-workflow-drafts-*) rm -rf -- "$workspace";; esac' EXIT
+          python3 alpha6/cp22/prepare-consumer-migration.py --repo-root "$PWD" --out "$workspace"
+          python3 - "$workspace" <<'PY'
+          import json,sys
+          from pathlib import Path
+          path=Path(sys.argv[1]); report=json.loads((path/'CP22_REVIEW_ONLY.json').read_text())
+          assert report['format']=='R36OS_CP22_K1_WORKFLOW_MIGRATION_DRAFT_ONLY_V1'
+          assert report['pin_status']=='PENDING_REBUILD'
+          assert report['ready_to_apply_to_development_branch'] is False
+          assert report['source_files_edited'] is False
+          assert report['safe_to_flash'] is False
+          assert len(report['workflow_drafts'])==6
+          for row in report['workflow_drafts']:
+              text=(path/row['generated_candidate']).read_text()
+              assert '11124161537' not in text and '36763257082' not in text
+              assert text.count('cp21-download-pinned-k1.sh')==1
+          print('CP22 source-matched six actual workflows and staged isolated patches; no activation')
+          PY
+          git diff --exit-code -- .github/workflows alpha6/k1/k1-candidate-pin.json
+          mkdir -p alpha6/dist/cp22-offline-drafts
+          cp -- "$workspace"/* alpha6/dist/cp22-offline-drafts/
+          (cd alpha6/dist/cp22-offline-drafts && sha256sum *.yml CP22_REVIEW_ONLY.json > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp22-SIX-K1-DRAFTS-REVIEW-ONLY-NOT-ACTIVATED
+          path: alpha6/dist/cp22-offline-drafts/
+          if-no-files-found: error
+          retention-days: 30
