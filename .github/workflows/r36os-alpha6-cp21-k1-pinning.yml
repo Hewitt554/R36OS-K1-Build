@@ -1,0 +1,54 @@
+name: R36OS Alpha6 CP21 Fail-Closed K1 Rebuild Pinning
+on:
+  pull_request:
+    paths:
+      - 'alpha6/k1/cp21_pinned_artifact.py'
+      - 'alpha6/k1/cp21-download-pinned-k1.sh'
+      - 'alpha6/k1/k1-candidate-pin.json'
+      - 'alpha6/tests/test_cp21_pinned_artifact.py'
+      - 'alpha6/CP21_K1_ARTIFACT_PINNING.md'
+      - '.github/workflows/r36os-alpha6-cp21-k1-pinning.yml'
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/k1/cp21_pinned_artifact.py'
+      - 'alpha6/k1/cp21-download-pinned-k1.sh'
+      - 'alpha6/k1/k1-candidate-pin.json'
+      - 'alpha6/tests/test_cp21_pinned_artifact.py'
+      - 'alpha6/CP21_K1_ARTIFACT_PINNING.md'
+      - '.github/workflows/r36os-alpha6-cp21-k1-pinning.yml'
+permissions:
+  contents: read
+jobs:
+  pinning-safety:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint and test K1 source pinning
+        run: |
+          set -euo pipefail
+          bash -n alpha6/k1/cp21-download-pinned-k1.sh
+          python3 -m py_compile alpha6/k1/cp21_pinned_artifact.py
+          python3 -m unittest discover -v -s alpha6/tests -p 'test_cp21_pinned_artifact.py'
+      - name: Check pin lifecycle without network access
+        run: |
+          set -euo pipefail
+          PIN='alpha6/k1/k1-candidate-pin.json'
+          python3 - <<'PYTEST'
+          import importlib.util,json,subprocess,sys
+          src='alpha6/k1/cp21_pinned_artifact.py'
+          spec=importlib.util.spec_from_file_location('cp21',src)
+          m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+          p=m.valid_pin(m.read_json('alpha6/k1/k1-candidate-pin.json'))
+          assert p['safe_to_flash'] is False and p['hardware_boot_tested'] is False
+          if p['status']==m.STATUS_PENDING:
+              try:m.valid_pin(p,True)
+              except m.Reject:pass
+              else:raise AssertionError('pending pin improperly ready')
+              print('CP21 PENDING: missing K1 archive blocked; NO claim of rebuild success')
+          elif p['status']==m.STATUS_READY:
+              m.valid_pin(p,True)
+              print('CP21 ready pin FIELDS well-formed; actual run/archive still require LIVE verified download')
+          else:raise AssertionError('unexpected status')
+          PYTEST
