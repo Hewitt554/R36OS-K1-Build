@@ -1,0 +1,23 @@
+#!/bin/sh
+# CP07 rescue: diagnostic only. No automatic partition mounting or writes.
+PATH=/bin:/sbin
+export PATH
+umask 077
+/bin/mount -t proc proc /proc 2>/dev/null || true
+/bin/mount -t sysfs sysfs /sys 2>/dev/null || true
+if ! /bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
+  /bin/mount -t tmpfs -o mode=0755 tmpfs /dev 2>/dev/null || true
+  [ -e /dev/console ] || /bin/mknod /dev/console c 5 1 2>/dev/null || true
+  [ -e /dev/null ] || /bin/mknod /dev/null c 1 3 2>/dev/null || true
+fi
+/bin/mkdir -p /run
+/bin/mdev -s 2>/dev/null || true
+exec </dev/console >/dev/console 2>&1
+printf '\n=== R36OS CP07 Experimental Rescue ===\n'
+printf 'Diagnostic only; no update, rollback or SD writes enabled.\n'
+/bin/sh /sbin/r36os-rescue-status
+case " $(/bin/cat /proc/cmdline 2>/dev/null) " in
+  *' r36os.rescue_shell=1 '*) exec /bin/sh -i ;;
+esac
+printf '\nRecovery shell disabled until explicitly enabled by bootargs.\n'
+while :; do /bin/sleep 60; done

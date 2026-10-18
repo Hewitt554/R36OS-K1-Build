@@ -1,0 +1,74 @@
+name: R36OS Alpha6 CP26 First K1 Diagnostic Test Kit (Not Flashable)
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/cp26/**'
+      - 'alpha6/tests/test_cp26_test_kit.py'
+      - '.github/workflows/r36os-alpha6-cp26-cumulative-testkit.yml'
+  pull_request:
+    paths:
+      - 'alpha6/cp26/**'
+      - 'alpha6/tests/test_cp26_test_kit.py'
+      - '.github/workflows/r36os-alpha6-cp26-cumulative-testkit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  first-hardware-test-packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test isolated first-boot U-Boot script, Windows installer and recovery file handling
+        run: |
+          set -euo pipefail
+          python3 -m py_compile alpha6/cp26/build-test-kit.py alpha6/cp26/windows_kit/tools/cp26_deploy.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp26_test_kit.py
+          bash -c 'test ! -f alpha6/dist/flash.img && test ! -f alpha6/dist/boot.ini'
+      - name: Obtain exact checksum pinned K1 and renewed Panel4 diagnostic CI artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cp26-k1" "$RUNNER_TEMP/cp26-panel4" alpha6/dist
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39038977056 --jq .conclusion)" = success
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/12103773756 --jq .expired)" = false
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39044552247 --jq .conclusion)" = success
+          test "$(gh api repos/Hewitt554/R36OS-K1-Build/actions/artifacts/12105631029 --jq .expired)" = false
+          gh run download 39038977056 -R Hewitt554/R36OS-K1-Build -n r36os-alpha6-cp20-REBUILT-K1-HARDWARE-UNTESTED -D "$RUNNER_TEMP/cp26-k1"
+          gh run download 39044552247 -R Hewitt554/R36OS-K1-Build -n r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED -D "$RUNNER_TEMP/cp26-panel4"
+          mapfile -t K1_FILES < <(find "$RUNNER_TEMP/cp26-k1" -type f -name 'R36OS_K1_CP04_CP05_RESULT_*.tar.gz')
+          test "${#K1_FILES[@]}" -eq 1
+          echo "K1_ARCHIVE=${K1_FILES[0]}" >> "$GITHUB_ENV"
+      - name: Make one Windows ZIP with real K1/Panel4/diagnostic files and refusal-only install guards
+        run: |
+          set -euo pipefail
+          python3 alpha6/cp26/build-test-kit.py \
+            --k1 "$K1_ARCHIVE" \
+            --cp17 "$RUNNER_TEMP/cp26-panel4" \
+            --src alpha6/cp26/windows_kit \
+            --cp13-verifier alpha6/k1/verify-k1-artifact.py \
+            --output alpha6/dist/R36OS_Alpha6_CP26_Windows_K1_Diagnostic_Test_Kit.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile,json
+          p=Path('alpha6/dist/R36OS_Alpha6_CP26_Windows_K1_Diagnostic_Test_Kit.zip')
+          assert 1*1024*1024 < p.stat().st_size < 160*1024*1024, 'kit size surprising, refuse'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              data=json.loads(z.read('CP26_PACKAGE_MANIFEST.json'))
+              assert data['safe_to_flash'] is False and data['hardware_boot_tested'] is False
+              assert data['no_automatic_rollback'] is True and data['does_not_contain_native_debian_root'] is True
+              assert z.read('BOOT_PAYLOAD/boot.ini').count(b'booti ')==1
+              assert not any(name.endswith('.img') for name in z.namelist())
+          print('CP26 REAL kernel components archived; NOT hardware tested; no raw SD images or installers')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp26-WINDOWS-K1-FIRST-BOOT-DIAGNOSTIC-UNTESTED
+          path: alpha6/dist/R36OS_Alpha6_CP26_Windows_K1_Diagnostic_Test_Kit.zip
+          if-no-files-found: error
+          retention-days: 90

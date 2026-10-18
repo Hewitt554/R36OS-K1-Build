@@ -1,0 +1,27 @@
+# Debian 12 upstream ARM64 packages; versions audited when CI builds.
+systemd-sysv
+udev
+dbus
+kmod
+ca-certificates
+curl
+iproute2
+iputils-ping
+network-manager
+wpasupplicant
+iw
+rfkill
+wireless-regdb
+alsa-utils
+libasound2
+libdrm2
+libgbm1
+libegl1
+libgl1-mesa-dri
+libinput10
+exfatprogs
+e2fsprogs
+dosfstools
+util-linux
+python3-minimal
+zstd

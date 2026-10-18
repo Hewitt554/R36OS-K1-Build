@@ -1,0 +1,73 @@
+name: R36OS Alpha6 CP17 Panel4 Static DTB and First Boot Diagnostics
+on:
+  pull_request:
+    paths:
+      - 'alpha6/diag/**'
+      - 'alpha6/tests/test_cp17_diagnostic.py'
+      - 'alpha6/CP17_FIRST_BOOT_DIAGNOSTICS.md'
+      - '.github/workflows/r36os-alpha6-cp17-panel4-diagnostics.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnostic-only:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 diagnostic image build tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            busybox-static binutils gcc u-boot-tools
+      - name: Validate diagnostic-only source and bad-image handling
+        run: |
+          bash -n alpha6/diag/build-cp17-ci.sh
+          sh -n alpha6/diag/cp17-init
+          python3 -m py_compile alpha6/diag/build-cp17-diag.py alpha6/diag/audit-k1-panel4-dtb.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp17_diagnostic.py
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only alpha6/diag/cp17-fbdiag.c
+      - name: Build uninstalled ARM/ARM64 U-Boot diagnostic ramdisk variants
+        run: bash alpha6/diag/build-cp17-ci.sh
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
+      - name: Verify archived K1 Panel 4 DTB structure and candidate nodes
+        run: |
+          python3 alpha6/diag/audit-k1-panel4-dtb.py \
+            "$K1_ARCHIVE" alpha6/dist/cp17-k1-panel4-dtb-report.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('alpha6/dist/cp17-k1-panel4-dtb-report.json')
+          j=json.loads(p.read_text())
+          assert j['kernel_release']=='6.12.94-r36os-k1'
+          assert j['dtb_node_count']>0
+          assert j['safe_to_flash'] is False and j['boot_tested'] is False
+          assert j['display_tested'] is False and j['recovery_boot_tested'] is False
+          print('CP17: static FDT checked, device operation still hardware UNTESTED')
+          for key in ('board_model','root_compatible','rk3326_root_compatible',
+                      'enabled_mmc_nodes','display_candidates','power_candidates','blockers'):
+              print(key+':',j[key] if not isinstance(j[key],list) else str(j[key])[:1600])
+          PY
+      - name: Check no flashable image or bootloader was produced
+        run: |
+          test ! -e alpha6/dist/boot.ini
+          test ! -e alpha6/dist/flash.img
+          test ! -e alpha6/dist/u-boot.bin
+          test ! -e alpha6/dist/RECOVERY.ON
+          echo 'No bootloader, boot.ini, SD restore or flashable image produced.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp17-PANEL4-DIAGNOSTICS-UNTESTED
+          path: |
+            alpha6/dist/cp17-k1-panel4-dtb-report.json
+            alpha6/dist/cp17-uninstalled-diagnostic/*
+          if-no-files-found: error
+          retention-days: 90

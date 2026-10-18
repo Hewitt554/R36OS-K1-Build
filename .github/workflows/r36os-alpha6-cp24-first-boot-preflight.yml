@@ -1,0 +1,94 @@
+name: R36OS Alpha6 CP24 Artifact Retention and Spare SD Safety (No Install)
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/cp24/**'
+      - 'alpha6/tests/test_cp24_*.py'
+      - 'alpha6/CP24_SPARE_SD_TEST_SAFETY.md'
+      - '.github/workflows/r36os-alpha6-cp24-first-boot-preflight.yml'
+  pull_request:
+    paths:
+      - 'alpha6/cp24/**'
+      - 'alpha6/tests/test_cp24_*.py'
+      - 'alpha6/CP24_SPARE_SD_TEST_SAFETY.md'
+      - '.github/workflows/r36os-alpha6-cp24-first-boot-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ci-artifact-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test artifact freshness, signed-off pin and physical-test denial
+        run: |
+          set -euo pipefail
+          python3 -m py_compile alpha6/cp24/artifact_guard.py alpha6/cp24/spare_test_contract.py
+          python3 -m unittest discover -v -s alpha6/tests -p 'test_cp24_*.py'
+          python3 - <<'PY'
+          import importlib.util,json
+          from pathlib import Path
+          p=Path('alpha6/cp24/artifact_guard.py')
+          s=importlib.util.spec_from_file_location('cp24',p)
+          m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+          x=m.validate_ledger(m.read_json(Path('alpha6/cp24/pinned-artifact-ledger.json')))
+          assert not x['safe_to_flash'] and not x['independent_recovery_proven']
+          assert set(x['artifacts'])=={'k1','panel4'}
+          assert not Path('alpha6/cp24/boot.ini').exists()
+          assert not Path('alpha6/cp24/flash.img').exists()
+          print('CP24 local ledger identity PASS, no SD installer')
+          PY
+      - name: Check exact GH Actions artifact and run retention metadata (READ ONLY)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p alpha6/dist/cp24-report
+          python3 - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          ledger=json.loads(Path('alpha6/cp24/pinned-artifact-ledger.json').read_text())
+          repo=ledger['repository']
+          if repo!='Hewitt554/R36OS-K1-Build':raise SystemExit('untrusted repo')
+          def get(path):
+              r=subprocess.run(['gh','api',f'repos/{repo}/{path}'],check=True,stdout=subprocess.PIPE,text=True)
+              return json.loads(r.stdout)
+          evidence={key:{'artifact':get(f"actions/artifacts/{a['artifact_id']}"),
+                         'run':get(f"actions/runs/{a['run_id']}")}
+                    for key,a in ledger['artifacts'].items()}
+          Path('alpha6/dist/cp24-report/cp24-GH-API-evidence.json').write_text(json.dumps(evidence,sort_keys=True)+'\n')
+          PY
+          python3 alpha6/cp24/artifact_guard.py \
+            --ledger alpha6/cp24/pinned-artifact-ledger.json \
+            --api-input alpha6/dist/cp24-report/cp24-GH-API-evidence.json \
+            --out alpha6/dist/cp24-report/cp24-retention-audit.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('alpha6/dist/cp24-report/cp24-retention-audit.json').read_text())
+          assert not report['binary_hash_rechecked'] and not report['safe_to_flash']
+          for key,x in report['artifacts'].items():
+              print(f"{key} artifact {x['artifact_id']}: {x['days_left']} days until expiry")
+              if x['needs_renewal']:
+                  print(f"::warning title=CP24 artifact expiring::{key} expires in {x['days_left']} days. Manually rebuild/re-pin verified source.")
+              if x['days_left'] < 7:
+                  raise SystemExit('Artifact expires in under seven days; explicit manual renewal required')
+          PY
+          # Never upload raw GitHub API run data: store only the derived report.
+          rm -f alpha6/dist/cp24-report/cp24-GH-API-evidence.json
+      - name: Check evidence-only result
+        run: |
+          test ! -e alpha6/dist/boot.ini
+          test ! -e alpha6/dist/flash.img
+          test ! -e alpha6/dist/RECOVERY.ON
+          test ! -e alpha6/dist/idbloader.img
+          echo 'CP24: No boot script, raw SD image, bootloader or recovery marker produced'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp24-RETENTION-PREFLIGHT-NO-FLASH
+          path: alpha6/dist/cp24-report/cp24-retention-audit.json
+          if-no-files-found: error
+          retention-days: 90

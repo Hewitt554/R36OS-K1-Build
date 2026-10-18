@@ -1,0 +1,89 @@
+name: R36OS Alpha6 CP15 K1 Native Root Initrd (Development)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/cp15-init'
+      - 'alpha6/boot/build-cp15-initrd.py'
+      - 'alpha6/boot/build-cp15-ci.sh'
+      - 'alpha6/boot/cp15-probe-root.c'
+      - 'alpha6/tests/test_cp15_native_initrd.py'
+      - 'alpha6/CP15_NATIVE_BOOT_CONTRACT.md'
+      - '.github/workflows/r36os-alpha6-cp15-native-initrd.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native-boot-contract:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native CI build and test tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            busybox-static binutils gcc debootstrap zstd e2fsprogs u-boot-tools
+      - name: Validate the fail-closed native initrd boot contract
+        run: |
+          sh -n alpha6/boot/cp15-init
+          bash -n alpha6/boot/build-cp15-ci.sh
+          python3 -m py_compile alpha6/boot/build-cp15-initrd.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp15_native_initrd.py
+      - name: Validate static ext4 superblock probe on a real scratch filesystem
+        run: |
+          gcc -std=c11 -Os -Wall -Wextra -Werror -static -DCP15_ALLOW_REGULAR_FIXTURE \
+            -o "$RUNNER_TEMP/cp15-probe-test" alpha6/boot/cp15-probe-root.c
+          truncate -s 32M "$RUNNER_TEMP/cp15-probe-test.ext4"
+          mkfs.ext4 -F -q -m 0 -L R36SYS -U abbacafe-1111-2222-3333-0123456789ab \
+            "$RUNNER_TEMP/cp15-probe-test.ext4"
+          "$RUNNER_TEMP/cp15-probe-test" "$RUNNER_TEMP/cp15-probe-test.ext4" \
+            abbacafe-1111-2222-3333-0123456789ab
+          if "$RUNNER_TEMP/cp15-probe-test" "$RUNNER_TEMP/cp15-probe-test.ext4" \
+            abbacafe-1111-2222-3333-0123456789ac; then exit 8; fi
+          e2label "$RUNNER_TEMP/cp15-probe-test.ext4" UNSAFE
+          set +e
+          "$RUNNER_TEMP/cp15-probe-test" "$RUNNER_TEMP/cp15-probe-test.ext4" \
+            abbacafe-1111-2222-3333-0123456789ab
+          ret=$?
+          set -e
+          test "$ret" -eq 3
+          echo 'CP15 C read-only probe: real ext4 UUID/label tests PASS'
+      - name: Fetch explicitly pinned CP21 K1 archive (READ ONLY)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          K1_ARCHIVE="$RUNNER_TEMP/cp23-verified-k1.tar.gz"
+          bash alpha6/k1/cp21-download-pinned-k1.sh "$K1_ARCHIVE"
+          echo "K1_ARCHIVE=$K1_ARCHIVE" >> "$GITHUB_ENV"
+      - name: Build clean ARM64 native Debian root filesystem
+        run: sudo bash alpha6/ci/build-native-rootfs.sh
+      - name: Verify K1 modules and construct fresh disposable native ext4 root
+        run: sudo bash alpha6/k1/build-cp14-native-root-ci.sh "$K1_ARCHIVE"
+      - name: Build paired, untested ARM and ARM64 U-Boot initrds
+        run: sudo bash alpha6/boot/build-cp15-ci.sh
+      - name: Explicitly reject boot-ready claims
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          x=json.loads(Path('alpha6/dist/cp15-initrd-report.json').read_text())
+          y=json.loads(Path('alpha6/dist/cp14-k1-native-report.json').read_text())
+          assert not x['safe_to_flash'] and not x['boot_tested']
+          assert x['native_root_uuid']==y['scratch_native_root_uuid']
+          assert 'NOT VERIFIED' in x['boot_critical_module_support']
+          assert not Path('alpha6/dist/boot.ini').exists()
+          print('CP15 offline initramfs contract PASS; flash and Panel4 boot NOT VERIFIED')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp15-K1-NATIVE-INITRD-UNTESTED
+          path: |
+            alpha6/dist/cp15-initrd-report.json
+            alpha6/dist/cp14-k1-native-report.json
+            alpha6/dist/CP15-ARM-UNTESTED.uInitrd
+            alpha6/dist/CP15-ARM64-UNTESTED.uInitrd
+            alpha6/dist/CP15-BOOTARGS-SAMPLE-NOT-INSTALL.txt
+          if-no-files-found: error
+          retention-days: 14

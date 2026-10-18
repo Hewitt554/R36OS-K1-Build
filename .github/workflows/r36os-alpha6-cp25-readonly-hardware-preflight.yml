@@ -1,0 +1,62 @@
+name: R36OS Alpha6 CP25 Windows R3 Read-Only First Hardware Preflight
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/cp25/**'
+      - 'alpha6/tests/test_cp25_readonly.py'
+      - 'alpha6/CP25_READONLY_WINDOWS_BOOTLOADER_PREFLIGHT.md'
+      - '.github/workflows/r36os-alpha6-cp25-readonly-hardware-preflight.yml'
+  pull_request:
+    paths:
+      - 'alpha6/cp25/**'
+      - 'alpha6/tests/test_cp25_readonly.py'
+      - 'alpha6/CP25_READONLY_WINDOWS_BOOTLOADER_PREFLIGHT.md'
+      - '.github/workflows/r36os-alpha6-cp25-readonly-hardware-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run CP25 fixture and fail-closed tests
+        run: |
+          set -euo pipefail
+          python3 -m py_compile alpha6/cp25/cp25_readonly_r3_inspect.py
+          python3 -m unittest discover -s alpha6/tests -p test_cp25_readonly.py -v
+          python3 - <<'PY'
+          from pathlib import Path
+          files=list(Path('alpha6/cp25').rglob('*'))
+          assert not any(x.name.lower() in {'boot.ini','flash.img','idbloader.img','uboot.img','recovery.on','uinitrd'} for x in files)
+          for name in ('CP25_INSPECT_ORIGINAL_R3.cmd','CP25_GET_SPARE_CARD_INFO.cmd','cp25_list_disks_readonly.ps1'):
+              assert (Path('alpha6/cp25')/name).is_file()
+          print('CP25: read-only evidence tools verified OFFLINE, NOT a physical boot test')
+          PY
+      - name: Emit report-only CI outcome
+        run: |
+          mkdir -p alpha6/dist/cp25
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          d={'format':'R36OS_CP25_OFFLINE_WINDOWS_PREFLIGHT_TEST_ONLY',
+             'status':'PASS_SOURCE_AND_DISPOSABLE_MBR_FIXTURE_ONLY',
+             'source_img_tested_from_user_actual_raw_image':False,
+             'windows_powershell_executed_in_ci':False,
+             'spare_sd_confirmed':False,
+             'independent_recovery_physically_proven':False,
+             'uboot_environment_persistence_backend_proven':False,
+             'r36s_hardware_boot_tested':False,
+             'safe_to_flash':False,
+             'sd_images_created':0,'physical_media_modified':False}
+          Path('alpha6/dist/cp25/CP25_CI_NO_FLASH_REPORT.json').write_text(json.dumps(d,indent=2)+'\n')
+          PY
+          test ! -e alpha6/dist/boot.ini && test ! -e alpha6/dist/flash.img
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp25-READONLY-PREFLIGHT-NO-FLASH
+          path: alpha6/dist/cp25/CP25_CI_NO_FLASH_REPORT.json
+          if-no-files-found: error
+          retention-days: 90

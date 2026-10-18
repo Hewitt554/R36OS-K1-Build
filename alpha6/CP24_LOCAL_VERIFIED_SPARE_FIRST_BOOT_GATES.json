@@ -1,0 +1,35 @@
+{
+  "format": "R36OS_CP24_SPARE_SD_FIRST_BOOT_PREP_ONLY",
+  "status": "PREPARED_BUT_NOT_AUTHORIZED_FOR_HARDWARE_BOOT",
+  "original_r3_boot_ini_sha256": "b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e",
+  "original_r3_image_bytes": 18375245824,
+  "k1_archive_sha256": "d5945b6760df7b52b4036aec3896b9491498fe2b556e48ef253f677407b581d8",
+  "target_device": "R36XX RK3326 Panel 4 640x480",
+  "existing_original_card_must_remain_unmodified": true,
+  "spare_card_physical_capacity_and_identity_confirmed": false,
+  "known_good_original_card_independently_rebooted": false,
+  "working_recovery_route_physically_verified": false,
+  "test_card_image_assembled": false,
+  "bootloader_compatibility_verified": false,
+  "test_kit_contains_boot_ini": false,
+  "flashable_image_produced": false,
+  "safe_to_flash": false,
+  "boot_tested": false,
+  "blocking_requirements": [
+    "Confirm a separate spare SD1, not the working original card or SD2",
+    "Confirm the known-good original card still boots and can be reinserted unchanged",
+    "Identify and preserve the correct early U-Boot sectors + Panel4 choice on spare card",
+    "Proof of isolated fallback independent of candidate K1 kernel/boot.ini",
+    "Spare image capacity and USB SD writer destination must be explicitly checked",
+    "Do not flash candidate or alter original SD1/SD2 until the above tests pass"
+  ],
+  "proposed_observations": [
+    "Power on / known-good startup baseline",
+    "Panel4 screen test or black-screen evidence",
+    "Buttons and input detection",
+    "Two MMC hosts and card detection",
+    "RK817 battery/power nodes",
+    "Safe shutdown + returning to the original card"
+  ],
+  "first_boot_target_checkpoint": "CP25_PENDING_SAFETY_GATES"
+}

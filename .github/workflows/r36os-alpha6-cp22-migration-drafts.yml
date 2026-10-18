@@ -1,0 +1,62 @@
+name: R36OS Alpha6 CP22 K1 Migration Regression (No Install)
+on:
+  push:
+    branches: [alpha6-native-root-cp06]
+    paths:
+      - 'alpha6/cp22/**'
+      - 'alpha6/tests/test_cp22_migration.py'
+      - 'alpha6/CP22_K1_DEPENDENCY_MIGRATION.md'
+      - '.github/workflows/r36os-alpha6-cp22-migration-drafts.yml'
+  pull_request:
+    paths:
+      - 'alpha6/cp22/**'
+      - 'alpha6/tests/test_cp22_migration.py'
+      - 'alpha6/CP22_K1_DEPENDENCY_MIGRATION.md'
+      - '.github/workflows/r36os-alpha6-cp22-migration-drafts.yml'
+permissions:
+  contents: read
+jobs:
+  dry-run-six-consumers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test all six fail-closed K1 workflow migrations
+        run: |
+          set -euo pipefail
+          python3 -m py_compile alpha6/cp22/prepare-consumer-migration.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp22_migration.py
+          python3 alpha6/k1/cp21_pinned_artifact.py alpha6/k1/k1-candidate-pin.json --get sha256
+      - name: Validate five activated CI consumers and one blocked CP18 consumer
+        run: |
+          set -euo pipefail
+          mkdir -p alpha6/dist/cp22-offline-drafts
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          names=('r36os-alpha6-cp13-k1-provenance.yml',
+                 'r36os-alpha6-cp14-k1-native-root.yml',
+                 'r36os-alpha6-cp15-native-initrd.yml',
+                 'r36os-alpha6-cp16-k1-early-driver-audit.yml',
+                 'r36os-alpha6-cp17-panel4-diagnostics.yml')
+          for name in names:
+              text=(Path('.github/workflows')/name).read_text()
+              assert text.count('cp21-download-pinned-k1.sh') == 1, name
+              assert '11124161537' not in text and '36763257082' not in text, name
+          stale=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
+          assert '12105631029' in stale
+          assert stale.count('cp21-download-pinned-k1.sh') == 1
+          result={'status':'PASS_FIVE_PINNED_CONSUMERS_CP18_STILL_BLOCKED',
+                  'five_consumer_names':names,'cp18_new_panel4_dependency_resolved':False,
+                  'historical_cp22_draft_generator_used':False,
+                  'safe_to_flash':False,'boot_tested':False}
+          Path('alpha6/dist/cp22-offline-drafts/CP22_MIGRATION_STATUS.json').write_text(json.dumps(result,indent=2)+'\\n')
+          print('CP22: six active consumer download paths checked; CP18 cross-artifact validation is separate')
+          PY
+          git diff --exit-code -- .github/workflows alpha6/k1/k1-candidate-pin.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp22-MIGRATION-CONTRACTS-NOT-BOOTABLE
+          path: alpha6/dist/cp22-offline-drafts/
+          if-no-files-found: error
+          retention-days: 30

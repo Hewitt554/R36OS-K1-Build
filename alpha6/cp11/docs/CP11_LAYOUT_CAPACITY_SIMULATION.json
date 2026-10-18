@@ -1,0 +1,301 @@
+{
+  "status": "DESIGN_ONLY",
+  "layout_options": [
+    {
+      "card_advertised_bytes": 32000000000,
+      "card_usable_gib": 29.8,
+      "provisional_root_gib": 8,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 16777216,
+          "bytes": 8589934592
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 17858560,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 19955712,
+          "sectors": 42543104,
+          "bytes": 21782069248
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 20.29,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    },
+    {
+      "card_advertised_bytes": 32000000000,
+      "card_usable_gib": 29.8,
+      "provisional_root_gib": 12,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 25165824,
+          "bytes": 12884901888
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 26247168,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 28344320,
+          "sectors": 34154496,
+          "bytes": 17487101952
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 16.29,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    },
+    {
+      "card_advertised_bytes": 64000000000,
+      "card_usable_gib": 59.6,
+      "provisional_root_gib": 8,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 16777216,
+          "bytes": 8589934592
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 17858560,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 19955712,
+          "sectors": 105043968,
+          "bytes": 53782511616
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 50.09,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    },
+    {
+      "card_advertised_bytes": 64000000000,
+      "card_usable_gib": 59.6,
+      "provisional_root_gib": 12,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 25165824,
+          "bytes": 12884901888
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 26247168,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 28344320,
+          "sectors": 96655360,
+          "bytes": 49487544320
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 46.09,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    },
+    {
+      "card_advertised_bytes": 128000000000,
+      "card_usable_gib": 119.21,
+      "provisional_root_gib": 8,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 16777216,
+          "bytes": 8589934592
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 17858560,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 19955712,
+          "sectors": 230043648,
+          "bytes": 117782347776
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 109.69,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    },
+    {
+      "card_advertised_bytes": 128000000000,
+      "card_usable_gib": 119.21,
+      "provisional_root_gib": 12,
+      "partition_count": 4,
+      "partitions": [
+        {
+          "label": "R36BOOT",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 32768,
+          "sectors": 1048576,
+          "bytes": 536870912
+        },
+        {
+          "label": "R36SYS",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 1081344,
+          "sectors": 25165824,
+          "bytes": 12884901888
+        },
+        {
+          "label": "R36UPDATE",
+          "filesystem": "FAT32",
+          "mbr_type": "0xc",
+          "start_sector": 26247168,
+          "sectors": 2097152,
+          "bytes": 1073741824
+        },
+        {
+          "label": "R36STATE",
+          "filesystem": "ext4",
+          "mbr_type": "0x83",
+          "start_sector": 28344320,
+          "sectors": 221655040,
+          "bytes": 113487380480
+        }
+      ],
+      "reserved_legacy_boot_area_mib": 16,
+      "state_gib": 105.69,
+      "cp06_root_allocated_bytes": 589508608,
+      "warnings": [
+        "SIMULATION ONLY: generates no flashable image or partition table",
+        "R36SYS size not final; hardware and software needs unmeasured",
+        "STATE backups grow over time and must be space-checked",
+        "Actual SD cards may have a different raw capacity than advertised"
+      ]
+    }
+  ],
+  "selected": null,
+  "rationale": "Compact rescue image in BOOT, one main root, shared update and expandable state; four MBR entries."
+}

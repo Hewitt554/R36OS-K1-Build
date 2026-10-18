@@ -1,0 +1,100 @@
+{
+  "automatic_fallback_tested": false,
+  "blockers": [
+    "R3 boot.ini contains persistent fatwrite and saveenv; never assume a read-only fallback",
+    "K1/CP17 boot and framebuffer output not proven on physical Panel 4",
+    "CP08 synthetic recovery gate lacks a validated boot-once and fallback design",
+    "Normal legacy kernel/initrd/DTB loads are not fail-checked before booti",
+    "Normal legacy boot resets when booti returns, with no independent recovery root",
+    "No verified power-loss-safe rollback, boot counter or spare-SD hardware validation"
+  ],
+  "bootloader_script_header": "odroidgoa-uboot-config",
+  "cp08_insertion_before_address_initialization": false,
+  "cp08_insertion_line": 174,
+  "cp08_recovery_gate_approved": false,
+  "cp08_recovery_gate_retired": true,
+  "format": "R36OS_CP19_EXACT_R3_BOOT_REVIEW_NOT_INSTALLABLE",
+  "hardware_boot_tested": false,
+  "legacy_bootargs_line": 174,
+  "legacy_booti_line": 200,
+  "legacy_dtb_load_error_checked": false,
+  "legacy_initrd_load_error_checked": false,
+  "legacy_kernel_loads_error_checked": false,
+  "legacy_root_uuid": "e139ce78-9841-40fe-8823-96a304a09859",
+  "load_commands": [
+    {
+      "command": "load mmc 1:1 ${loadaddr} \"${PanelPath}/Image\"",
+      "line": 182
+    },
+    {
+      "command": "load mmc 1:1 ${loadaddr} Image",
+      "line": 185
+    },
+    {
+      "command": "load mmc 1:1 ${loadaddr} Image",
+      "line": 189
+    },
+    {
+      "command": "load mmc 1:1 ${initrd_loadaddr} uInitrd",
+      "line": 193
+    },
+    {
+      "command": "load mmc 1:1 ${dtb_loadaddr} \"${PanelPathSlash}rk3326-r35s-linux.dtb\"",
+      "line": 198
+    }
+  ],
+  "memory_load_addresses": {
+    "dtb_loadaddr": {
+      "line": 172,
+      "value": "0x01f00000"
+    },
+    "initrd_loadaddr": {
+      "line": 171,
+      "value": "0x01100000"
+    },
+    "loadaddr": {
+      "line": 170,
+      "value": "0x02000000"
+    }
+  },
+  "next_action": "Develop independent boot selection using actual panel/memory flow; spare-SD hardware test only after fallback verified",
+  "original_boot_ini_modified": false,
+  "panel4_select_button": "LEFT (gpio b14) when chooser enabled",
+  "panel4_select_line": 116,
+  "panel4_state_saved_in_bootloader_env": true,
+  "panel5_custom_kernel_line": 182,
+  "panel5_default_kernel_override": true,
+  "persistent_write_commands": {
+    "fatwrite": {
+      "count": 7,
+      "lines": [
+        13,
+        73,
+        90,
+        107,
+        123,
+        139,
+        158
+      ]
+    },
+    "saveenv": {
+      "count": 7,
+      "lines": [
+        31,
+        67,
+        86,
+        103,
+        119,
+        135,
+        154
+      ]
+    }
+  },
+  "post_booti_reset_line": 203,
+  "post_booti_sleep_line": 202,
+  "safe_to_flash": false,
+  "source_full_bytes_published": false,
+  "source_kind": "user_uploaded_cp11_original_full_bytes_verified_locally",
+  "source_length": 5108,
+  "source_sha256": "b442894eabd2a9716ba5b8dda817251d94cc13689b341f7a861ad3f33998ec4e"
+}

@@ -1,0 +1,67 @@
+name: R36OS Alpha6 CP19 Exact R3 Boot Evidence (No Install)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/boot/cp19_audit_original.py'
+      - 'alpha6/boot/build-recovery-gate.py'
+      - 'alpha6/cp11/tools/build_recovery_gate_cp08.py'
+      - 'alpha6/cp11/tools/cp11_extract_validate.py'
+      - 'alpha6/tests/test_cp19_original_boot.py'
+      - 'alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json'
+      - 'alpha6/CP19_FULL_R3_BOOT_REVIEW.md'
+      - '.github/workflows/r36os-alpha6-cp19-full-r3-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cp19-original-boot-fail-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test full-original audit parser on explicit synthetic boot fixtures
+        run: |
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp19_original_boot.py
+          python3 -m py_compile alpha6/boot/cp19_audit_original.py
+      - name: Validate derived audit report without raw private boot script
+        run: |
+          python3 alpha6/boot/cp19_audit_original.py --check-report alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json').read_text())
+          assert x['legacy_bootargs_line']==174
+          assert x['legacy_booti_line']==200
+          assert x['memory_load_addresses']['loadaddr']['line']==170
+          assert x['memory_load_addresses']['initrd_loadaddr']['line']==171
+          assert x['memory_load_addresses']['dtb_loadaddr']['line']==172
+          assert x['persistent_write_commands']['fatwrite']['count']==7
+          assert x['persistent_write_commands']['saveenv']['count']==7
+          assert x['cp08_insertion_before_address_initialization'] is False
+          assert not x['safe_to_flash'] and not x['cp08_recovery_gate_approved']
+          assert not x['source_full_bytes_published']
+          print('CP19 exact raw boot.ini audited locally; derived evidence validated in CI')
+          PY
+      - name: Regression tests for legacy safety gates
+        run: |
+          python3 -m unittest discover -v -s alpha6/tests -p test_boot_gate.py
+          python3 -m unittest discover -v -s alpha6/cp11/tests -p test_cp11_boot.py
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('alpha6')
+          for name in ('boot/build-recovery-gate.py','cp11/tools/build_recovery_gate_cp08.py'):
+              assert 'CP19 RETIRED' in (root/name).read_text()
+          assert 'CP19: the real R3 boot script is now available' in (root/'cp11/tools/cp11_extract_validate.py').read_text()
+          assert not (root/'CP11_VERIFIED_R3_BOOT_ORIGINAL.bin').exists()
+          assert not (root/'dist/boot.ini').exists()
+          print('CP19 blocks real CP08 gate and creates NO installable image')
+          PY
+      - name: Artifact is evidence only — no kernel or boot script
+        uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp19-VERIFIED-R3-SCRIPT-EVIDENCE-NO-FLASH
+          path: |
+            alpha6/CP19_VERIFIED_ORIGINAL_R3_BOOT_AUDIT.json
+            alpha6/CP19_FULL_R3_BOOT_REVIEW.md
+          if-no-files-found: error
+          retention-days: 14

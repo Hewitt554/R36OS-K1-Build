@@ -1,0 +1,68 @@
+name: R36OS Alpha6 CP23 K1 Reviewed Pin (Development Only)
+on:
+  pull_request:
+    paths:
+      - 'alpha6/k1/k1-candidate-pin.json'
+      - 'alpha6/k1/cp23_verify_metadata.py'
+      - 'alpha6/tests/test_cp23_metadata.py'
+      - '.github/workflows/r36os-alpha6-cp23-k1-repin.yml'
+      - '.github/workflows/r36os-alpha6-cp1[3-7]-*.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  check-exact-rebuilt-k1-pin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test reviewed K1 pin against synthetic wrong-run and expired-artifact data
+        run: |
+          python3 -m py_compile alpha6/k1/cp23_verify_metadata.py
+          python3 -m unittest discover -v -s alpha6/tests -p test_cp23_metadata.py
+          python3 alpha6/k1/cp21_pinned_artifact.py alpha6/k1/k1-candidate-pin.json --get sha256
+      - name: Verify live GitHub completed run and artifact metadata (no SD writes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p alpha6/dist
+          gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39038977056 > "$RUNNER_TEMP/cp23-run.json"
+          gh api repos/Hewitt554/R36OS-K1-Build/actions/runs/39038977056/artifacts > "$RUNNER_TEMP/cp23-artifacts.json"
+          python3 alpha6/k1/cp23_verify_metadata.py \
+            --pin alpha6/k1/k1-candidate-pin.json \
+            --run "$RUNNER_TEMP/cp23-run.json" \
+            --artifacts "$RUNNER_TEMP/cp23-artifacts.json" \
+            --report alpha6/dist/cp23-pin-review.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('alpha6/dist/cp23-pin-review.json'))
+          assert x['safe_to_flash'] is False and x['boot_tested'] is False
+          assert x['cp18_new_panel4_provenance_resolved'] is False
+          assert x['new_archive_rechecked_here'] is False
+          PY
+      - name: Require all five active consumers to use the exact CP21 downloader
+        run: |
+          python3 - <<'PYEND'
+          from pathlib import Path
+          names=('r36os-alpha6-cp13-k1-provenance.yml',
+                 'r36os-alpha6-cp14-k1-native-root.yml',
+                 'r36os-alpha6-cp15-native-initrd.yml',
+                 'r36os-alpha6-cp16-k1-early-driver-audit.yml',
+                 'r36os-alpha6-cp17-panel4-diagnostics.yml')
+          for name in names:
+              s=(Path('.github/workflows')/name).read_text()
+              assert 'cp21-download-pinned-k1.sh' in s, name
+              assert '11124161537' not in s and '36763257082' not in s, name
+              assert s.count('cp21-download-pinned-k1.sh')==1, name
+          # CP18 requires independently fresh CP17 provenance and is gated.
+          s=Path('.github/workflows/r36os-alpha6-cp18-first-boot-preflight.yml').read_text()
+          assert '12105631029' in s and s.count('cp21-download-pinned-k1.sh')==1
+          print('CP23: six download paths migrated; CP18 verified separately against fresh CP17')
+          PYEND
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r36os-alpha6-cp23-K1-PIN-METADATA-NOT-BOOTABLE
+          path: alpha6/dist/cp23-pin-review.json
+          retention-days: 30
