@@ -62,13 +62,24 @@ def read_archive(k1:Path,verifier_path:Path)->dict:
     return {'Image':image,'rk3326-r36s-k1.dtb':dtb}
 
 def read_diag(zippath:Path)->bytes:
-    if not zippath.is_file() or zippath.is_symlink():raise Reject('missing CP17 artifact')
-    with zipfile.ZipFile(zippath) as z:
-        names=z.namelist()
+    if zippath.is_symlink():raise Reject('symlink CP17 artifact')
+    if zippath.is_dir():
+        # `gh run download` expands the Actions artifact to a DIRECTORY.
         def one(suffix):
-            found=[n for n in names if n.endswith(suffix)]
-            if len(found)!=1:raise Reject('CP17 expected one '+suffix)
+            matches=[p for p in zippath.rglob('*') if p.is_file() and not p.is_symlink() and p.as_posix().endswith(suffix)]
+            if len(matches)!=1:raise Reject('CP17 expected exactly one '+suffix)
+            if matches[0].stat().st_size>12*1024*1024:raise Reject('oversized CP17 input')
+            return matches[0].read_bytes()
+    elif zippath.is_file():
+        # Local development may start from the original downloadable ZIP.
+        z=zipfile.ZipFile(zippath)
+        def one(suffix):
+            found=[n for n in z.namelist() if n.endswith(suffix)]
+            if len(found)!=1:raise Reject('CP17 expected exactly one '+suffix)
+            if z.getinfo(found[0]).file_size>12*1024*1024:raise Reject('oversized CP17 input')
             return z.read(found[0])
+    else:raise Reject('missing CP17 folder or zip')
+    try:
         report=json.loads(one('/cp17-diagnostic-report.json'))
         if report.get('kernel_target')!='6.12.94-r36os-k1' or report.get('safe_to_flash') is not False or report.get('boot_tested') is not False:
             raise Reject('CP17 diagnostic not the expected untested version')
@@ -80,6 +91,8 @@ def read_diag(zippath:Path)->bytes:
         if digest(a)!=ref['sha256'] or len(a)!=ref['bytes'] or a[:4]!=bytes.fromhex('27051956'):
             raise Reject('diagnostic ramdisk wrong header/hash/size')
         return a
+    finally:
+        if 'z' in locals():z.close()
 
 def guard_boot(boot:bytes)->None:
     if not boot.startswith(b'odroidgoa-uboot-config\n') or boot.count(b'booti ' )!=1:
