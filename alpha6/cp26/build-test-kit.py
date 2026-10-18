@@ -36,8 +36,18 @@ def read_archive(k1:Path,verifier_path:Path)->dict:
         raise Reject('K1 identity mismatch')
     with tarfile.open(k1,'r:gz') as tf:
         prefix=checked['candidate_prefix']
+        # GNU tar records the same member as ./candidate/K1/Image while
+        # CP13's verified candidate_prefix is normalized to candidate/K1/.
+        # Resolve by the EXACT CP13 path normalizer; don't assume raw spellings.
+        indexed={}
+        for member in tf.getmembers():
+            if not member.isfile(): continue
+            logical=m.norm_member(member.name)
+            if logical in indexed:raise Reject('duplicate normalized K1 archive member')
+            indexed[logical]=member
         def safe_read(name,maxsize):
-            t=tf.getmember(prefix+name)
+            t=indexed.get(prefix+name)
+            if t is None:raise Reject('missing normalized K1 archive member '+name)
             if not t.isfile() or t.size<32 or t.size>maxsize:raise Reject('invalid '+name+' size')
             inp=tf.extractfile(t)
             if inp is None:raise Reject('missing '+name)
