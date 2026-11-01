@@ -1,0 +1,37 @@
+name: R36OS R33 Realtek firmware staging (NO INSTALL)
+
+on:
+  push:
+    paths:
+      - ".github/workflows/r36os-r33-firmware-staging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch fixed upstream Realtek firmware + redistribution licence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p output/rtlwifi output/LICENSES
+          ROOT='https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware'
+          REF='refs/tags/20260410'
+          curl --retry 3 -fsSL "${ROOT}/+/${REF}/rtlwifi/rtl8188eufw.bin?format=TEXT" | base64 -d > output/rtlwifi/rtl8188eufw.bin
+          curl --retry 3 -fsSL "${ROOT}/+/${REF}/LICENSES/LICENCE.rtlwifi_firmware.txt?format=TEXT" | base64 -d > output/LICENSES/LICENCE.rtlwifi_firmware.txt
+          test "$(stat -c %s output/rtlwifi/rtl8188eufw.bin)" = 15262
+          test -s output/LICENSES/LICENCE.rtlwifi_firmware.txt
+          sha256sum output/rtlwifi/rtl8188eufw.bin output/LICENSES/LICENCE.rtlwifi_firmware.txt > output/SHA256SUMS.txt
+          printf 'R36OS R33 upstream Realtek firmware evidence ONLY\nsource=%s\ntag=%s\nNO_KERNEL_CHANGE=1\nNO_DRIVER_LOAD=1\nNO_DEVICE_INSTALL=1\n' "$ROOT" "$REF" > output/README_NOT_INSTALLED.txt
+          cat output/SHA256SUMS.txt
+      - name: Upload firmware staging (NO INSTALL)
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R33-FIRMWARE-EVIDENCE-NO-INSTALL
+          path: output/
+          retention-days: 14
+          if-no-files-found: error
