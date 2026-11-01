@@ -51,8 +51,13 @@ done
 actual_rel=$("${MAKE[@]}" -s kernelrelease)
 [[ "$actual_rel" == "$KERNEL_RELEASE" ]] || fail "kernelrelease not exact $KERNEL_RELEASE: $actual_rel"
 cp "$OUT/.config" "$ROOT/result/RESOLVED_R31.config"
-python3 "$HERE/report_config_delta.py" "$ROOT/result/DEVICE_R29_BASELINE.config" \
- "$ROOT/result/RESOLVED_R31.config" > "$ROOT/result/CONFIG_DIFF.txt"
+if ! python3 "$HERE/report_config_delta.py" "$ROOT/result/DEVICE_R29_BASELINE.config" \
+ "$ROOT/result/RESOLVED_R31.config" > "$ROOT/result/CONFIG_DIFF.txt"; then
+  log "Configuration drift detected; printing exact mismatch before stopping:"
+  cat "$ROOT/result/CONFIG_DIFF.txt"
+  fail "R31 kernel configuration changed unexpectedly; NO modules installed or packaged"
+fi
+cat "$ROOT/result/CONFIG_DIFF.txt"
 log "Building full kernel symbols and configured modules; this is host-only"
 "${MAKE[@]}" -j"$JOBS" Image modules 2>&1 | tee "$ROOT/result/BUILD.log"
 [[ -s "$OUT/Module.symvers" ]] || fail "Module.symvers missing from kernel build"
