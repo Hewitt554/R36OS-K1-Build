@@ -20,7 +20,7 @@ jobs:
           set -Eeuo pipefail
           mkdir -p output/rtlwifi output/LICENSES
           ROOT='https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware'
-          REF='refs/tags/20260410'
+          REF='refs/heads/main'
           curl --retry 3 -fsSL "${ROOT}/+/${REF}/rtlwifi/rtl8188eufw.bin?format=TEXT" | base64 -d > output/rtlwifi/rtl8188eufw.bin
           curl --retry 3 -fsSL "${ROOT}/+/${REF}/LICENSES/LICENCE.rtlwifi_firmware.txt?format=TEXT" | base64 -d > output/LICENSES/LICENCE.rtlwifi_firmware.txt
           test "$(stat -c %s output/rtlwifi/rtl8188eufw.bin)" = 15262
