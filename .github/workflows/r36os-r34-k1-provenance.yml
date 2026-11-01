@@ -54,7 +54,7 @@ jobs:
                   interesting.append({'path':rel,'matching_lines':matches[:80]})
           report={'status':'CP34_PROVENANCE_READ_ONLY','bootstrap_blob_verified':True,'embedded_kit_sha256':sha,'embedded_kit_files':sum(1 for p in kit.rglob('*') if p.is_file()),'interesting':interesting,'kernel_image_shipped':False,'device_kernel_modified':False}
           (dst/'K1_PATCH_PROVENANCE.json').write_text(json.dumps(report,indent=2)+'\n')
-          for rel in ['BUILD_K1_CHECKPOINT04.sh','k1_source/SELECTED_PATCHES.md','k1_source/k1.config.fragment']:
+          for rel in ['BUILD_K1_CHECKPOINT04.sh','k1_source/SELECTED_PATCHES.md','k1_source/k1.config.fragment','k1_source/PREPARE_K1_SOURCE.sh','external_cp04_builder/fetch_exact_inputs.sh','external_cp04_builder/build_cp04_external.sh']:
               p=kit/rel
               if p.is_file():
                   target=dst/'AUTHORITATIVE'/rel
