@@ -1,0 +1,43 @@
+name: R36OS R34 exact K1 Wi-Fi modules (CANDIDATE ONLY)
+
+on:
+  push:
+    paths:
+      - "r34_wifi/**"
+      - ".github/workflows/r36os-r34-wifi-k1-exact.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-source-module-build:
+    name: Compile Realtek modules against pinned original R36OS K1 sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host-only build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18 bc bison flex libssl-dev libelf-dev kmod xz-utils python3 build-essential rsync patch git
+      - name: Verify running-device R29 configuration input
+        run: python3 r31_wifi/validate_r29_baseline.py r31_wifi/WIFI_KERNEL_CONFIG_R29.gz
+      - name: Host build exact-patched K1 Wi-Fi modules (NO DEVICE INSTALL)
+        run: |
+          chmod +x r34_wifi/*.sh
+          R31_WORKDIR="$RUNNER_TEMP/r34-exact-k1-wifi" R31_JOBS=4 bash r34_wifi/build_wifi_modules_ubuntu.sh
+      - name: Publish driver candidate and build provenance only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R34-EXACT-K1-WIFI-CANDIDATE-NOT-INSTALLABLE
+          path: |
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/R34_K1_EXACT_SOURCE.txt
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/CONFIG_DIFF.txt
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/RESOLVED_R31.config
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/BUILD.log
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/CANDIDATE/
+            ${{ runner.temp }}/r34-exact-k1-wifi/result/R31_SHA256SUMS.txt
+          if-no-files-found: warn
+          retention-days: 14
