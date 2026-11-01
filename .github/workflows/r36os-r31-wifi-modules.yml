@@ -1,0 +1,41 @@
+name: R36OS R31 Wi-Fi modules (BUILD CANDIDATE ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "r31_wifi/**"
+      - ".github/workflows/r36os-r31-wifi-modules.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-module-candidate:
+    name: Compile isolated RTL8188ETV module set
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host packages (never R36XX)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18 bc bison flex libssl-dev libelf-dev kmod xz-utils python3 build-essential rsync
+      - name: Validate device configuration
+        run: python3 r31_wifi/validate_r29_baseline.py r31_wifi/WIFI_KERNEL_CONFIG_R29.gz
+      - name: Build and package isolated Wi-Fi candidate
+        run: |
+          chmod +x r31_wifi/build_wifi_modules_ubuntu.sh
+          R31_WORKDIR="$RUNNER_TEMP/r31-wifi" R31_JOBS=4 bash r31_wifi/build_wifi_modules_ubuntu.sh
+      - name: Upload build evidence and modules (NOT INSTALLER)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36OS-R31-WIFI-CANDIDATE-DO-NOT-INSTALL
+          path: |
+            ${{ runner.temp }}/r31-wifi/result/CONFIG_DIFF.txt
+            ${{ runner.temp }}/r31-wifi/result/RESOLVED_R31.config
+            ${{ runner.temp }}/r31-wifi/result/CANDIDATE/
+            ${{ runner.temp }}/r31-wifi/result/R31_SHA256SUMS.txt
+          if-no-files-found: warn
+          retention-days: 14

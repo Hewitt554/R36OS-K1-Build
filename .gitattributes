@@ -1,0 +1,8 @@
+# R36OS R31R1: avoid the Windows autocrlf warnings and script corruption.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.fragment text eol=lf
+*.txt text eol=lf
+*.gz binary
+*.cmd text eol=crlf

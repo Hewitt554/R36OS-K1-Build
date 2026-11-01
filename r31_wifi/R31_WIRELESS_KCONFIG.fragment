@@ -1,0 +1,10 @@
+# R36OS experimental K1 Wi-Fi module configuration intent
+# DO NOT simply append these lines to the running kernel or boot partition.
+# Integrate into the exact K1 kernel build tree via scripts/config + olddefconfig.
+# Validate the resolved .config before building and retain untouched kernel Image/DTB.
+CONFIG_CFG80211=m
+CONFIG_MAC80211=m
+CONFIG_RFKILL=m
+CONFIG_CRYPTO_LIB_ARC4=m
+CONFIG_RTL8XXXU=m
+CONFIG_RTL8XXXU_UNTESTED=y
